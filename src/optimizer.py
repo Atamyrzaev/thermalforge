@@ -132,6 +132,7 @@ matplotlib.use("Agg")  # headless-safe; must precede pyplot import
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
+from src.config_loader import StackSection, ConfigError
 from src.grid_builder import GridBuilder, GridBuilderError
 from src.thermal_solver import (
     ThermalSolver, ThermalSolverError, DIRECT_SOLVE_MAX_UNKNOWNS,
@@ -424,8 +425,7 @@ class ChipletPlacementOptimizer:
         t_ambient_c: float = 25.0,
         h_convective: float = 1000.0,
         bottom_bc: str = "robin",
-        interposer_frac: float = 0.40,
-        bump_frac: float = 0.15,
+        stack: Optional["StackSection"] = None,
         seed: int = 0,
     ):
         if not catalog:
@@ -442,15 +442,27 @@ class ChipletPlacementOptimizer:
         self._rng = random.Random(self.seed)
 
         # --- Vertical stack geometry (mirrors main.build_chiplet_stack) ---
-        z_interposer_end = max(1, int(round(self.nz * interposer_frac)))
-        z_bump_end = max(z_interposer_end + 1,
-                         int(round(self.nz * (interposer_frac + bump_frac))))
-        z_bump_end = min(z_bump_end, self.nz - 1)
+        # Layer interfaces come from PHYSICAL thicknesses in micrometers,
+        # resolved against this mesh's dz. Authoring them as fractions of nz
+        # made the composite layer's realized thickness a rounding artifact of
+        # nz (a -16.7%..+25.0% swing), and that layer carries the stack's
+        # dominant vertical resistance -- so refining the mesh silently
+        # changed the geometry. See StackSection's docstring for the measured
+        # table.
+        self.stack = stack if stack is not None else StackSection()
+        try:
+            z_interposer_end, z_bump_end = self.stack.resolve_layer_boundaries(self.nz, self.dz)
+        except ConfigError as exc:
+            raise OptimizerError(f"Stack layer resolution failed: {exc}") from exc
+        self.realized_layers_um = self.stack.realized_thicknesses_um(self.nz, self.dz)
+
         self.die_z_start, self.die_z_end = z_bump_end, self.nz
         if self.die_z_start >= self.die_z_end:
             raise OptimizerError(
-                f"Degenerate die layer z[{self.die_z_start}:{self.die_z_end}] for nz={self.nz}; "
-                f"increase nz or reduce interposer_frac/bump_frac."
+                f"Degenerate die layer z[{self.die_z_start}:{self.die_z_end}] for nz={self.nz} "
+                f"at dz={self.dz*1e6:.2f} um; increase nz or reduce the authored layer "
+                f"thicknesses ({self.stack.interposer_um:.0f}/{self.stack.bump_um:.0f}/"
+                f"{self.stack.die_um:.0f} um)."
             )
 
         # --- Resolve physical footprints to voxel extents on THIS mesh ---
@@ -605,8 +617,7 @@ class ChipletPlacementOptimizer:
             t_ambient_c=config.boundary_conditions.t_ambient_c,
             h_convective=config.boundary_conditions.h_convective,
             bottom_bc=config.boundary_conditions.bottom_bc,
-            interposer_frac=config.stack.interposer_frac,
-            bump_frac=config.stack.bump_frac,
+            stack=config.stack,
             seed=seed,
         )
 

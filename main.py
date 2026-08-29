@@ -414,9 +414,13 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
 
     nz = config.grid.nz
     nx, ny = config.grid.nx, config.grid.ny
-    z_interposer_end = max(1, int(round(nz * config.stack.interposer_frac)))
-    z_bump_end = max(z_interposer_end + 1, int(round(nz * (config.stack.interposer_frac + config.stack.bump_frac))))
-    z_bump_end = min(z_bump_end, nz - 1)
+    # Layer interfaces come from PHYSICAL thicknesses (um) resolved against
+    # this mesh's dz, not from fractions of nz. See StackSection's docstring:
+    # fraction authoring made the composite layer's realized thickness a
+    # rounding artifact of nz, swinging -16.7%..+25.0% and moving the peak
+    # temperature with it.
+    z_interposer_end, z_bump_end = config.stack.resolve_layer_boundaries(nz, config.grid.dz)
+    realized = config.stack.realized_thicknesses_um(nz, config.grid.dz)
 
     try:
         gb.assign_layer(slice(0, z_interposer_end), "silicon")
@@ -435,12 +439,31 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
     except GridBuilderError as exc:
         raise PipelineError(f"Chiplet stack assembly failed: {exc}") from exc
 
+    # Print REALIZED thicknesses next to the authored ones. A refinement study
+    # is only meaningful if the geometry is identical at every level, so any
+    # discretization-induced geometry change must be visible in the log rather
+    # than hidden inside the result.
     print(
         f"[main] Stack assembled: interposer z[0:{z_interposer_end}], "
         f"bump+underfill z[{z_interposer_end}:{z_bump_end}], "
         f"Si die z[{z_bump_end}:{nz}] with {config.power.die_power_w:.2f}W active source "
         f"over footprint x[{margin_x}:{nx - margin_x}] y[{margin_y}:{ny - margin_y}]"
     )
+    print(
+        f"[main] Layer thicknesses (authored -> realized at dz={config.grid.dz*1e6:.2f}um): "
+        f"interposer {config.stack.interposer_um:.1f} -> {realized['interposer_um']:.1f}um, "
+        f"composite {config.stack.bump_um:.1f} -> {realized['bump_um']:.1f}um, "
+        f"die {config.stack.die_um:.1f} -> {realized['die_um']:.1f}um"
+    )
+    for label, authored, got in (
+        ("interposer", config.stack.interposer_um, realized["interposer_um"]),
+        ("composite", config.stack.bump_um, realized["bump_um"]),
+        ("die", config.stack.die_um, realized["die_um"]),
+    ):
+        if abs(got - authored) > 1e-9:
+            print(f"[main] WARNING: {label} layer discretized to {got:.1f}um, "
+                  f"{100.0*(got-authored)/authored:+.1f}% off the authored {authored:.1f}um. "
+                  f"Choose dz so {authored:.1f}um is a whole number of cells.")
     return gb
 
 

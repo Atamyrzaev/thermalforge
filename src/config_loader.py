@@ -64,10 +64,91 @@ class BoundaryConditionsSection:
 
 @dataclass
 class StackSection:
-    """Vertical chiplet stack layout, as fractions of total nz (bottom to
-    top): interposer_frac + bump_frac + (remainder = Si die)."""
-    interposer_frac: float = 0.40
-    bump_frac: float = 0.15
+    """Vertical chiplet stack layout, authored as PHYSICAL thicknesses in
+    micrometers (bottom to top): thinned Si interposer, microbump+underfill
+    composite, thinned Si die.
+
+    Thicknesses are physical for the same reason chiplet footprints are (see
+    src.optimizer.ChipletSpec): a layer is a real piece of material and its
+    thickness cannot be a function of how finely the solver meshes the
+    domain.
+
+    The previous fraction-based authoring (interposer_frac / bump_frac,
+    resolved via round(nz * frac)) made the realized bump thickness a
+    rounding artifact of nz. Measured across nz, holding the nominal 0.15
+    fraction fixed:
+
+        nz    bump voxels    realized frac    vs nominal 0.15
+        12         2            0.1667            +11.1%
+        16         3            0.1875            +25.0%
+        20         3            0.1500              0.0%
+        24         3            0.1250            -16.7%
+        28         4            0.1429             -4.8%
+        32         5            0.1562             +4.2%
+        40         6            0.1500              0.0%
+
+    That is a -16.7%..+25.0% swing in the thickness of the single most
+    thermally resistive layer in the stack -- the composite's kz is about
+    20 W/mK against silicon's 149, so it dominates the vertical resistance
+    and a thickness error moves the peak temperature directly. A mesh
+    refinement study run on fraction-authored layers therefore changes the
+    GEOMETRY as it refines, and cannot separate discretization error from a
+    silently different stack.
+
+    resolve_layer_boundaries() converts these thicknesses to z-indices
+    against a specific dz, which is the single point where mesh resolution
+    is allowed to enter. Choose dz so each thickness is a whole number of
+    cells (the defaults share a 20 um GCD, exact at dz = 20, 10, 5 and
+    2.5 um) and the geometry is then identical at every refinement level.
+    """
+    interposer_um: float = 100.0
+    bump_um: float = 40.0
+    die_um: float = 100.0
+
+    @property
+    def total_um(self) -> float:
+        return self.interposer_um + self.bump_um + self.die_um
+
+    def resolve_layer_boundaries(self, nz: int, dz: float):
+        """Resolves the stack to (z_interposer_end, z_bump_end) voxel indices
+        on a mesh of spacing `dz` metres with `nz` layers.
+
+        Returns indices such that:
+            interposer = z[0 : z_interposer_end]
+            composite  = z[z_interposer_end : z_bump_end]
+            die        = z[z_bump_end : nz]
+
+        Rounds each interface to the nearest cell face and guarantees every
+        layer is at least one voxel thick, so a mesh too coarse to represent
+        the stack still yields a valid three-region grid rather than an empty
+        layer. realized_thicknesses_um() reports what was actually built.
+        """
+        if nz < 3:
+            raise ConfigError(
+                f"stack requires at least 3 z-layers to represent interposer / "
+                f"composite / die, got nz={nz}"
+            )
+        dz_um = dz * 1e6
+        z_i = int(round(self.interposer_um / dz_um))
+        z_b = int(round((self.interposer_um + self.bump_um) / dz_um))
+
+        # Clamp so all three layers are non-empty and in order.
+        z_i = max(1, min(z_i, nz - 2))
+        z_b = max(z_i + 1, min(z_b, nz - 1))
+        return z_i, z_b
+
+    def realized_thicknesses_um(self, nz: int, dz: float):
+        """Returns {'interposer_um', 'bump_um', 'die_um', 'total_um'} as
+        ACTUALLY discretized on this mesh, for reporting alongside any result
+        so a geometry change cannot hide inside a refinement study."""
+        z_i, z_b = self.resolve_layer_boundaries(nz, dz)
+        dz_um = dz * 1e6
+        return {
+            "interposer_um": z_i * dz_um,
+            "bump_um": (z_b - z_i) * dz_um,
+            "die_um": (nz - z_b) * dz_um,
+            "total_um": nz * dz_um,
+        }
 
 
 @dataclass
@@ -120,11 +201,30 @@ class PipelineConfig:
             raise ConfigError(f"boundary_conditions.h_convective must be > 0 for Robin BC, got {bc.h_convective}")
 
         s = self.stack
-        if not (0.0 < s.interposer_frac < 1.0) or not (0.0 < s.bump_frac < 1.0):
-            raise ConfigError("stack.interposer_frac and stack.bump_frac must each be in (0, 1).")
-        if s.interposer_frac + s.bump_frac >= 1.0:
-            raise ConfigError("stack.interposer_frac + stack.bump_frac must be < 1.0 "
-                               "(remainder is the Si die layer).")
+        for name, value in (("interposer_um", s.interposer_um),
+                            ("bump_um", s.bump_um),
+                            ("die_um", s.die_um)):
+            if value <= 0:
+                raise ConfigError(f"stack.{name} must be > 0 um, got {value}")
+
+        # The grid's z-extent and the stack's authored thickness describe the
+        # same physical object. A mismatch means the realized stack is not the
+        # authored one, so warn loudly -- but do not raise: StackSection.
+        # resolve_layer_boundaries() clamps to a valid three-region grid, and
+        # main.py prints the realized thicknesses next to the authored ones,
+        # so the discrepancy is visible rather than silent. Raising here would
+        # make nz and dz un-varyable independently of the stack, which is
+        # exactly what a mesh-refinement study needs to do.
+        grid_total_um = self.grid.nz * self.grid.dz * 1e6
+        if abs(grid_total_um - s.total_um) > 0.5 * self.grid.dz * 1e6:
+            logger.warning(
+                "Stack thickness (%.1f um = %.1f interposer + %.1f composite + %.1f die) "
+                "does not match the grid z-extent (nz=%d x dz=%.2f um = %.1f um). The stack "
+                "will be clamped to fit; realized thicknesses are reported at build time. "
+                "Set nz*dz equal to the authored stack thickness to model it exactly.",
+                s.total_um, s.interposer_um, s.bump_um, s.die_um,
+                self.grid.nz, self.grid.dz * 1e6, grid_total_um,
+            )
 
         p = self.power
         if p.die_power_w < 0:

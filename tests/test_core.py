@@ -49,6 +49,8 @@ Coverage:
 
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 import pytest
 
@@ -79,16 +81,30 @@ def make_pipeline_config(
     nx: int = 10, ny: int = 10, nz: int = 12,
     dx: float = 25e-6, dy: float = 25e-6, dz: float = 10e-6,
     t_ambient_c: float = 25.0, h_convective: float = 2500.0, bottom_bc: str = "robin",
-    interposer_frac: float = 0.40, bump_frac: float = 0.20,
+    interposer_um: Optional[float] = None, bump_um: Optional[float] = None,
+    die_um: Optional[float] = None,
     die_power_w: float = 0.05, die_footprint_frac: float = 0.5,
 ) -> PipelineConfig:
-    """Builds a small, fast-to-solve PipelineConfig for unit testing."""
+    """Builds a small, fast-to-solve PipelineConfig for unit testing.
+
+    Stack layers are authored in MICROMETERS (see StackSection). When not
+    given explicitly they are derived from the grid's own z-extent in the
+    40%/20%/40% proportion the old fraction-based defaults produced, so the
+    authored stack always matches nz*dz exactly and these unit tests never
+    trip the grid/stack mismatch warning."""
+    total_um = nz * dz * 1e6
+    if interposer_um is None:
+        interposer_um = 0.4 * total_um
+    if bump_um is None:
+        bump_um = 0.2 * total_um
+    if die_um is None:
+        die_um = total_um - interposer_um - bump_um
     return PipelineConfig(
         grid=GridSection(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz),
         boundary_conditions=BoundaryConditionsSection(
             t_ambient_c=t_ambient_c, h_convective=h_convective, bottom_bc=bottom_bc,
         ),
-        stack=StackSection(interposer_frac=interposer_frac, bump_frac=bump_frac),
+        stack=StackSection(interposer_um=interposer_um, bump_um=bump_um, die_um=die_um),
         power=PowerSection(die_power_w=die_power_w, die_footprint_frac=die_footprint_frac),
         solver=SolverSection(),
         visualization=VisualizationSection(),
@@ -113,10 +129,9 @@ def build_stack_grid(config: PipelineConfig):
     nz = config.grid.nz
     nx, ny = config.grid.nx, config.grid.ny
 
-    z_interposer_end = max(1, int(round(nz * config.stack.interposer_frac)))
-    z_bump_end = max(z_interposer_end + 1,
-                      int(round(nz * (config.stack.interposer_frac + config.stack.bump_frac))))
-    z_bump_end = min(z_bump_end, nz - 1)
+    # Physical (um) layer thicknesses resolved against this mesh's dz --
+    # mirrors main.build_chiplet_stack(), never fractions of nz.
+    z_interposer_end, z_bump_end = config.stack.resolve_layer_boundaries(nz, config.grid.dz)
 
     gb.assign_layer(slice(0, z_interposer_end), "silicon")
     gb.assign_layer(slice(z_interposer_end, z_bump_end), "bump_underfill_composite")
