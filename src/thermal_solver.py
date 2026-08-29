@@ -73,9 +73,51 @@ REQUIRED_ARRAY_KEYS = (
 # compute_max_dt() checks for the explicit scheme), so cheap Jacobi-
 # preconditioned iterations converge quickly without paying ILU's fill-in
 # cost on this stencil.
+#
+# SCOPE OF THAT NOTE: it is about the CRANK-NICOLSON matrix (I - dt/2*M),
+# whose identity term is what makes it strictly diagonally dominant. It does
+# NOT transfer to the STEADY-STATE system, which solves M itself. Measured on
+# a 40x40x24 package-scale grid:
+#
+#     matrix                     min |a_ii|/sum|a_ij|   rows at ratio ~1.0
+#     M (steady state)                 1.000000               95.83%
+#     (I - dt/2*M), dt=1e-6            2.1125                  0.00%
+#
+# M's only diagonal dominance comes from the Robin boundary cells (1600 of
+# 38,400 = 4.17%, exactly the complement of the 95.83% above); every interior
+# row is exactly weakly dominant, so Jacobi has essentially nothing to
+# precondition and BiCGSTAB stalls. solve_steady_state() previously inherited
+# this preconditioner choice and failed to converge on any package-scale grid.
+# See STEADY-STATE BACKEND below for what it uses instead.
 DIRECT_SOLVE_MAX_UNKNOWNS = 20_000
 ITERATIVE_RTOL = 1e-8
 ITERATIVE_MAXITER = 2000
+
+# STEADY-STATE BACKEND.
+# _build_conduction_operator writes M[a,b] = coeff/rho_cp[a] and
+# M[b,a] = coeff/rho_cp[b], i.e. M = D^-1 A with D = diag(rho_cp) and A the
+# symmetric conductance matrix. M is therefore asymmetric wherever rho*cp
+# differs across a material interface (measured: ||M-M^T||/||M|| = 2.45e-3),
+# but S = -D M = -A is EXACTLY symmetric (measured: ||S-S^T||/||S|| = 0.0e+00)
+# and positive definite. Solving M T = -f is equivalent to S T = D f, which
+# admits conjugate gradients -- the correct Krylov method for an SPD system.
+#
+# Measured at 40x40x24 (N=38,400, 50:1 mesh aspect), against splu(M) as ground
+# truth (peak 200.3900 degC):
+#     CG + Jacobi on S            peak 200.3900 degC, err 4.8e-09, 3.65s, 3062 iters
+#     CG + ILU on S               FAILED (spilu is not symmetric, so the
+#                                 preconditioner is not SPD and CG breaks down;
+#                                 scipy has no incomplete Cholesky)
+#     BiCGSTAB + Jacobi on S      FAILED (info=5000)
+# so it is the Krylov method, not the preconditioner, that matters here.
+#
+# CG also scales where direct factorization cannot: splu fill grows ~N^0.59
+# on this stencil (~44M nonzeros already at N=38,400), which is why the
+# direct path keeps its DIRECT_SOLVE_MAX_UNKNOWNS ceiling. Measured CG
+# on the refinement ladder: 935 iters/0.07s at N=4,800; 3,062/3.95s at
+# N=38,400; 8,425/246.8s at N=307,200.
+STEADY_CG_RTOL = 1e-10
+STEADY_CG_MAXITER = 50_000
 
 _EPS = 1e-30  # guards against div-by-zero in harmonic means / coefficient sums
 
@@ -186,6 +228,13 @@ class ThermalSolver:
         # across many steps.
         self._conduction_operator, self._boundary_forcing = self._build_conduction_operator()
         self._cn_solver_cache: Dict[float, Dict[str, object]] = {}
+        # Steady-state solve caches. Both depend only on the static material
+        # maps and BC, never on T or q_map, so they survive every q_map change
+        # -- which is what makes a placement sweep (src/optimizer.py moves
+        # chiplets by rewriting q_map alone) cheap: one factorization, then a
+        # triangular solve per candidate.
+        self._steady_lu: Optional[object] = None          # splu(M), direct path
+        self._steady_spd: Optional[Tuple[sparse.csr_matrix, np.ndarray]] = None  # (S, diag(S))
         # Reference explicit-CFL dt, computed once, used only to flag (via a
         # warning, never an error) implicit steps taken at a dt so large
         # relative to the diffusive timescale that Crank-Nicolson's known
@@ -757,6 +806,42 @@ class ThermalSolver:
         except Exception as exc:  # noqa: BLE001
             raise ThermalSolverError(f"step_implicit() failed at t={self.time_s:.4e}s: {exc}") from exc
 
+    def _steady_state_spd_system(self) -> Tuple[sparse.csr_matrix, np.ndarray]:
+        """
+        Builds (and caches) the symmetric positive-definite form of the
+        steady-state system.
+
+        _build_conduction_operator assembles M = D^-1 A, where D = diag(rho*cp)
+        and A is the symmetric conductance matrix: it writes
+        M[a,b] = coeff/rho_cp[a] but M[b,a] = coeff/rho_cp[b], so the two
+        differ wherever rho*cp differs across a material interface. Left-
+        multiplying by D cancels that per-row scaling on both sides, giving
+
+            S = -D M = -A,   exactly symmetric, positive definite
+
+        (measured: ||M - M^T||/||M|| = 2.45e-3 versus ||S - S^T||/||S|| = 0.0).
+        The explicit (S + S^T)/2 symmetrization below removes only
+        floating-point round-off, not a real asymmetry, so that CG never sees
+        a matrix it would reject.
+
+        Depends only on the static material maps and boundary configuration,
+        so it is built once and reused across every q_map.
+        """
+        if self._steady_spd is None:
+            N = self.nx * self.ny * self.nz
+            D = sparse.diags(self._rho_cp.reshape(N))
+            S = -(D @ self._conduction_operator)
+            S = ((S + S.T) * 0.5).tocsr()
+            diag = S.diagonal()
+            if np.any(diag <= 0):
+                raise ThermalSolverError(
+                    "Symmetrized steady-state operator has a non-positive diagonal entry, "
+                    "so it is not positive definite and conjugate gradients does not apply. "
+                    "Check for isolated or unassigned voxels in the grid."
+                )
+            self._steady_spd = (S, diag)
+        return self._steady_spd
+
     def solve_steady_state(self, apply_result: bool = True) -> np.ndarray:
         """
         Directly solves for the steady-state (dT/dt = 0) temperature field:
@@ -779,6 +864,33 @@ class ThermalSolver:
         solve would fail or blow up; SolverBCConfig.validate() already
         prevents an all-Neumann configuration from reaching this point.
 
+        BACKENDS (see STEADY-STATE BACKEND at module level for the measured
+        rationale):
+          - N <= DIRECT_SOLVE_MAX_UNKNOWNS: sparse LU of M, factorized once
+            and cached. Repeated calls that change only q_map -- the entire
+            inner loop of src/optimizer.py's placement search -- then cost
+            one triangular solve each (measured 0.136 s at N=38,400 against
+            a 23 s factorization).
+          - larger: conjugate gradients on S = -diag(rho_cp) @ M, which is
+            exactly symmetric positive definite even though M is not. This
+            replaces a Jacobi-preconditioned BiCGSTAB on M that did not
+            converge at any package-scale grid size.
+
+        CACHE VALIDITY: both caches depend only on the static material maps
+        (kx/ky/kz, rho, cp) and the boundary configuration -- never on T or
+        q_map. reset() and load_checkpoint() touch only T/time_s/step_count,
+        so they cannot stale them. Assigning directly to solver.kx_map (or
+        any other material map) after construction WOULD stale them and is
+        not supported; rebuild the solver instead.
+
+        A useful independent check on any result this returns: at steady
+        state all generated power must leave through the Robin boundary, so
+
+            mean(T[:, :, 0]) - T_ambient == P / (h * A)
+
+        exactly, independent of the mesh. A deviation indicates a failed
+        solve rather than discretization error.
+
         Parameters
         ----------
         apply_result : bool
@@ -791,32 +903,44 @@ class ThermalSolver:
         try:
             N = self.nx * self.ny * self.nz
             M = self._conduction_operator
-            forcing = self._boundary_forcing + self.q_map.reshape(N) / self._rho_cp.reshape(N)
+            rho_cp_flat = self._rho_cp.reshape(N)
+            forcing = self._boundary_forcing + self.q_map.reshape(N) / rho_cp_flat
 
             if N <= DIRECT_SOLVE_MAX_UNKNOWNS:
-                T_steady_flat = sparse_linalg.spsolve(M.tocsc(), -forcing)
-                backend = "direct"
+                # Direct path. M depends only on the static material maps, so
+                # its factorization is computed once and reused for every
+                # subsequent q_map (a placement sweep pays one factorization,
+                # then a triangular solve per candidate).
+                if self._steady_lu is None:
+                    self._steady_lu = sparse_linalg.splu(M.tocsc())
+                T_steady_flat = self._steady_lu.solve(-forcing)
+                backend = "direct (cached LU)"
             else:
-                diag = M.diagonal()
-                if np.any(np.abs(diag) < 1e-300):
-                    raise ThermalSolverError(
-                        "Zero (or near-zero) diagonal entry in the steady-state operator; "
-                        "cannot build a Jacobi preconditioner. Check for isolated/unassigned "
-                        "voxels in the grid."
-                    )
+                # Iterative path on the SYMMETRIZED system (see STEADY-STATE
+                # BACKEND at module level). S = -diag(rho_cp) @ M is exactly
+                # symmetric positive definite, so:
+                #     M T = -forcing   <=>   S T = diag(rho_cp) @ forcing
+                # and conjugate gradients applies. Jacobi-preconditioned
+                # BiCGSTAB on the unsymmetrized M does NOT converge here.
+                S, diag = self._steady_state_spd_system()
+                b = rho_cp_flat * forcing
                 inv_diag = 1.0 / diag
-                preconditioner = sparse_linalg.LinearOperator(M.shape, matvec=lambda x: inv_diag * x)
-                T_steady_flat, info = sparse_linalg.bicgstab(
-                    M.tocsr(), -forcing, M=preconditioner,
-                    rtol=ITERATIVE_RTOL, maxiter=ITERATIVE_MAXITER,
+                preconditioner = sparse_linalg.LinearOperator(
+                    S.shape, matvec=lambda x: inv_diag * x
+                )
+                T_steady_flat, info = sparse_linalg.cg(
+                    S, b, M=preconditioner,
+                    rtol=STEADY_CG_RTOL, maxiter=STEADY_CG_MAXITER,
                 )
                 if info != 0:
                     raise ThermalSolverError(
-                        f"Steady-state iterative solve failed to converge (info={info}). "
-                        f"This may indicate an ill-conditioned system (e.g. extreme material "
-                        f"contrast) or a near-singular operator (check boundary conditions)."
+                        f"Steady-state CG solve failed to converge (info={info}) on the "
+                        f"symmetrized SPD system at N={N:,} unknowns. This may indicate an "
+                        f"ill-conditioned system (e.g. extreme material contrast or an "
+                        f"extreme mesh aspect ratio) or a near-singular operator (check that "
+                        f"a Robin/Dirichlet boundary is actually present)."
                     )
-                backend = "iterative"
+                backend = "iterative (CG on symmetrized SPD system)"
 
             T_steady = T_steady_flat.reshape(self.shape)
             if not np.all(np.isfinite(T_steady)):

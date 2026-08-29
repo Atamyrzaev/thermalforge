@@ -162,6 +162,25 @@ __all__ = [
 OVERLAP_PENALTY_C = 1.0e6
 OVERLAP_PENALTY_PER_CELL_C = 50.0
 
+# Physical lattice, in micrometers, that chiplet ORIGINS are snapped to.
+#
+# Chiplet extents already divide exactly at every pitch in the refinement
+# ladder, but that is not sufficient for a mesh-convergence study: the
+# origins must also be representable on the COARSEST mesh, or the geometry
+# differs between levels and the study is comparing different problems.
+#
+#     origin x = 3500 um -> exact at dx = 1000/500/250 um?  [False, True, True]
+#     origin x = 3000 um -> exact at dx = 1000/500/250 um?  [True,  True, True]
+#
+# 1000 um is the coarsest pitch in the approved ladder (20x20 over a 20 mm
+# die), so snapping origins to it makes every layout representable at every
+# level. It is also a realistic floorplanning constraint in its own right --
+# real placement grids are coarse -- so this costs nothing physically.
+#
+# This is the same failure mode as the chiplet-footprint and stack-layer bugs,
+# one level up: geometry defined in grid units rather than physical ones.
+DEFAULT_PLACEMENT_PITCH_UM = 1000.0
+
 
 class OptimizerError(Exception):
     """Raised on an invalid catalog, an infeasible die footprint, or a failed
@@ -426,6 +445,7 @@ class ChipletPlacementOptimizer:
         h_convective: float = 1000.0,
         bottom_bc: str = "robin",
         stack: Optional["StackSection"] = None,
+        placement_pitch_um: float = DEFAULT_PLACEMENT_PITCH_UM,
         seed: int = 0,
     ):
         if not catalog:
@@ -440,6 +460,12 @@ class ChipletPlacementOptimizer:
         self.h_convective = float(h_convective)
         self.seed = int(seed)
         self._rng = random.Random(self.seed)
+
+        self.placement_pitch_um = float(placement_pitch_um)
+        if self.placement_pitch_um <= 0:
+            raise OptimizerError(
+                f"placement_pitch_um must be > 0, got {self.placement_pitch_um}"
+            )
 
         # --- Vertical stack geometry (mirrors main.build_chiplet_stack) ---
         # Layer interfaces come from PHYSICAL thicknesses in micrometers,
@@ -497,6 +523,36 @@ class ChipletPlacementOptimizer:
         # if the mesh is so coarse that this materially distorts the layout,
         # say so rather than letting it pass silently.
         self._warn_on_coarse_mesh()
+
+        # --- Placement lattice (see DEFAULT_PLACEMENT_PITCH_UM) ---
+        # Origins are snapped to a physical pitch so a layout found on one
+        # mesh is exactly representable on any coarser mesh in a refinement
+        # ladder. Resolved to voxels here, AFTER the catalog-fit checks above:
+        # "these chiplets do not fit on this die" is the more fundamental
+        # diagnosis and should surface first.
+        self._pitch_x = max(1, int(round(self.placement_pitch_um * 1e-6 / self.dx)))
+        self._pitch_y = max(1, int(round(self.placement_pitch_um * 1e-6 / self.dy)))
+        if self._pitch_x > self.nx // 2 or self._pitch_y > self.ny // 2:
+            raise OptimizerError(
+                f"placement_pitch_um={self.placement_pitch_um:.1f} um is too coarse for this "
+                f"die: it is {self._pitch_x}x{self._pitch_y} voxels on a {self.nx}x{self.ny} "
+                f"grid ({self.nx*self.dx*1e6:.0f} x {self.ny*self.dy*1e6:.0f} um), leaving "
+                f"almost no placeable positions. Use a pitch of at most "
+                f"{min(self.nx // 2 * self.dx, self.ny // 2 * self.dy) * 1e6:.0f} um here, or "
+                f"model a larger die."
+            )
+
+        realized_pitch_x_um = self._pitch_x * self.dx * 1e6
+        realized_pitch_y_um = self._pitch_y * self.dy * 1e6
+        if (abs(realized_pitch_x_um - self.placement_pitch_um) > 1e-9
+                or abs(realized_pitch_y_um - self.placement_pitch_um) > 1e-9):
+            logger.warning(
+                "Placement pitch %.1f um is not a whole number of voxels at dx=%.2f "
+                "dy=%.2f um; snapping to %.1f x %.1f um instead. Layouts found here may "
+                "not be exactly representable on a coarser mesh.",
+                self.placement_pitch_um, self.dx * 1e6, self.dy * 1e6,
+                realized_pitch_x_um, realized_pitch_y_um,
+            )
 
         # --- Build the grid + solver ONCE (see module docstring) ---
         grid_config = {
@@ -644,6 +700,8 @@ class ChipletPlacementOptimizer:
             if cursor_x + nvx > self.nx:              # wrap to a new shelf
                 shelf_y += shelf_h
                 cursor_x, shelf_h = 0, 0
+            # Both cursor_x and shelf_y are advanced in whole lattice steps
+            # below, so every placement here is already lattice-aligned.
             if shelf_y + nvy > self.ny:
                 raise OptimizerError(
                     f"Cannot shelf-pack the catalog into a {self.nx}x{self.ny} voxel die "
@@ -652,9 +710,14 @@ class ChipletPlacementOptimizer:
                     f"{nvx}x{nvy} voxels) overflows at shelf y={shelf_y}. The catalog fits by "
                     f"total area but not by this packing; enlarge the die or shrink the catalog."
                 )
+            # Advance the cursor to the next lattice position, so the seed
+            # layout is itself representable on a coarser mesh. For the
+            # default catalog every extent already happens to be a whole
+            # number of lattice steps, but that is a property of that
+            # catalog, not a guarantee -- round up explicitly.
             placements[idx] = (cursor_x, shelf_y)
-            cursor_x += nvx
-            shelf_h = max(shelf_h, nvy)
+            cursor_x = -(-(cursor_x + nvx) // self._pitch_x) * self._pitch_x
+            shelf_h = max(shelf_h, -(-nvy // self._pitch_y) * self._pitch_y)
 
         return tuple(placements[i] for i in range(len(self.catalog)))
 
@@ -823,22 +886,42 @@ class ChipletPlacementOptimizer:
             i, j = self._rng.sample(range(n), 2)
             xi, yi = mutable[i]
             xj, yj = mutable[j]
-            (nvxi, nvyi), (nvxj, nvyj) = self._extents[i], self._extents[j]
-            mutable[i] = (min(xj, self.nx - nvxi), min(yj, self.ny - nvyi))
-            mutable[j] = (min(xi, self.nx - nvxj), min(yi, self.ny - nvyj))
-            mutable[i] = (max(0, mutable[i][0]), max(0, mutable[i][1]))
-            mutable[j] = (max(0, mutable[j][0]), max(0, mutable[j][1]))
+            mutable[i] = self._snap(xj, yj, i)
+            mutable[j] = self._snap(xi, yi, j)
             return tuple(mutable)
 
         idx = self._rng.randrange(n)
-        nvx, nvy = self._extents[idx]
         x0, y0 = mutable[idx]
-        dx_move = self._rng.randint(-max_jump, max_jump)
-        dy_move = self._rng.randint(-max_jump, max_jump)
-        new_x = min(max(0, x0 + dx_move), self.nx - nvx)
-        new_y = min(max(0, y0 + dy_move), self.ny - nvy)
-        mutable[idx] = (new_x, new_y)
+        # Jitter in whole lattice steps, so a proposal can never leave the
+        # placement lattice in the first place.
+        steps_x = max(1, max_jump // self._pitch_x)
+        steps_y = max(1, max_jump // self._pitch_y)
+        dx_move = self._rng.randint(-steps_x, steps_x) * self._pitch_x
+        dy_move = self._rng.randint(-steps_y, steps_y) * self._pitch_y
+        mutable[idx] = self._snap(x0 + dx_move, y0 + dy_move, idx)
         return tuple(mutable)
+
+    def _snap(self, x: int, y: int, idx: int) -> Tuple[int, int]:
+        """Snaps one origin onto the placement lattice and clamps it in bounds.
+
+        Clamping happens AFTER snapping and snaps downward, so a clamped
+        origin stays on the lattice rather than being pushed off it by the
+        bound -- otherwise blocks pressed against the far edge would sit at
+        off-lattice positions and break representability on a coarser mesh.
+        """
+        nvx, nvy = self._extents[idx]
+        sx = int(round(x / self._pitch_x)) * self._pitch_x
+        sy = int(round(y / self._pitch_y)) * self._pitch_y
+        sx = max(0, min(sx, ((self.nx - nvx) // self._pitch_x) * self._pitch_x))
+        sy = max(0, min(sy, ((self.ny - nvy) // self._pitch_y) * self._pitch_y))
+        return sx, sy
+
+    def is_on_placement_lattice(self, layout: Layout) -> bool:
+        """True iff every origin lies on the placement lattice -- i.e. the
+        layout is exactly representable on any mesh whose pitch divides
+        placement_pitch_um."""
+        return all(x % self._pitch_x == 0 and y % self._pitch_y == 0
+                   for x, y in layout)
 
     # ------------------------------------------------------------------
     # Main search

@@ -788,10 +788,18 @@ SMALL_CATALOG = (
 )
 
 
-def make_small_optimizer(seed: int = 0) -> ChipletPlacementOptimizer:
+def make_small_optimizer(seed: int = 0, placement_pitch_um: float = 25.0
+                          ) -> ChipletPlacementOptimizer:
+    """Small optimizer for unit tests.
+
+    placement_pitch_um defaults to 25 um (one voxel here) rather than the
+    package-scale DEFAULT_PLACEMENT_PITCH_UM of 1000 um: this fixture models a
+    500 x 500 um die, on which a 1000 um placement lattice is larger than the
+    whole die and leaves no placeable positions."""
     return ChipletPlacementOptimizer(
         nx=20, ny=20, nz=12, dx=25e-6, dy=25e-6, dz=10e-6,
         catalog=SMALL_CATALOG, t_ambient_c=25.0, h_convective=2500.0,
+        placement_pitch_um=placement_pitch_um,
         seed=seed,
     )
 
@@ -1016,6 +1024,178 @@ class TestChipletPhysicalDimensions:
         expected = sum(c.power_w for c in SMALL_CATALOG)
 
         assert total_w == pytest.approx(expected, rel=1e-12)
+
+
+class TestSteadyStateBackend:
+    """The steady-state solve is verified against physics, not just against
+    itself: at equilibrium every generated watt must leave through the Robin
+    boundary, which pins mean(T_bottom) - T_ambient to P/(h*A) EXACTLY,
+    independent of the mesh. That makes it a check on the solve rather than
+    on the discretization."""
+
+    @staticmethod
+    def _analytic_mean_bottom_rise(config: PipelineConfig, total_power_w: float) -> float:
+        area = (config.grid.nx * config.grid.dx) * (config.grid.ny * config.grid.dy)
+        return total_power_w / (config.boundary_conditions.h_convective * area)
+
+    def test_operator_is_asymmetric_but_symmetrizable(self):
+        """_build_conduction_operator writes M = D^-1 A: M[a,b] = coeff/rho_cp[a]
+        against M[b,a] = coeff/rho_cp[b]. So M is asymmetric wherever rho*cp
+        differs across a material interface, while S = -D M is exactly
+        symmetric. This is what licenses conjugate gradients."""
+        import scipy.sparse as sparse
+        import scipy.sparse.linalg as spla
+
+        config = make_pipeline_config(die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)          # heterogeneous stack: Si + composite
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        M = solver._conduction_operator.tocsr()
+        asym_M = spla.norm(M - M.T) / spla.norm(M)
+        assert asym_M > 1e-6, (
+            "M is symmetric here, so this stack is not heterogeneous enough to "
+            "exercise the symmetrization"
+        )
+
+        N = solver.nx * solver.ny * solver.nz
+        S = -(sparse.diags(solver._rho_cp.reshape(N)) @ M)
+        assert spla.norm(S - S.T) / spla.norm(S) < 1e-12
+
+        S_cached, diag = solver._steady_state_spd_system()
+        assert np.all(diag > 0)                     # positive definite diagonal
+        assert spla.norm(S_cached - S_cached.T) == pytest.approx(0.0, abs=1e-12)
+
+    def test_steady_state_pins_mean_bottom_rise_to_analytic_value(self):
+        """The mesh-independent invariant, on the direct path."""
+        config = make_pipeline_config(nx=12, ny=12, nz=12, die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        T = solver.solve_steady_state(apply_result=False)
+        rise = float(np.mean(T[:, :, 0])) - solver.bc.t_ambient_k
+        expected = self._analytic_mean_bottom_rise(config, config.power.die_power_w)
+
+        assert rise == pytest.approx(expected, rel=1e-6)
+
+    def test_cg_path_matches_direct_path_on_an_anisotropic_mesh(self):
+        """The two backends must agree ON A MESH THAT ACTUALLY BREAKS THE OLD
+        ONE.
+
+        This configuration is chosen deliberately, not arbitrarily. The
+        Jacobi-on-M BiCGSTAB this replaced fails as mesh anisotropy and size
+        rise together; measured, holding dx=500 um and sweeping dz:
+
+            grid        N      aspect   Jacobi-on-M      CG-on-S
+            12x12x12    1,728    2.5    ok  0.01s        ok  0.01s
+            12x12x12    1,728   50.0    ok  0.16s        ok  0.03s
+            16x16x12    3,072   50.0    ok  0.23s        ok  0.05s
+            20x20x12    4,800   50.0    FAIL info=2000   ok  0.08s
+
+        So 20x20x12 at 500/10 um is the cheapest configuration that
+        reproduces the real failure. A milder grid would let this test pass
+        against the very bug it exists to catch.
+        """
+        import src.thermal_solver as ts
+
+        # dz = 10 um x nz = 12 -> a 120 um stack; dx = dy = 500 um -> 50:1.
+        config = make_pipeline_config(
+            nx=20, ny=20, nz=12, dx=500e-6, dy=500e-6, dz=10e-6,
+            die_power_w=0.05, h_convective=1000.0,
+        )
+        assert max(config.grid.dx, config.grid.dy) / config.grid.dz == pytest.approx(50.0)
+
+        gb_a, *_ = build_stack_grid(config)
+        solver_direct = ThermalSolver.from_grid_builder(gb_a)
+        N = solver_direct.nx * solver_direct.ny * solver_direct.nz
+        assert N <= ts.DIRECT_SOLVE_MAX_UNKNOWNS
+        T_direct = solver_direct.solve_steady_state(apply_result=False)
+
+        original = ts.DIRECT_SOLVE_MAX_UNKNOWNS
+        try:
+            ts.DIRECT_SOLVE_MAX_UNKNOWNS = 1        # force the iterative path
+            gb_b, *_ = build_stack_grid(config)
+            solver_iter = ThermalSolver.from_grid_builder(gb_b)
+            T_iter = solver_iter.solve_steady_state(apply_result=False)
+        finally:
+            ts.DIRECT_SOLVE_MAX_UNKNOWNS = original
+
+        assert np.max(np.abs(T_direct - T_iter)) < 1e-6
+        # and the iterative result independently satisfies the physical invariant
+        rise = float(np.mean(T_iter[:, :, 0])) - solver_iter.bc.t_ambient_k
+        assert rise == pytest.approx(
+            self._analytic_mean_bottom_rise(config, config.power.die_power_w), rel=1e-6
+        )
+
+    def test_cached_factorization_still_tracks_a_changed_power_map(self):
+        """The LU factorization is cached across calls because M depends only
+        on the material maps. Changing q_map must still change the answer --
+        a cache that ignored the new RHS would silently return a stale field."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        T1 = solver.solve_steady_state(apply_result=False)
+        assert solver._steady_lu is not None          # cache populated
+        cached_id = id(solver._steady_lu)
+
+        solver.q_map *= 2.0                            # same operator, new RHS
+        T2 = solver.solve_steady_state(apply_result=False)
+
+        assert id(solver._steady_lu) == cached_id      # not refactorized
+        assert not np.allclose(T1, T2)                 # but the answer moved
+        # Doubling the power doubles the rise above ambient (the system is linear).
+        amb = solver.bc.t_ambient_k
+        assert np.max(T2 - amb) == pytest.approx(2.0 * np.max(T1 - amb), rel=1e-6)
+
+
+class TestPlacementLattice:
+    """Chiplet ORIGINS must lie on a physical lattice, not just have physical
+    extents. A layout whose origins are only representable on the mesh that
+    found them makes a refinement study compare different geometries."""
+
+    def test_origins_stay_on_the_lattice_through_a_full_optimize(self):
+        opt = make_small_optimizer(seed=4, placement_pitch_um=50.0)
+        assert opt._pitch_x == 2 and opt._pitch_y == 2      # 50 um at dx = 25 um
+
+        assert opt.is_on_placement_lattice(opt.shelf_packed_layout())
+        result = opt.optimize(iterations=20, verbose=False)
+
+        assert opt.is_on_placement_lattice(result.best_layout), (
+            f"optimize() returned off-lattice origins: {result.best_layout}"
+        )
+        assert opt.is_on_placement_lattice(result.initial_layout)
+
+    def test_every_proposal_is_lattice_aligned_including_at_the_bounds(self):
+        """Snapping must survive clamping. A block pushed against the far edge
+        must land on the lattice, not at nx-extent, or it becomes
+        unrepresentable on a coarser mesh."""
+        opt = make_small_optimizer(seed=9, placement_pitch_um=50.0)
+        layout = opt.shelf_packed_layout()
+        for _ in range(300):
+            layout = opt._propose(layout, max_jump=8)
+            assert opt.is_on_placement_lattice(layout), f"off-lattice proposal {layout}"
+            for (nvx, nvy), (x0, y0) in zip(opt._extents, layout):
+                assert 0 <= x0 and x0 + nvx <= opt.nx
+                assert 0 <= y0 and y0 + nvy <= opt.ny
+
+    def test_lattice_origins_are_representable_on_a_coarser_mesh(self):
+        """The actual point of the constraint: a physical origin found on the
+        fine mesh must land exactly on a cell face of the coarse one."""
+        opt = make_small_optimizer(seed=2, placement_pitch_um=50.0)
+        result = opt.optimize(iterations=15, verbose=False)
+
+        for (x0, y0) in result.best_layout:
+            x_um, y_um = x0 * opt.dx * 1e6, y0 * opt.dy * 1e6
+            for coarse_dx_um in (25.0, 50.0):        # this mesh and one 2x coarser
+                assert abs(x_um / coarse_dx_um - round(x_um / coarse_dx_um)) < 1e-9
+                assert abs(y_um / coarse_dx_um - round(y_um / coarse_dx_um)) < 1e-9
+
+    def test_pitch_coarser_than_the_die_is_rejected(self):
+        """The package-scale default (1000 um) on a 500 um test die would
+        leave no placeable positions; that must fail loudly, not silently
+        collapse the search space."""
+        with pytest.raises(OptimizerError, match=r"too coarse for this die"):
+            make_small_optimizer(seed=0, placement_pitch_um=1000.0)
 
 
 if __name__ == "__main__":
