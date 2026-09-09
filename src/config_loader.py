@@ -60,9 +60,12 @@ class GridSection:
       - nz*dz = 240 um = the authored 100/40/100 um stack exactly, with each
         layer a whole number of cells at dz=20 um (5/2/5)
       - nx*ny*nz = 19,200 <= thermal_solver.DIRECT_SOLVE_MAX_UNKNOWNS, so the
-        steady-state solve takes the cached direct-LU path at ~0.136 s per
-        solve rather than conjugate gradients at ~4.7 s. That 35x difference
-        is what makes an exhaustive placement search practical.
+        steady-state solve takes the cached direct-LU path. Measured here:
+        ~1.0-1.5 s for the first solve (which pays the factorization) and
+        0.019-0.041 s for every solve after it, against ~4.7 s per solve on
+        the conjugate-gradient path at 38,400 unknowns. Two orders of
+        magnitude, and it is what makes an exhaustive placement search
+        practical -- exhaustive precompute is 234 solves.
     """
     nx: int = 40
     ny: int = 40
