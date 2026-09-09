@@ -116,8 +116,42 @@ ITERATIVE_MAXITER = 2000
 # direct path keeps its DIRECT_SOLVE_MAX_UNKNOWNS ceiling. Measured CG
 # on the refinement ladder: 935 iters/0.07s at N=4,800; 3,062/3.95s at
 # N=38,400; 8,425/246.8s at N=307,200.
-STEADY_CG_RTOL = 1e-10
-STEADY_CG_MAXITER = 50_000
+STEADY_CG_RTOL = 1e-12
+STEADY_CG_MAXITER = 200_000
+
+# VERIFICATION, NOT TRUST.
+# A solver's own convergence flag says "my iteration stopped", not "the answer
+# is right": scipy returns info=0 as soon as its internal residual estimate
+# crosses rtol, and that estimate can be wrong (stagnation, loss of
+# orthogonality, breakdown near machine precision). A direct factorization can
+# likewise return a badly wrong answer on an ill-conditioned operator without
+# raising anything at all. So solve_steady_state() MEASURES its answer, with
+# two independent checks, and raises if either fails:
+#
+#   1. ALGEBRAIC -- ||Ax - b|| / ||b||, against the system actually solved.
+#      Confirms the linear algebra. On its own it only proves "I solved the
+#      system I was handed"; it cannot detect a wrongly assembled operator.
+#
+#   2. PHYSICAL -- at steady state every generated watt must leave through the
+#      Robin/Dirichlet boundary, so
+#          sum(boundary_coeff * (T_bottom - T_ambient)) == sum(q_map / rho_cp)
+#      exactly, independent of mesh, materials, layout and solver. This is a
+#      genuinely independent check: it follows from energy conservation rather
+#      than from the discretization, so it catches operator-assembly errors
+#      that a residual cannot.
+#
+# Both are cheap beside the solve itself (two sparse mat-vecs and a sum), so
+# they run on EVERY call rather than as an opt-in debug mode.
+STEADY_RESIDUAL_TOL = 1e-8
+# The energy imbalance is measured in EQUIVALENT KELVIN, not as a ratio:
+#     imbalance_K = |P_in - P_out| / sum(boundary_coeff / rho_cp)
+# i.e. the uniform bottom-surface temperature error that would account for the
+# mismatch. A ratio is unusable here because the zero-power case makes both
+# sides vanish, and dividing float noise by float noise reports 100% error on
+# a perfectly correct solve. Equivalent kelvin stays meaningful at any power,
+# including none, and is directly interpretable against the temperatures the
+# model reports.
+STEADY_ENERGY_BALANCE_TOL_K = 1e-6
 
 _EPS = 1e-30  # guards against div-by-zero in harmonic means / coefficient sums
 
@@ -842,6 +876,70 @@ class ThermalSolver:
             self._steady_spd = (S, diag)
         return self._steady_spd
 
+    def _verify_steady_state(self, T_flat: np.ndarray, forcing: np.ndarray) -> Dict[str, float]:
+        """
+        Verifies a computed steady-state field against two independent checks
+        and raises ThermalSolverError if either fails. Returns the measured
+        values so callers can log or assert on them.
+
+        See the VERIFICATION, NOT TRUST note at module level for why this runs
+        unconditionally rather than trusting a convergence flag.
+
+        Check 1 (algebraic): the defining equation is M T = -forcing, so
+        ||M T + forcing|| / ||forcing|| must be at machine-precision level.
+        Evaluated on M directly -- not on the symmetrized S -- so it verifies
+        the system that was actually posed, whichever backend produced T.
+
+        Check 2 (physical): at equilibrium the net rate of change is zero
+        everywhere, so summing rho_cp * (dT/dt) over the domain gives total
+        generation minus total boundary loss = 0. Expressed in the operator's
+        own units, total power in must equal total power out through the
+        bottom boundary.
+        """
+        N = self.nx * self.ny * self.nz
+        M = self._conduction_operator
+
+        # --- 1. algebraic residual on the posed system ---
+        resid_vec = M @ T_flat + forcing
+        forcing_norm = float(np.linalg.norm(forcing))
+        resid = float(np.linalg.norm(resid_vec)) / (forcing_norm if forcing_norm > 0 else 1.0)
+        if not np.isfinite(resid) or resid > STEADY_RESIDUAL_TOL:
+            raise ThermalSolverError(
+                f"Steady-state solve failed verification: relative residual "
+                f"||M T + f|| / ||f|| = {resid:.3e} exceeds STEADY_RESIDUAL_TOL="
+                f"{STEADY_RESIDUAL_TOL:.1e} at N={N:,}. The solver reported success but "
+                f"the answer does not satisfy the equation, so it must not be used."
+            )
+
+        # --- 2. physical energy balance, independent of the discretization ---
+        T_grid = T_flat.reshape(self.shape)
+        boundary_conductance = self._bottom_boundary_coeff / self._rho_cp[:, :, 0]
+        power_in = float(np.sum(self.q_map / self._rho_cp))
+        power_out = float(np.sum(boundary_conductance * (T_grid[:, :, 0] - self.bc.t_ambient_k)))
+
+        # Normalize by the total boundary conductance so the result is an
+        # equivalent surface-temperature error in kelvin. A ratio would be
+        # undefined at zero power, where both terms vanish -- see the note on
+        # STEADY_ENERGY_BALANCE_TOL_K.
+        total_conductance = float(np.sum(boundary_conductance))
+        if total_conductance <= 0:
+            raise ThermalSolverError(
+                "Total boundary conductance is non-positive, so no heat can leave the "
+                "domain and no steady state exists. Check h_convective and the bottom BC."
+            )
+        imbalance_k = abs(power_in - power_out) / total_conductance
+        if not np.isfinite(imbalance_k) or imbalance_k > STEADY_ENERGY_BALANCE_TOL_K:
+            raise ThermalSolverError(
+                f"Steady-state solve failed the energy-balance check: generation and "
+                f"boundary loss differ by {imbalance_k:.3e} K equivalent surface temperature "
+                f"(tolerance {STEADY_ENERGY_BALANCE_TOL_K:.1e} K). At equilibrium all "
+                f"generated power must leave through the boundary exactly, independent of "
+                f"mesh -- a mismatch indicates a wrongly assembled operator or boundary "
+                f"term, not discretization error."
+            )
+
+        return {"residual": resid, "energy_imbalance_k": imbalance_k}
+
     def solve_steady_state(self, apply_result: bool = True) -> np.ndarray:
         """
         Directly solves for the steady-state (dT/dt = 0) temperature field:
@@ -951,9 +1049,16 @@ class ThermalSolver:
                     "physical, nonzero values)."
                 )
 
+            # Verify rather than trust: both backends are checked against the
+            # posed equation AND against energy conservation, and either
+            # failing raises. See VERIFICATION, NOT TRUST at module level.
+            checks = self._verify_steady_state(T_steady_flat, forcing)
+
             logger.info(
-                "solve_steady_state: solved via %s backend (N=%d unknowns), peak T=%.2f K",
+                "solve_steady_state: solved via %s backend (N=%d unknowns), peak T=%.2f K "
+                "[verified: residual=%.2e, energy imbalance=%.2e K]",
                 backend, N, float(np.max(T_steady)),
+                checks["residual"], checks["energy_imbalance_k"],
             )
 
             if apply_result:

@@ -323,16 +323,22 @@ def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATA
     too_big = [c for c in catalog if c.width_um > die_w_um or c.depth_um > die_h_um]
     fits_by_area = catalog_area_mm2 <= die_area_mm2
 
-    # Constraint 2: the grid must stay on the direct sparse solve path. A
-    # package-scale die needs a coarse lateral pitch while the stack still
-    # needs a fine dz, and on the resulting anisotropic mesh the iterative
-    # backend does not converge (measured; see src/optimizer.py's SOLVER
-    # BACKEND LIMIT note). Above the threshold Stage 2 fails mid-anneal, so
-    # catch it here rather than after a full Stage 1 solve.
-    aspect = max(config.grid.dx, config.grid.dy) / config.grid.dz if config.grid.dz > 0 else 0.0
-    over_budget = n_unknowns > DIRECT_SOLVE_MAX_UNKNOWNS and aspect > 2.0
-
-    if not too_big and fits_by_area and not over_budget:
+    # NOTE: this function used to also refuse any grid above
+    # DIRECT_SOLVE_MAX_UNKNOWNS with a mesh aspect ratio > 2:1, because the
+    # steady-state solve then fell to a Jacobi-preconditioned BiCGSTAB that
+    # did not converge on anisotropic meshes. That guard is GONE because the
+    # underlying defect is fixed: solve_steady_state() now runs conjugate
+    # gradients on S = -diag(rho_cp) @ M, which is exactly symmetric positive
+    # definite, and converges at every size measured (40x40x24 at 50:1 aspect:
+    # 3,062 iterations, peak 200.3900 degC, matching a direct factorization to
+    # 4.8e-09 degC). Keeping the guard would now block configurations that
+    # work, which is exactly what it did before this comment replaced it.
+    #
+    # Large grids are still SLOWER (CG iteration count grows with N), but slow
+    # is a scheduling problem, not a correctness one, and every solve is
+    # residual-verified inside solve_steady_state(). Only genuine
+    # impossibilities are refused here.
+    if not too_big and fits_by_area:
         return None
 
     # --- Build one recommendation that satisfies BOTH constraints ---
@@ -369,14 +375,6 @@ def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATA
         lines += [
             "    Chiplet footprints are PHYSICAL (micrometers) and do not shrink when",
             "    the mesh is refined, so the die must be enlarged via nx*dx and ny*dy.",
-        ]
-    if over_budget:
-        lines += [
-            "",
-            f"  The grid is {n_unknowns:,} unknowns, above "
-            f"DIRECT_SOLVE_MAX_UNKNOWNS ({DIRECT_SOLVE_MAX_UNKNOWNS:,}), on a mesh with",
-            f"  aspect ratio {aspect:.1f}:1. Stage 2 would fall to the iterative backend,",
-            "  which does not converge on meshes this anisotropic.",
         ]
     lines += [
         "",

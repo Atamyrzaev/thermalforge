@@ -65,6 +65,7 @@ from src.config_loader import (
     VisualizationSection,
 )
 from src.grid_builder import GridBuilder, GridBuilderError, MATERIALS
+import src.thermal_solver as thermal_solver_module
 from src.thermal_solver import ThermalSolver, SolverBCConfig, ThermalSolverError
 
 import src.optimizer as optimizer_module
@@ -747,6 +748,99 @@ class TestSteadyStateSolve:
 
         T_steady = solver.solve_steady_state(apply_result=True)
         assert np.array_equal(solver.T, T_steady)
+
+
+class TestSteadyStateVerification:
+    """Every steady-state solve is verified, not trusted.
+
+    A convergence flag says "my iteration stopped", not "the answer is right".
+    solve_steady_state() therefore measures its own answer against two
+    independent checks and raises if either fails: an algebraic residual on
+    the posed system, and an energy balance derived from conservation rather
+    than from the discretization.
+    """
+
+    def test_verification_metrics_are_at_machine_precision(self):
+        """A real solve must pass both checks with orders of margin, not
+        scrape past the tolerance."""
+        config = make_pipeline_config(nx=12, ny=12, nz=12, die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        N = solver.nx * solver.ny * solver.nz
+        T = solver.solve_steady_state(apply_result=False)
+        forcing = (solver._boundary_forcing
+                   + solver.q_map.reshape(N) / solver._rho_cp.reshape(N))
+        checks = solver._verify_steady_state(T.reshape(N), forcing)
+
+        # Two orders of margin below the raise threshold. Measured on this
+        # grid: residual ~1.4e-11 against a 1e-8 tolerance.
+        assert checks["residual"] < 1e-2 * thermal_solver_module.STEADY_RESIDUAL_TOL
+        assert checks["energy_imbalance_k"] < 1e-2 * thermal_solver_module.STEADY_ENERGY_BALANCE_TOL_K
+
+    def test_energy_balance_check_survives_zero_power(self):
+        """With q=0 both sides of the balance vanish. Measuring the imbalance
+        as a ratio would divide float noise by float noise and report 100%
+        error on a perfectly correct solve; measuring it in equivalent kelvin
+        stays meaningful. This pins that choice."""
+        config = make_pipeline_config(die_power_w=0.0)
+        gb = build_uniform_grid(config, "silicon")
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        T = solver.solve_steady_state(apply_result=False)   # must not raise
+        assert np.allclose(T, solver.bc.t_ambient_k, atol=1e-6)
+
+    def test_verification_rejects_a_corrupted_field(self):
+        """Regression injection: perturb one cell of a converged solution and
+        confirm both checks catch it. Without this, the verification could be
+        silently vacuous."""
+        config = make_pipeline_config(nx=12, ny=12, nz=12, die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        N = solver.nx * solver.ny * solver.nz
+        T = solver.solve_steady_state(apply_result=False)
+        forcing = (solver._boundary_forcing
+                   + solver.q_map.reshape(N) / solver._rho_cp.reshape(N))
+
+        # An interior cell perturbation breaks the algebraic residual.
+        corrupted = T.reshape(N).copy()
+        corrupted[N // 2] += 5.0
+        with pytest.raises(ThermalSolverError, match="relative residual"):
+            solver._verify_steady_state(corrupted, forcing)
+
+        # A uniform bottom-layer offset breaks the energy balance.
+        corrupted2 = T.copy()
+        corrupted2[:, :, 0] += 5.0
+        with pytest.raises(ThermalSolverError):
+            solver._verify_steady_state(corrupted2.reshape(N), forcing)
+
+    def test_cg_path_matches_the_exact_direct_solve(self):
+        """The large-grid path is iterative, so it must be shown to agree with
+        the exact factorization rather than assumed to. Compared on the same
+        operator at a size where both are feasible."""
+        import scipy.sparse.linalg as spla
+
+        config = make_pipeline_config(nx=14, ny=14, nz=14, die_power_w=0.05)
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        N = solver.nx * solver.ny * solver.nz
+        rho_cp = solver._rho_cp.reshape(N)
+        forcing = solver._boundary_forcing + solver.q_map.reshape(N) / rho_cp
+
+        exact = spla.splu(solver._conduction_operator.tocsc()).solve(-forcing)
+
+        S, diag = solver._steady_state_spd_system()
+        inv_diag = 1.0 / diag
+        pre = spla.LinearOperator(S.shape, matvec=lambda v: inv_diag * v)
+        cg_x, info = spla.cg(S, rho_cp * forcing, M=pre,
+                             rtol=thermal_solver_module.STEADY_CG_RTOL,
+                             maxiter=thermal_solver_module.STEADY_CG_MAXITER)
+
+        assert info == 0
+        # Agreement across EVERY cell, not just the peak.
+        assert np.max(np.abs(cg_x - exact)) < 1e-6
 
 
 class TestSolverSectionConfig:
