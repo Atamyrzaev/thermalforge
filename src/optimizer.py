@@ -1422,13 +1422,14 @@ if __name__ == "__main__":
     # at dx=25 um (a 1 mm^2 die) this same catalog correctly raises
     # OptimizerError rather than silently shrinking the chiplets.
     #
-    # nz=12 keeps this at 19,200 unknowns, at or below
-    # DIRECT_SOLVE_MAX_UNKNOWNS, so it takes the direct sparse path. Do NOT
-    # raise nz to 24 here: 38,400 unknowns falls to the Jacobi-preconditioned
-    # iterative backend, which does not converge on a mesh this anisotropic
-    # (measured -- see the SOLVER BACKEND LIMIT note in the module docstring).
-    opt = ChipletPlacementOptimizer(nx=40, ny=40, nz=12,
-                                    dx=500e-6, dy=500e-6, dz=40e-6, seed=7)
+    # nz=24 at dz=10 um gives the exact 100/40/100 um stack and 38,400
+    # unknowns, which routes to conjugate gradients on the symmetrized SPD
+    # system. That path converges here; an older comment in this spot warned
+    # against nz=24 because the previous BiCGSTAB backend did not, which is
+    # no longer true (see SOLVER BACKEND in the module docstring).
+    opt = ChipletPlacementOptimizer(nx=40, ny=40, nz=24,
+                                    dx=500e-6, dy=500e-6, dz=10e-6, seed=7)
     res = opt.optimize(iterations=30)
     print(res.summarize())
+    print("Report:", render_optimization_report(res))
     print("Report:", render_optimization_report(res))
