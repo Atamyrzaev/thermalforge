@@ -126,7 +126,7 @@ STEADY_CG_MAXITER = 200_000
 # orthogonality, breakdown near machine precision). A direct factorization can
 # likewise return a badly wrong answer on an ill-conditioned operator without
 # raising anything at all. So solve_steady_state() MEASURES its answer, with
-# two independent checks, and raises if either fails:
+# three checks, and raises if any of them fails:
 #
 #   1. ALGEBRAIC -- ||Ax - b|| / ||b||, against the system actually solved.
 #      Confirms the linear algebra. On its own it only proves "I solved the
@@ -140,8 +140,16 @@ STEADY_CG_MAXITER = 200_000
 #      than from the discretization, so it catches operator-assembly errors
 #      that a residual cannot.
 #
-# Both are cheap beside the solve itself (two sparse mat-vecs and a sum), so
-# they run on EVERY call rather than as an opt-in debug mode.
+#   3. ORDERING -- peak rise >= mean bottom-surface rise. Necessarily true,
+#      since the peak is a maximum over a field that contains that surface, so
+#      it is free when the answer is right. It exists to catch a REPORTING
+#      error rather than a solver one: any quantity that is not actually a
+#      peak (a temperature difference, say) fails it immediately. Check 2
+#      pins the mean bottom rise to P/(h*A), so this transitively enforces
+#      peak_rise >= P/(h*A) -- the convective floor.
+#
+# All three are cheap beside the solve itself (two sparse mat-vecs and a few
+# reductions), so they run on EVERY call rather than as an opt-in debug mode.
 STEADY_RESIDUAL_TOL = 1e-8
 # The energy imbalance is measured in EQUIVALENT KELVIN, not as a ratio:
 #     imbalance_K = |P_in - P_out| / sum(boundary_coeff / rho_cp)
