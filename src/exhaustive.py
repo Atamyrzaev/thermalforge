@@ -75,6 +75,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS
 from src.optimizer import (
     ChipletPlacementOptimizer, ChipletSpec, OptimizationResult,
     OptimizerError, Layout,
@@ -272,6 +273,75 @@ class ExhaustivePlacementSearch:
         field = solver.solve_steady_state(apply_result=False)
         return field - self._t_amb
 
+    def _rhs_for(self, idx: int, pos: Tuple[int, int]) -> np.ndarray:
+        """Right-hand side vector for ONE chiplet placed alone at `pos`.
+
+        Mirrors what solve_steady_state() assembles internally: the system is
+        M T = -(boundary_forcing + q/rho_cp), so the RHS is the negated total
+        forcing.
+        """
+        spec = self.opt.catalog[idx]
+        nvx, nvy = self.opt._extents[idx]
+        x0, y0 = pos
+        s = self.opt.solver
+        N = self.opt.nx * self.opt.ny * self.opt.nz
+        s.q_map[:] = 0.0
+        n_cells = nvx * nvy * self.opt._die_thickness_vox
+        s.q_map[x0:x0 + nvx, y0:y0 + nvy,
+                self.opt.die_z_start:self.opt.die_z_end] += (
+            spec.power_w / (n_cells * self.opt._cell_volume))
+        forcing = s._boundary_forcing + s.q_map.reshape(N) / s._rho_cp.reshape(N)
+        return -forcing
+
+    def precompute_batched(self, verbose: bool = True) -> float:
+        """Precompute via a SINGLE batched triangular solve.
+
+        scipy's SuperLU object accepts a 2-D right-hand side, so all
+        (chiplet, position) pairs can be solved at once: build B with one
+        column per pair and call lu.solve(B). That replaces a Python loop of
+        n independent solves -- each of which re-enters scipy, re-validates,
+        and runs its own verification pass -- with one call into the
+        factorization.
+
+        Only available on the direct path, where a cached LU exists. Above
+        DIRECT_SOLVE_MAX_UNKNOWNS the solve is iterative and there is no
+        factorization to batch against, so precompute() falls back to the
+        loop automatically.
+
+        Results are asserted equal to the loop's within solver tolerance --
+        see test_batched_precompute_matches_loop.
+        """
+        s = self.opt.solver
+        N = self.opt.nx * self.opt.ny * self.opt.nz
+        if N > DIRECT_SOLVE_MAX_UNKNOWNS:
+            raise ExhaustiveSearchError(
+                f"Batched precompute needs the direct (factorized) path, but N={N:,} "
+                f"exceeds DIRECT_SOLVE_MAX_UNKNOWNS={DIRECT_SOLVE_MAX_UNKNOWNS:,}, where "
+                f"the solve is iterative and there is no factorization to batch against."
+            )
+
+        t0 = time.perf_counter()
+        # Ensure the factorization exists (and is the caller's, if reused).
+        if s._steady_lu is None:
+            s.solve_steady_state(apply_result=False)
+
+        pairs: List[Tuple[int, Tuple[int, int]]] = [
+            (idx, pos) for idx, positions in enumerate(self._positions) for pos in positions
+        ]
+        B = np.empty((N, len(pairs)), dtype=np.float64, order="F")
+        for col, (idx, pos) in enumerate(pairs):
+            B[:, col] = self._rhs_for(idx, pos)
+
+        X = s._steady_lu.solve(B)          # one call, all columns
+        for col, (idx, pos) in enumerate(pairs):
+            self._fields[(idx, pos)] = X[:, col].reshape((self.opt.nx, self.opt.ny, self.opt.nz)) - self._t_amb
+
+        elapsed = time.perf_counter() - t0
+        if verbose:
+            print(f"[exhaustive] precompute complete (BATCHED): {len(pairs)} solves in "
+                  f"{elapsed:.2f}s")
+        return elapsed
+
     def precompute(self, verbose: bool = True) -> float:
         """Solves once per (chiplet, position) pair. Returns elapsed seconds.
 
@@ -389,7 +459,14 @@ class ExhaustivePlacementSearch:
         """
         precompute_s = 0.0
         if not self._fields:
-            precompute_s = self.precompute(verbose=verbose)
+            # Prefer the single batched triangular solve; fall back to the
+            # per-position loop when there is no factorization to batch
+            # against (the iterative path above DIRECT_SOLVE_MAX_UNKNOWNS).
+            n_unknowns = self.opt.nx * self.opt.ny * self.opt.nz
+            if n_unknowns <= DIRECT_SOLVE_MAX_UNKNOWNS:
+                precompute_s = self.precompute_batched(verbose=verbose)
+            else:
+                precompute_s = self.precompute(verbose=verbose)
 
         # Anchor the superposition check on a layout drawn from THIS search's
         # own position set. The optimizer's shelf-packed layout sits on the

@@ -49,6 +49,7 @@ Coverage:
 
 from __future__ import annotations
 
+import pathlib
 from typing import Optional
 
 import numpy as np
@@ -1592,6 +1593,164 @@ class TestStage2PowerMatchesStage1:
         dead = (ChipletSpec(name="a", width_um=1000.0, depth_um=1000.0, power_w=0.0),)
         with pytest.raises(OptimizerError, match="zero"):
             optimizer_module.scale_catalog_to_total_power(dead, 10.0)
+
+
+class TestRenderedFieldMatchesVerdict:
+    """The default-opened artifact must show the field the verdict describes.
+
+    thermal_3d.html was rendered from the TRANSIENT while the terminal
+    reported the STEADY-STATE peak: the browser showed a 25-31 degC field and
+    the text said 79.97 degC. Two visualizers were constructed, and only the
+    transient one ever wrote a file.
+    """
+
+    @staticmethod
+    def _embedded_range(html_path):
+        """Pulls t_min/t_max back out of the JSON payload embedded in the page."""
+        import json as _json
+        import re as _re
+        html = pathlib.Path(html_path).read_text(encoding="utf-8")
+        m = _re.search(r'"t_min":([-\d.eE+]+),"t_max":([-\d.eE+]+)', html)
+        assert m, "embedded payload has no t_min/t_max"
+        return float(m.group(1)), float(m.group(2))
+
+    def test_webgl_renders_steady_state_field(self, tmp_path):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.4)
+        config.visualization.output_dir = str(tmp_path)
+
+        outcome = main_module.run_pipeline(
+            config, total_steps=5, duration_s=None, open_browser=False,
+        )
+        rep = outcome["viz_report"]
+
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+        steady = solver.solve_steady_state(apply_result=False) - 273.15
+
+        t_min, t_max = self._embedded_range(rep["html_path"])
+        assert t_max == pytest.approx(float(np.max(steady)), abs=0.01)
+        assert t_min == pytest.approx(float(np.min(steady)), abs=0.01)
+        # And it agrees with the number the verdict quotes.
+        assert t_max == pytest.approx(rep["peak_temperature_c"], abs=0.01)
+        # The transient is far cooler and must NOT be what was rendered.
+        assert rep["transient_peak_temperature_c"] < t_max - 1.0
+
+    def test_transient_written_separately_with_duration_in_name(self, tmp_path):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.4)
+        config.visualization.output_dir = str(tmp_path)
+        outcome = main_module.run_pipeline(
+            config, total_steps=5, duration_s=None, open_browser=False,
+        )
+        rep = outcome["viz_report"]
+
+        assert rep["transient_html_path"] is not None
+        assert "transient" in pathlib.Path(rep["transient_html_path"]).name
+        assert "ms" in pathlib.Path(rep["transient_html_path"]).name
+        html = pathlib.Path(rep["transient_html_path"]).read_text(encoding="utf-8")
+        assert "TRANSIENT SNAPSHOT" in html
+        assert "not equilibrium" in html
+        # Its embedded field really is the transient one.
+        t_min, t_max = self._embedded_range(rep["transient_html_path"])
+        assert t_max == pytest.approx(rep["transient_peak_temperature_c"], abs=0.01)
+
+    def test_default_run_does_no_time_stepping(self, tmp_path):
+        """Steady state is the default: no CFL bound, no steps, no transient
+        artifact."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.4)
+        config.visualization.output_dir = str(tmp_path)
+        outcome = main_module.run_pipeline(
+            config, total_steps=None, duration_s=None, open_browser=False,
+        )
+        rep = outcome["viz_report"]
+        timing = outcome["timing"]
+
+        assert rep["transient_duration_s"] is None
+        assert rep["transient_peak_temperature_c"] is None
+        assert rep["transient_html_path"] is None
+        assert timing.solve_s == 0.0
+        assert timing.cfl_check_s == 0.0
+        # The steady-state answer is still produced.
+        assert rep["peak_temperature_c"] > 25.0
+
+
+class TestFactorizationReuse:
+    """Stage 2 re-factorized the same grid Stage 1 had already factorized --
+    ~1.33 s of duplicated work per run."""
+
+    def _cfg(self):
+        return make_pipeline_config(nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6,
+                                    dz=20e-6, die_power_w=12.0, h_convective=1000.0)
+
+    def test_stage2_reuses_stage1_factorization(self):
+        config = self._cfg()
+        gb = main_module.build_chiplet_stack(config)
+        stage1 = ThermalSolver.from_grid_builder(gb)
+        stage1.solve_steady_state(apply_result=False)     # forces the factorization
+        assert stage1._steady_lu is not None
+        lu_id = id(stage1._steady_lu)
+
+        opt = ChipletPlacementOptimizer.from_pipeline_config(
+            config, catalog=optimizer_module.DEFAULT_CHIPLET_CATALOG,
+            reuse_solver=stage1,
+        )
+        assert opt.reused_solver is True
+        assert opt.solver is stage1
+        # The SAME factorization object, not merely an equivalent one.
+        assert id(opt.solver._steady_lu) == lu_id
+
+    def test_reuse_is_refused_when_materials_differ(self):
+        config = self._cfg()
+        gb = main_module.build_chiplet_stack(config)
+        stage1 = ThermalSolver.from_grid_builder(gb)
+        stage1.kx_map = stage1.kx_map * 2.0          # a different chip
+
+        with pytest.raises(OptimizerError, match="kx_map differs"):
+            ChipletPlacementOptimizer.from_pipeline_config(
+                config, catalog=optimizer_module.DEFAULT_CHIPLET_CATALOG,
+                reuse_solver=stage1,
+            )
+
+    def test_reuse_is_refused_when_grid_shape_differs(self):
+        config = self._cfg()
+        small = make_pipeline_config(nx=10, ny=10, nz=12, dx=500e-6, dy=500e-6, dz=20e-6)
+        gb_small, *_ = build_stack_grid(small)
+        wrong = ThermalSolver.from_grid_builder(gb_small)
+
+        with pytest.raises(OptimizerError, match="shape"):
+            ChipletPlacementOptimizer.from_pipeline_config(
+                config, catalog=optimizer_module.DEFAULT_CHIPLET_CATALOG,
+                reuse_solver=wrong,
+            )
+
+    def test_batched_precompute_matches_loop(self):
+        """One lu.solve(B) with a 2-D RHS must reproduce the per-position loop
+        to solver tolerance."""
+        def build():
+            return ChipletPlacementOptimizer(
+                nx=20, ny=20, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+                h_convective=1000.0, placement_pitch_um=5000.0, seed=0,
+            )
+
+        loop = exhaustive_module.ExhaustivePlacementSearch(build(), placement_pitch_um=5000.0)
+        loop.precompute(verbose=False)
+        batched = exhaustive_module.ExhaustivePlacementSearch(build(), placement_pitch_um=5000.0)
+        batched.precompute_batched(verbose=False)
+
+        assert set(loop._fields) == set(batched._fields)
+        worst = max(float(np.max(np.abs(loop._fields[k] - batched._fields[k])))
+                    for k in loop._fields)
+        assert worst < 1e-9, f"batched precompute deviates by {worst:.3e} K"
+
+    def test_batched_precompute_refuses_the_iterative_path(self):
+        """Above the direct-solve threshold there is no factorization to batch
+        against, and the method must say so rather than silently degrade."""
+        opt = ChipletPlacementOptimizer(
+            nx=40, ny=40, nz=24, dx=500e-6, dy=500e-6, dz=10e-6,
+            h_convective=1000.0, seed=0,
+        )
+        search = exhaustive_module.ExhaustivePlacementSearch(opt, placement_pitch_um=4000.0)
+        with pytest.raises(exhaustive_module.ExhaustiveSearchError, match="DIRECT_SOLVE_MAX"):
+            search.precompute_batched(verbose=False)
 
 
 if __name__ == "__main__":

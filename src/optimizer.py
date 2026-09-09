@@ -500,6 +500,7 @@ class ChipletPlacementOptimizer:
         bottom_bc: str = "robin",
         stack: Optional["StackSection"] = None,
         placement_pitch_um: float = DEFAULT_PLACEMENT_PITCH_UM,
+        reuse_solver: Optional[ThermalSolver] = None,
         seed: int = 0,
     ):
         if not catalog:
@@ -631,10 +632,28 @@ class ChipletPlacementOptimizer:
             raise OptimizerError(f"Optimizer grid assembly failed: {exc}") from exc
 
         self.grid_builder = gb
-        try:
-            self.solver = ThermalSolver.from_grid_builder(gb)
-        except ThermalSolverError as exc:
-            raise OptimizerError(f"Optimizer solver initialization failed: {exc}") from exc
+        if reuse_solver is not None:
+            # Reuse a solver the caller already built -- and with it its cached
+            # sparse factorization -- when it describes exactly this problem.
+            # Stage 1 factorizes this same grid (measured ~1.33 s of its 1.35 s
+            # first solve); constructing a second solver here paid for that
+            # twice for no benefit.
+            #
+            # Identity is ASSERTED, never assumed. A solver whose materials or
+            # boundary differ would silently return results for a different
+            # chip, which is a far worse outcome than a redundant
+            # factorization.
+            self._assert_solver_matches(reuse_solver, gb)
+            self.solver = reuse_solver
+            self.reused_solver = True
+            logger.info("Reusing the caller's ThermalSolver (identical grid, materials "
+                        "and BC); its cached factorization is reused with it.")
+        else:
+            try:
+                self.solver = ThermalSolver.from_grid_builder(gb)
+            except ThermalSolverError as exc:
+                raise OptimizerError(f"Optimizer solver initialization failed: {exc}") from exc
+            self.reused_solver = False
 
         self._cell_volume = self.dx * self.dy * self.dz
         self._die_thickness_vox = self.die_z_end - self.die_z_start
@@ -651,6 +670,47 @@ class ChipletPlacementOptimizer:
             self.nx, self.ny, self.nz, self.die_z_start, self.die_z_end,
             len(self.catalog), sum(c.power_w for c in self.catalog), self.seed,
         )
+
+    @staticmethod
+    def _assert_solver_matches(solver: ThermalSolver, gb: GridBuilder) -> None:
+        """Raises unless `solver` describes exactly the grid `gb` does.
+
+        Checked: shape, cell spacing, boundary configuration, and every
+        material map elementwise. q_map is deliberately NOT checked -- power
+        is what the optimizer varies, and the cached factorization does not
+        depend on it (that independence is the whole reason reuse is safe).
+        """
+        cfg = gb.config
+        if solver.shape != (cfg.nx, cfg.ny, cfg.nz):
+            raise OptimizerError(
+                f"Cannot reuse solver: shape {solver.shape} != grid "
+                f"({cfg.nx}, {cfg.ny}, {cfg.nz})."
+            )
+        for name, a, b in (("dx", solver.bc.dx, cfg.dx),
+                           ("dy", solver.bc.dy, cfg.dy),
+                           ("dz", solver.bc.dz, cfg.dz),
+                           ("h_convective", solver.bc.h_convective, cfg.h_convective),
+                           ("t_ambient_k", solver.bc.t_ambient_k, cfg.t_ambient_k)):
+            if not np.isclose(a, b, rtol=0.0, atol=1e-12):
+                raise OptimizerError(
+                    f"Cannot reuse solver: {name} differs ({a!r} != {b!r})."
+                )
+        if solver.bc.bottom_bc != cfg.bottom_bc:
+            raise OptimizerError(
+                f"Cannot reuse solver: bottom_bc differs "
+                f"({solver.bc.bottom_bc!r} != {cfg.bottom_bc!r})."
+            )
+        for name, a, b in (("kx_map", solver.kx_map, gb.kx_map),
+                           ("ky_map", solver.ky_map, gb.ky_map),
+                           ("kz_map", solver.kz_map, gb.kz_map),
+                           ("rho_map", solver.rho_map, gb.rho_map),
+                           ("cp_map", solver.cp_map, gb.cp_map)):
+            if not np.array_equal(a, b):
+                raise OptimizerError(
+                    f"Cannot reuse solver: {name} differs from this grid's. The cached "
+                    f"factorization encodes the material maps, so reusing it here would "
+                    f"silently solve a different problem."
+                )
 
     # ------------------------------------------------------------------
     # Mesh fidelity
@@ -709,6 +769,7 @@ class ChipletPlacementOptimizer:
         config,
         catalog: Sequence[ChipletSpec] = DEFAULT_CHIPLET_CATALOG,
         seed: int = 0,
+        reuse_solver: Optional[ThermalSolver] = None,
     ) -> "ChipletPlacementOptimizer":
         """
         Builds an optimizer from the same PipelineConfig main.py already
@@ -728,6 +789,7 @@ class ChipletPlacementOptimizer:
             h_convective=config.boundary_conditions.h_convective,
             bottom_bc=config.boundary_conditions.bottom_bc,
             stack=config.stack,
+            reuse_solver=reuse_solver,
             seed=seed,
         )
 

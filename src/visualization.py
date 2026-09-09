@@ -75,6 +75,10 @@ _WEBGL_TEMPLATE = r"""<!DOCTYPE html>
   #info-panel h1 { font-size: 15px; margin: 0 0 8px 0; color: #ff9d5c; font-weight: 600; }
   #info-panel .stat { color: #9ea3b0; }
   #info-panel .stat b { color: #e8e8f0; }
+  #info-panel .banner { background: rgba(255,157,92,0.14); border-left: 3px solid #ff9d5c;
+    padding: 8px 10px; margin: 0 0 10px 0; border-radius: 0 5px 5px 0;
+    color: #ffd9bd; font-size: 12px; line-height: 1.45; }
+  #info-panel .banner b { color: #ff9d5c; }
   #selected-voxel { margin-top: 10px; padding-top: 10px; border-top: 1px solid #3a3a55; min-height: 60px; }
   #controls-panel { top: 16px; right: 16px; width: 260px; }
   #controls-panel h2 { font-size: 13px; margin: 0 0 10px 0; color: #ff9d5c; font-weight: 600; }
@@ -103,6 +107,7 @@ _WEBGL_TEMPLATE = r"""<!DOCTYPE html>
 
 <div class="panel" id="info-panel">
   <h1>RISC3D-AI Thermal Field</h1>
+  __BANNER__
   <div class="stat">Grid: <b>__NX__ &times; __NY__ &times; __NZ__</b> voxels</div>
   <div class="stat">Temperature range: <b>__T_MIN__&deg;C &ndash; __T_MAX__&deg;C</b></div>
   <div class="stat">Peak: <b>__PEAK_T__&deg;C</b> at index <b>__PEAK_IJK__</b></div>
@@ -763,6 +768,7 @@ class ThermalVisualizer:
         filename: str = "thermal_3d.html",
         max_voxels: int = 250_000,
         title: str = "RISC3D-AI :: Interactive 3D Thermal Field",
+        banner_html: str = "",
     ) -> str:
         """
         Generates a single, self-contained (except for one Three.js CDN
@@ -832,6 +838,11 @@ class ThermalVisualizer:
             html = html.replace("__PEAK_IJK__", f"({peak['index_ijk'][0]}, {peak['index_ijk'][1]}, {peak['index_ijk'][2]})")
             html = html.replace("__NX__", str(nx)); html = html.replace("__NY__", str(ny)); html = html.replace("__NZ__", str(nz))
             html = html.replace("__DOWNSAMPLE_NOTE__", downsample_note)
+            # Optional caller-supplied banner. Used to state, on the page
+            # itself, when a rendered field is a transient snapshot rather
+            # than an equilibrium -- so the picture can never quietly disagree
+            # with the verdict printed in the terminal.
+            html = html.replace("__BANNER__", banner_html)
             html = html.replace("__GENERATED__", time.strftime("%Y-%m-%d %H:%M:%S"))
 
             filepath = os.path.join(self.output_dir, filename)
