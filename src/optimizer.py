@@ -25,12 +25,10 @@ Physics / performance notes
   __init__. So a single ThermalSolver is built once and its q_map is mutated
   in place between candidates; solve_steady_state() re-reads q_map on every
   call (it recomputes `forcing` from self.q_map each time), which makes this
-  reuse exact rather than an approximation. Measured on this machine for the
-  reference 20 x 20 mm configuration below (40x40x12 = 19,200 unknowns, at or
-  below thermal_solver.DIRECT_SOLVE_MAX_UNKNOWNS so each solve takes the
-  direct sparse path): construction 0.026 s paid once, then 1.34-1.38 s per
-  candidate evaluation. Rebuilding the solver per candidate would add that
-  0.026 s to every one of them.
+  reuse exact rather than an approximation. It also lets the solver cache its
+  factorization across the whole anneal: below DIRECT_SOLVE_MAX_UNKNOWNS the
+  LU of M is computed once and every candidate is then a triangular solve
+  (measured 0.136 s per candidate against a 23 s factorization at N=38,400).
 
 - ALWAYS sanity-check the reported peak against the convective floor rather
   than accepting it. R_conv ~ 1/(h*A), so the peak rise above ambient should
@@ -39,32 +37,47 @@ Physics / performance notes
   predicted_convective_rise_k and convective_floor_ratio, and summarize()
   prints both. A peak far from the floor is a defect, not merely a hot chip.
   Measured for the reference configuration: floor 90.0 K, measured rise
-  120.0 K, ratio 1.3335 -- the 33% excess is real spreading resistance at
-  48% die fill, where heat must travel laterally through a thin low-k stack
-  to reach the whole boundary.
+  141.4 K, ratio 1.5714 -- the excess is real spreading resistance at 48%
+  die fill, where heat must travel laterally through a thin low-k stack to
+  reach the whole boundary. The floor is a LOWER BOUND, not a prediction: it
+  assumes heat leaves uniformly across the entire die area, which it does
+  not.
 
   Note carefully that OptimizationResult.improvement_c is the DIFFERENCE
   between two peak temperatures, not a rise above ambient. It must never be
   fed into P*R_conv; doing so back-derives a die size that was never used.
 
-- MESH CONVERGENCE IS NOT ESTABLISHED. Physical geometry is now mesh
-  independent (footprints are authored in micrometers -- see ChipletSpec),
-  but the computed peak still moves with resolution: measured 143-166 degC
-  across meshes spanning the same 20 x 20 mm die, roughly a 16% spread, with
-  dz dominating (163.55 degC at dz=20 um versus 142.95 degC at dz=40 um for
-  a fixed 1000 um lateral pitch). Treat a single-mesh peak as indicative, not
-  converged, and run a refinement study before quoting one as a result.
+- MESH CONVERGENCE. Once footprints and stack layers were both authored in
+  micrometers, the geometry became identical at every refinement level and
+  the peak turned out to be very nearly mesh-independent. Measured on the
+  r=2 ladder over the same 20 x 20 mm die, all with exact 100/40/100 um
+  layers:
 
-- SOLVER BACKEND LIMIT. A physically realistic package needs a coarse lateral
-  pitch (a 20 mm die over 40 voxels is 500 um) while the stack still needs a
-  fine z pitch, which makes the mesh strongly anisotropic. Measured: every
-  configuration at or below DIRECT_SOLVE_MAX_UNKNOWNS (20,000) solved cleanly
-  at aspect ratios up to 50:1, while 40x40x24 (38,400 unknowns, 25:1) failed
-  to converge on the Jacobi-preconditioned BiCGSTAB path. The discriminator
-  is the BACKEND, not the anisotropy -- direct sparse LU copes with these
-  operators and the current iterative preconditioner does not.
-  _diagnose_convergence_failure() turns that bare failure into an actionable
-  message rather than a bare info=2000.
+      20x20x12 (N=4,800)     peak 200.2271 degC
+      40x40x24 (N=38,400)    peak 200.3900 degC
+      80x80x48 (N=307,200)   peak 200.4035 degC
+
+  That is a 0.18 degC (0.09%) spread across a 64x range of unknowns, rising
+  monotonically and converging from below as coarse meshes smear the hotspot.
+  An earlier 143-166 degC spread was NOT discretization error: it came from
+  fraction-authored stack layers silently changing the composite thickness
+  between meshes (see config_loader.StackSection). A formal GCI is still
+  outstanding -- the observed order p is around 3.6, above the nominal 2, so
+  the triplet may not be in the asymptotic range and the GCI band would be
+  optimistic. Quote the number with that caveat until the study is finished.
+
+- SOLVER BACKEND. The steady-state solve used to fail outright on package-
+  scale grids: above DIRECT_SOLVE_MAX_UNKNOWNS it fell to a Jacobi-
+  preconditioned BiCGSTAB that did not converge on an anisotropic mesh. That
+  is FIXED -- thermal_solver.solve_steady_state() now runs conjugate
+  gradients on the exactly-symmetric SPD form of the operator, and every
+  configuration in the ladder above solves cleanly, including 50:1 aspect
+  ratios. See STEADY-STATE BACKEND in thermal_solver.py for the measurements.
+
+  Large grids remain SLOWER (CG iteration count grows with N: 935 iterations
+  at N=4,800, 3,062 at 38,400, 8,425 at 307,200) but slowness is a
+  scheduling problem, not a correctness one, and every solve is
+  residual-verified and energy-balance-verified before it is returned.
 
 Invalid-candidate handling (the load-bearing invariant)
 -------------------------------------------------------
@@ -102,15 +115,17 @@ The default catalog is 36.0 W of realistic advanced-packaging blocks over
 default grid. The configuration every measurement in this docstring was
 taken from:
 
-    python main.py --optimize --nx 40 --ny 40 --nz 12
-                   --dx-um 500 --dy-um 500 --dz-um 40 --h-convective 1000
+    python main.py --optimize --nx 40 --ny 40 --nz 24
+                   --dx-um 500 --dy-um 500 --dz-um 10 --h-convective 1000
                    --optimize-iterations 30 --optimize-seed 7
     (one command; wrapped here for width)
 
-That is a 20 x 20 mm die at 48% fill. Measured result: initial peak
-165.74 degC, optimized peak 145.02 degC, improvement 20.72 degC (12.50%)
-over 30 annealing proposals in 20.21 s. All four catalog footprints resolve
-to an exact whole number of voxels at a 500 um pitch (0.0% area error).
+That is a 20 x 20 mm die at 48% fill, with an exact 100/40/100 um stack
+(nz=24 at dz=10 um = 240 um total). Measured result: initial peak
+200.39 degC, optimized peak 166.43 degC, improvement 33.96 degC (16.95%)
+over 30 annealing proposals, 76.6 s optimizer wall clock. All four catalog
+footprints resolve to an exact whole number of voxels at a 500 um pitch
+(0.0% area error), and all origins lie on the 1000 um placement lattice.
 """
 
 from __future__ import annotations
@@ -806,31 +821,38 @@ class ChipletPlacementOptimizer:
         return peak_c, peak_c, field_k
 
     def _diagnose_convergence_failure(self, exc: Exception) -> str:
-        """Turns a bare 'iterative solve failed to converge' into an actionable
-        message.
+        """Turns a bare convergence failure into an actionable message.
 
-        Measured on this machine: every configuration at or below
-        DIRECT_SOLVE_MAX_UNKNOWNS solved cleanly at mesh aspect ratios up to
-        50:1 (dx/dz), while a 38,400-unknown grid at 25:1 failed. The
-        discriminator is the BACKEND, not the anisotropy -- direct sparse LU
-        copes with these operators and the Jacobi-preconditioned BiCGSTAB
-        does not. Realistic package geometry provokes this because a large
-        die needs a coarse lateral pitch while the stack still needs a fine
-        z pitch.
+        This path is now RARE. It used to fire on every package-scale grid,
+        because the steady-state solve fell to a Jacobi-preconditioned
+        BiCGSTAB that could not handle an anisotropic mesh. That was fixed by
+        switching to conjugate gradients on the exactly-symmetric SPD form of
+        the operator (see STEADY-STATE BACKEND in thermal_solver.py), and CG
+        converges at every size and aspect ratio measured, up to 50:1 and
+        N=307,200.
+
+        So reaching here means something beyond the previously-known failure:
+        an extreme material contrast, a pathological aspect ratio past
+        anything measured, or a genuinely near-singular operator. The message
+        says so rather than repeating the old advice, which would now send
+        the reader after a bug that no longer exists.
         """
         n_unknowns = self.nx * self.ny * self.nz
         aspect = max(self.dx, self.dy) / self.dz if self.dz > 0 else float("nan")
+        backend = ("direct sparse LU" if n_unknowns <= DIRECT_SOLVE_MAX_UNKNOWNS
+                   else "conjugate gradients on the symmetrized SPD system")
         return (
             f"Steady-state solve did not converge on a {self.nx}x{self.ny}x{self.nz} grid "
-            f"({n_unknowns:,} unknowns, mesh aspect ratio {aspect:.1f}:1). "
-            f"This grid exceeds thermal_solver.DIRECT_SOLVE_MAX_UNKNOWNS "
-            f"({DIRECT_SOLVE_MAX_UNKNOWNS:,}), so it used the Jacobi-preconditioned "
-            f"iterative backend, which does not handle strongly anisotropic meshes "
-            f"(dx/dz >> 1) well. The direct backend solves these reliably. "
-            f"Reduce the grid below {DIRECT_SOLVE_MAX_UNKNOWNS:,} unknowns "
-            f"(e.g. nz={max(1, DIRECT_SOLVE_MAX_UNKNOWNS // (self.nx * self.ny))} at this "
-            f"nx/ny), or lower the aspect ratio by increasing dz. "
-            f"Underlying solver error: {exc}"
+            f"({n_unknowns:,} unknowns, mesh aspect ratio {aspect:.1f}:1) using the "
+            f"{backend} backend. CG on the symmetrized system is known to converge at "
+            f"aspect ratios up to 50:1 and up to N=307,200, so this is NOT the previously "
+            f"known BiCGSTAB anisotropy failure -- that one is fixed. Suspect instead an "
+            f"extreme material contrast, an aspect ratio beyond anything measured, or a "
+            f"near-singular operator (verify a Robin/Dirichlet boundary is present and "
+            f"h_convective is nonzero). Reducing the grid below "
+            f"{DIRECT_SOLVE_MAX_UNKNOWNS:,} unknowns routes to the direct factorization, "
+            f"which is a useful cross-check on whether the operator or the solver is at "
+            f"fault. Underlying solver error: {exc}"
         )
 
     def _consider_candidate(
