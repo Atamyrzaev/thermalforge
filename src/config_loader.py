@@ -45,12 +45,31 @@ class ConfigError(Exception):
 
 @dataclass
 class GridSection:
-    nx: int = 60
-    ny: int = 60
-    nz: int = 40
-    dx: float = 25e-6
-    dy: float = 25e-6
-    dz: float = 10e-6
+    """Voxel grid. The defaults describe a 20 x 20 mm advanced-packaging
+    module with a 240 um stack -- the scale the Stage 2 chiplet catalog is
+    authored for.
+
+    These were previously 60x60x40 at 25/25/10 um, which is a 1.5 x 1.5 mm
+    die. That is a perfectly good Stage 1 test case but only 2.25 mm^2, so
+    Stage 2's 192 mm^2 catalog could not fit and `--optimize` aborted on
+    every default run. Chiplet footprints are physical and do not shrink to
+    fit a mesh (see optimizer.ChipletSpec), so the die had to grow instead.
+
+    Chosen so that, simultaneously:
+      - nx*dx = ny*dy = 20 mm, matching the catalog's package scale
+      - nz*dz = 240 um = the authored 100/40/100 um stack exactly, with each
+        layer a whole number of cells at dz=20 um (5/2/5)
+      - nx*ny*nz = 19,200 <= thermal_solver.DIRECT_SOLVE_MAX_UNKNOWNS, so the
+        steady-state solve takes the cached direct-LU path at ~0.136 s per
+        solve rather than conjugate gradients at ~4.7 s. That 35x difference
+        is what makes an exhaustive placement search practical.
+    """
+    nx: int = 40
+    ny: int = 40
+    nz: int = 12
+    dx: float = 500e-6
+    dy: float = 500e-6
+    dz: float = 20e-6
 
 
 @dataclass

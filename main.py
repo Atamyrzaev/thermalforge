@@ -97,6 +97,7 @@ from src.optimizer import (
     ChipletPlacementOptimizer, OptimizerError,
     DEFAULT_CHIPLET_CATALOG, render_optimization_report,
 )
+from src.exhaustive import ExhaustivePlacementSearch, ExhaustiveSearchError
 
 
 class PipelineError(Exception):
@@ -202,14 +203,14 @@ def run_interactive_prompts():
     print("=" * 60)
 
     print("\nGrid dimensions (voxel counts):")
-    nx = prompt_int("nx", 60)
-    ny = prompt_int("ny", 60)
-    nz = prompt_int("nz", 40)
+    nx = prompt_int("nx", 40)
+    ny = prompt_int("ny", 40)
+    nz = prompt_int("nz", 12)
 
     print("\nVoxel spacing (micrometers):")
-    dx_um = prompt_float("dx (um)", 25.0)
-    dy_um = prompt_float("dy (um)", 25.0)
-    dz_um = prompt_float("dz (um)", 10.0)
+    dx_um = prompt_float("dx (um)", 500.0)
+    dy_um = prompt_float("dy (um)", 500.0)
+    dz_um = prompt_float("dz (um)", 20.0)
 
     print("\nThermal boundary conditions:")
     t_ambient_c = prompt_float("Ambient temperature (C)", 25.0)
@@ -251,12 +252,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=str, default=None,
                          help="Load parameters from a JSON config file instead of prompting "
                               "or using flag defaults below.")
-    parser.add_argument("--nx", type=int, default=60)
-    parser.add_argument("--ny", type=int, default=60)
-    parser.add_argument("--nz", type=int, default=40)
-    parser.add_argument("--dx-um", type=float, default=25.0, help="Voxel size along X (micrometers).")
-    parser.add_argument("--dy-um", type=float, default=25.0, help="Voxel size along Y (micrometers).")
-    parser.add_argument("--dz-um", type=float, default=10.0, help="Voxel size along Z (micrometers).")
+    parser.add_argument("--nx", type=int, default=40)
+    parser.add_argument("--ny", type=int, default=40)
+    parser.add_argument("--nz", type=int, default=12)
+    parser.add_argument("--dx-um", type=float, default=500.0, help="Voxel size along X (micrometers).")
+    parser.add_argument("--dy-um", type=float, default=500.0, help="Voxel size along Y (micrometers).")
+    parser.add_argument("--dz-um", type=float, default=20.0, help="Voxel size along Z (micrometers).")
     parser.add_argument("--t-ambient-c", type=float, default=25.0, help="Ambient temperature (degC).")
     parser.add_argument("--h-convective", type=float, default=1000.0, help="Convective coefficient (W/m^2K).")
     parser.add_argument("--die-power-w", type=float, default=12.0, help="Active die total power (W).")
@@ -271,7 +272,18 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--optimize-iterations", type=int, default=30,
                          help="Simulated-annealing proposals for Stage 2 (--optimize only).")
     parser.add_argument("--optimize-seed", type=int, default=0,
-                         help="Random seed for the Stage 2 annealer (--optimize only).")
+                         help="Random seed for the Stage 2 annealer (--optimize-method anneal only).")
+    parser.add_argument("--optimize-method", choices=("exhaustive", "anneal"),
+                         default="exhaustive",
+                         help="Stage 2 search strategy. 'exhaustive' evaluates EVERY layout on "
+                              "the placement lattice and returns the proven global optimum "
+                              "(no randomness, no seed dependence). 'anneal' is the simulated-"
+                              "annealing heuristic: faster on very fine lattices, but it samples "
+                              "rather than proves and a different seed gives a different answer.")
+    parser.add_argument("--placement-pitch-um", type=float, default=2000.0,
+                         help="Placement lattice for Stage 2, in micrometers. Exhaustive cost "
+                              "grows steeply as this shrinks (10x10 lattice = 8.3M layouts; "
+                              "20x20 = 1.8 billion).")
     return parser
 
 
@@ -506,6 +518,8 @@ def run_stage2_optimizer(
     open_browser: bool,
     iterations: int,
     seed: int,
+    method: str = "exhaustive",
+    placement_pitch_um: float = 2000.0,
 ) -> dict:
     """
     Stage 2: automated chiplet placement optimization.
@@ -531,18 +545,38 @@ def run_stage2_optimizer(
         optimizer = ChipletPlacementOptimizer.from_pipeline_config(
             config, catalog=DEFAULT_CHIPLET_CATALOG, seed=seed,
         )
-        result = optimizer.optimize(iterations=iterations, verbose=True)
+
+        if method == "exhaustive":
+            # Evaluates EVERY buildable layout on the placement lattice and
+            # returns the proven global optimum. Affordable because the
+            # steady-state system is linear: one solve per (chiplet, position)
+            # pair, after which each candidate costs an array sum rather than
+            # a linear solve. See src/exhaustive.py.
+            search = ExhaustivePlacementSearch(
+                optimizer, placement_pitch_um=placement_pitch_um,
+            )
+            exhaustive_result = search.search(verbose=True)
+            print("\n" + exhaustive_result.summarize())
+            result = exhaustive_result.to_optimization_result(optimizer)
+        else:
+            exhaustive_result = None
+            result = optimizer.optimize(iterations=iterations, verbose=True)
+            print("\n" + result.summarize())
+            print("  NOTE: simulated annealing SAMPLES the placement space. This is the")
+            print("        best of the layouts it happened to visit, NOT a proven optimum,")
+            print("        and a different --optimize-seed gives a different answer. Use")
+            print("        --optimize-method exhaustive for a guaranteed global best.")
+
         report_path = render_optimization_report(
             result, output_dir=config.visualization.output_dir,
         )
-    except OptimizerError as exc:
+    except (OptimizerError, ExhaustiveSearchError) as exc:
         raise PipelineError(f"Stage 2 placement optimization failed: {exc}") from exc
 
-    print("\n" + result.summarize())
     print(f"  Optimization report:   {report_path}")
 
     _open_in_browser(report_path, open_browser, "the optimization report")
-    return {"result": result, "report_path": report_path}
+    return {"result": result, "exhaustive": exhaustive_result, "report_path": report_path}
 
 
 def run_pipeline(
@@ -553,6 +587,8 @@ def run_pipeline(
     prompt_for_optimizer: bool = False,
     optimize_iterations: int = 30,
     optimize_seed: int = 0,
+    optimize_method: str = "exhaustive",
+    placement_pitch_um: float = 2000.0,
 ) -> dict:
     timing = TimingReport()
 
@@ -650,6 +686,7 @@ def run_pipeline(
         optimizer_outcome = run_stage2_optimizer(
             config, open_browser=open_browser,
             iterations=optimize_iterations, seed=optimize_seed,
+            method=optimize_method, placement_pitch_um=placement_pitch_um,
         )
         timing.optimize_s = time.perf_counter() - t0
 
@@ -723,6 +760,8 @@ def main(argv=None) -> int:
             prompt_for_optimizer=interactive,
             optimize_iterations=args.optimize_iterations,
             optimize_seed=args.optimize_seed,
+            optimize_method=args.optimize_method,
+            placement_pitch_um=args.placement_pitch_um,
         )
     except PipelineError as exc:
         print(f"\n[FATAL] Pipeline aborted: {exc}", file=sys.stderr)

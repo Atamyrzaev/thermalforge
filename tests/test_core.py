@@ -70,6 +70,7 @@ from src.thermal_solver import ThermalSolver, SolverBCConfig, ThermalSolverError
 
 import src.optimizer as optimizer_module
 from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
+import src.exhaustive as exhaustive_module
 
 _EPS = 1e-30
 
@@ -1290,6 +1291,128 @@ class TestPlacementLattice:
         collapse the search space."""
         with pytest.raises(OptimizerError, match=r"too coarse for this die"):
             make_small_optimizer(seed=0, placement_pitch_um=1000.0)
+
+
+class TestExhaustiveSearch:
+    """Stage 2b replaces the annealing heuristic with a complete search.
+
+    Simulated annealing samples: it returns the best of the few hundred
+    layouts it happened to visit, with no guarantee and a different answer per
+    seed. The exhaustive search evaluates every buildable layout on the
+    placement lattice, which is only affordable because the steady-state
+    system is linear in q_map -- so a layout's field is the SUM of
+    precomputed per-chiplet fields, and a candidate costs an array add rather
+    than a linear solve.
+
+    Superposition is the load-bearing assumption. If it fails, every result
+    from this module is wrong, so it is checked against a real solve here and
+    again inside every search().
+    """
+
+    # Deliberately tiny: a 9 mm die, two blocks, a 3 mm lattice. Small enough
+    # that an independent brute-force cross-check can afford a real linear
+    # solve for EVERY combination.
+    TINY_CATALOG = (
+        ChipletSpec(name="hot",  width_um=3000.0, depth_um=3000.0, power_w=4.0),
+        ChipletSpec(name="warm", width_um=3000.0, depth_um=3000.0, power_w=2.0),
+    )
+
+    def _tiny_optimizer(self, seed: int = 0) -> ChipletPlacementOptimizer:
+        return ChipletPlacementOptimizer(
+            nx=9, ny=9, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+            catalog=self.TINY_CATALOG, h_convective=1000.0,
+            placement_pitch_um=3000.0, seed=seed,
+        )
+
+    def test_superposition_reproduces_a_direct_solve(self):
+        """The whole method rests on T(q1+q2) = T_amb + (T1-T_amb) + (T2-T_amb).
+        Verified against ground truth rather than assumed."""
+        opt = self._tiny_optimizer()
+        search = exhaustive_module.ExhaustivePlacementSearch(opt)
+        search.precompute(verbose=False)
+
+        anchor = search._find_anchor_layout()
+        err = search._verify_superposition(anchor)
+        assert err < exhaustive_module.SUPERPOSITION_TOL_K
+        assert err < 1e-6, f"superposition deviation {err:.3e} K is larger than expected"
+
+    def test_exhaustive_matches_independent_brute_force(self):
+        """The strongest available check: enumerate every layout independently
+        and solve each one DIRECTLY, with no superposition anywhere, then
+        confirm the exhaustive search returned that same optimum.
+
+        This validates the search, the pruning and the superposition shortcut
+        in one pass -- if pruning silently dropped a valid layout, or
+        superposition were subtly wrong, the two answers would differ."""
+        opt = self._tiny_optimizer()
+        search = exhaustive_module.ExhaustivePlacementSearch(opt)
+        result = search.search(verbose=False)
+
+        # Independent enumeration: every position pair, solved for real.
+        best_peak, best_layout, checked = float("inf"), None, 0
+        for pa in search._positions[0]:
+            for pb in search._positions[1]:
+                layout = (pa, pb)
+                if opt.overlap_cell_count(layout) > 0:
+                    continue
+                checked += 1
+                opt._apply_layout_to_q_map(layout)
+                field = opt.solver.solve_steady_state(apply_result=False)
+                peak = float(np.max(field)) - 273.15
+                if peak < best_peak:
+                    best_peak, best_layout = peak, layout
+
+        assert checked == result.layouts_evaluated, (
+            f"brute force found {checked} buildable layouts but the search "
+            f"evaluated {result.layouts_evaluated} -- pruning dropped some"
+        )
+        assert result.best_peak_temperature_c == pytest.approx(best_peak, abs=1e-6)
+
+    def test_exhaustive_is_deterministic_across_seeds(self):
+        """A proven optimum cannot depend on a random seed. Annealing's answer
+        does; this one must not."""
+        r0 = exhaustive_module.ExhaustivePlacementSearch(
+            self._tiny_optimizer(seed=0)).search(verbose=False)
+        r1 = exhaustive_module.ExhaustivePlacementSearch(
+            self._tiny_optimizer(seed=12345)).search(verbose=False)
+
+        assert r0.best_layout == r1.best_layout
+        assert r0.best_peak_temperature_c == pytest.approx(r1.best_peak_temperature_c, abs=1e-9)
+        assert r0.layouts_evaluated == r1.layouts_evaluated
+
+    def test_exhaustive_best_layout_is_buildable_and_on_lattice(self):
+        opt = self._tiny_optimizer()
+        search = exhaustive_module.ExhaustivePlacementSearch(opt)
+        result = search.search(verbose=False)
+
+        assert opt.overlap_cell_count(result.best_layout) == 0
+        assert opt.is_valid(result.best_layout)
+        pitch = int(round(result.placement_pitch_um * 1e-6 / opt.dx))
+        for x, y in result.best_layout:
+            assert x % pitch == 0 and y % pitch == 0
+
+    def test_exhaustive_is_at_least_as_good_as_annealing(self):
+        """A complete search cannot lose to a sample of the same space."""
+        opt_ex = self._tiny_optimizer(seed=0)
+        exhaustive = exhaustive_module.ExhaustivePlacementSearch(opt_ex).search(verbose=False)
+
+        opt_sa = self._tiny_optimizer(seed=0)
+        annealed = opt_sa.optimize(iterations=20, verbose=False)
+
+        assert exhaustive.best_peak_temperature_c <= annealed.best_peak_temperature_c + 1e-9
+
+    def test_superposition_failure_is_raised_not_ignored(self):
+        """Corrupt one precomputed field and confirm the guard fires. Without
+        this the verification could be silently vacuous."""
+        opt = self._tiny_optimizer()
+        search = exhaustive_module.ExhaustivePlacementSearch(opt)
+        search.precompute(verbose=False)
+
+        key = next(iter(search._fields))
+        search._fields[key] = search._fields[key] + 1.0   # 1 K of nonsense
+
+        with pytest.raises(exhaustive_module.ExhaustiveSearchError, match="[Ss]uperposition"):
+            search._verify_superposition(search._find_anchor_layout())
 
 
 if __name__ == "__main__":
