@@ -412,8 +412,14 @@ class OptimizationResult:
             f"{self.overlap_candidates} overlapping)",
             f"  Initial peak:           {self.initial_peak_temperature_c:.2f} degC",
             f"  Optimized peak:         {self.best_peak_temperature_c:.2f} degC",
-            f"  Improvement:            {self.improvement_c:.2f} degC "
-            f"({self.improvement_pct:.2f}%)",
+            # Labelled as a delta, with an explicit arrow, because this line
+            # has been misread as a peak temperature more than once -- and a
+            # 39 K "peak" then fails the P/(h*A) floor and looks like a solver
+            # bug. The units are written as "K cooler" rather than "degC" so
+            # it cannot be mistaken for an absolute temperature at a glance.
+            f"  Improvement (delta):    {self.improvement_c:.2f} K cooler "
+            f"({self.improvement_pct:.2f}%)  [{self.initial_peak_temperature_c:.2f} "
+            f"-> {self.best_peak_temperature_c:.2f} degC]",
             f"  Optimizer wall-clock:   {self.elapsed_s:.2f} s",
             "-" * 64,
             "  SCALE CHECK (never let the headline number pass unexamined):",

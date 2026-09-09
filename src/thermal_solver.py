@@ -938,7 +938,30 @@ class ThermalSolver:
                 f"term, not discretization error."
             )
 
-        return {"residual": resid, "energy_imbalance_k": imbalance_k}
+        # --- 3. the peak must clear the convective floor ---
+        # At steady state the mean bottom-surface rise is pinned to P/(h*A) by
+        # check 2, and the peak is a maximum over a field that includes that
+        # surface, so peak_rise >= P/(h*A) necessarily. Cheap to assert, and
+        # it catches a whole class of reporting error: a number that is not
+        # actually a peak (a temperature DIFFERENCE, say) will fail it. That
+        # has happened twice in review, where an "improvement" of ~39 K was
+        # read as a peak and appeared to violate a 90 K floor.
+        peak_rise = float(np.max(T_grid)) - self.bc.t_ambient_k
+        mean_bottom_rise = float(np.mean(T_grid[:, :, 0])) - self.bc.t_ambient_k
+        if peak_rise < mean_bottom_rise - STEADY_ENERGY_BALANCE_TOL_K:
+            raise ThermalSolverError(
+                f"Peak rise {peak_rise:.6f} K is below the mean bottom-surface rise "
+                f"{mean_bottom_rise:.6f} K, which is impossible: the peak is a maximum over "
+                f"a field that contains that surface. This indicates a corrupted field or a "
+                f"mis-assembled operator."
+            )
+
+        return {
+            "residual": resid,
+            "energy_imbalance_k": imbalance_k,
+            "peak_rise_k": peak_rise,
+            "mean_bottom_rise_k": mean_bottom_rise,
+        }
 
     def solve_steady_state(self, apply_result: bool = True) -> np.ndarray:
         """
