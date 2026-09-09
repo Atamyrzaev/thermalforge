@@ -280,14 +280,28 @@ class ExhaustivePlacementSearch:
         t0 = time.perf_counter()
         total = sum(len(p) for p in self._positions)
         done = 0
-        for idx, positions in enumerate(self._positions):
-            for pos in positions:
-                self._fields[(idx, pos)] = self._solve_single(idx, pos)
-                done += 1
-                if verbose and done % 25 == 0:
-                    rate = done / (time.perf_counter() - t0)
-                    print(f"[exhaustive] precompute {done}/{total} fields "
-                          f"({rate:.1f}/s, ~{(total-done)/rate:.0f}s left)")
+
+        # Quieten the solver's per-call INFO line for the duration of the
+        # precompute. Two hundred-odd identical "solved via direct (cached
+        # LU)" lines bury the one line anybody wants to read, and the useful
+        # signal here is progress, which this loop prints itself. Restored
+        # afterwards, including on exception, so this never leaks into the
+        # rest of the session.
+        solver_logger = logging.getLogger("RISC3D-AI.ThermalSolver")
+        previous_level = solver_logger.level
+        solver_logger.setLevel(logging.WARNING)
+        try:
+            for idx, positions in enumerate(self._positions):
+                for pos in positions:
+                    self._fields[(idx, pos)] = self._solve_single(idx, pos)
+                    done += 1
+                    if verbose and done % 25 == 0:
+                        rate = done / (time.perf_counter() - t0)
+                        print(f"[exhaustive] precompute {done}/{total} fields "
+                              f"({rate:.1f}/s, ~{(total-done)/rate:.0f}s left)")
+        finally:
+            solver_logger.setLevel(previous_level)
+
         elapsed = time.perf_counter() - t0
         if verbose:
             print(f"[exhaustive] precompute complete: {total} solves in {elapsed:.2f}s")

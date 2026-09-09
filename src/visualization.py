@@ -481,8 +481,25 @@ class ThermalVisualizer:
 
         peak = self.get_peak_hotspot()
         if coords.shape[0] == 0:
-            logger.info("No voxels exceed threshold_c=%.2f C (peak=%.2f C). Grid is within safe operating range.",
-                        threshold_c, peak["temperature_c"])
+            # DELIBERATELY NOT a safety verdict. This class receives a bare
+            # temperature array and has no idea whether it is a converged
+            # steady state or a snapshot 0.045% of the way through the first
+            # time constant -- and for a transient that short, "no voxel
+            # exceeds 85 C" is true and utterly uninformative, because nothing
+            # has heated up yet.
+            #
+            # This previously logged "Grid is within safe operating range",
+            # which a 0.1776 ms run reported for a stack whose true steady
+            # peak may be well above the threshold. Only the caller knows the
+            # elapsed time and the package time constant, so only the caller
+            # can qualify the claim; main.py does, against
+            # ThermalSolver.estimate_time_constant().
+            logger.info(
+                "No voxels exceed threshold_c=%.2f C in this field (peak=%.2f C). "
+                "Whether that constitutes a safe design depends on whether this field is "
+                "converged, which this class cannot determine -- see the caller.",
+                threshold_c, peak["temperature_c"],
+            )
 
         return HotspotReport(
             threshold_c=threshold_c,

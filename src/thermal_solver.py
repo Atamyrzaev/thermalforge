@@ -563,6 +563,59 @@ class ThermalSolver:
 
         return dt_max
 
+    def estimate_time_constant(self) -> float:
+        """
+        First-order thermal time constant of the whole package, in seconds:
+
+            tau = C_total / G_boundary
+                = [sum(rho*cp * V_cell)] / [sum(boundary_coeff * V_cell)]
+
+        i.e. the lumped R*C of the stack against its heat-sink boundary. This
+        is the timescale on which a transient run approaches equilibrium: at
+        t = tau the field has covered 1 - 1/e = 63% of its final rise, at 3*tau
+        95%, at 5*tau 99.3%.
+
+        It is computed from the ACTUAL assembled grid -- the real rho*cp of
+        every voxel and the real boundary coefficients, whether Robin or
+        Dirichlet -- not from a hardcoded constant, so it stays correct when
+        the stack, mesh or boundary condition changes.
+
+        Sanity check against the closed form for a uniform slab with a Robin
+        base: boundary_coeff = h/dz, so G = sum(h/dz * dx*dy*dz) = h*A and
+        C = rho*cp*A*t, giving tau = rho*cp*t/h -- independent of area, as it
+        must be.
+
+        WHY THIS MATTERS: a transient run shorter than a few tau has not
+        reached steady state, and any threshold or safety verdict drawn from
+        it is meaningless. Callers should compare their simulated duration
+        against this value before making claims about the result. main.py
+        does exactly that.
+        """
+        v_cell = self.bc.dx * self.bc.dy * self.bc.dz
+        c_total = float(np.sum(self._rho_cp)) * v_cell            # J/K
+        g_boundary = float(np.sum(self._bottom_boundary_coeff)) * v_cell   # W/K
+        if g_boundary <= 0:
+            raise ThermalSolverError(
+                "Total boundary conductance is non-positive, so the package has no path "
+                "to ambient and no finite time constant exists. Check the bottom BC."
+            )
+        return c_total / g_boundary
+
+    def steady_state_fraction(self, elapsed_s: float) -> float:
+        """Fraction of the steady-state rise a first-order system has covered
+        after `elapsed_s`: 1 - exp(-t/tau).
+
+        A single-pole estimate. The real system has a spectrum of modes (fast
+        per-layer diffusion, lateral spreading, the global convective pole),
+        so this is indicative rather than exact -- but it is the right order
+        of magnitude and it is vastly better than the implicit assumption
+        that any finite run has converged.
+        """
+        if elapsed_s <= 0:
+            return 0.0
+        tau = self.estimate_time_constant()
+        return float(1.0 - np.exp(-elapsed_s / tau))
+
     def check_stability(self, dt: float, safety_factor: float = 0.9, raise_on_violation: bool = True) -> bool:
         """
         Validates a proposed timestep dt against the automated CFL bound.

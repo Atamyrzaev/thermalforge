@@ -81,6 +81,8 @@ import webbrowser
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 # Strict, package-qualified imports only -- main.py is always run from the
 # repository root (`python main.py`), so `src` must resolve as a package.
 from src.config_loader import (
@@ -88,7 +90,7 @@ from src.config_loader import (
     GridSection, BoundaryConditionsSection, StackSection, PowerSection,
     SolverSection, VisualizationSection,
 )
-from src.grid_builder import GridBuilder, GridBuilderError
+from src.grid_builder import GridBuilder, GridBuilderError, MATERIALS
 from src.thermal_solver import (
     ThermalSolver, ThermalSolverError, DIRECT_SOLVE_MAX_UNKNOWNS,
 )
@@ -96,8 +98,43 @@ from src.visualization import ThermalVisualizer, VisualizationError
 from src.optimizer import (
     ChipletPlacementOptimizer, OptimizerError,
     DEFAULT_CHIPLET_CATALOG, render_optimization_report,
+    scale_catalog_to_total_power,
 )
 from src.exhaustive import ExhaustivePlacementSearch, ExhaustiveSearchError
+
+
+# A transient shorter than this many time constants cannot support a
+# threshold or safety verdict. 3*tau is 95% of the steady rise; below that the
+# field is still visibly moving. Used to gate the verdict in
+# print_stage1_results() and to warn on --total-steps.
+STEADY_STATE_TAU_MULTIPLE = 3.0
+
+
+def estimate_tau_from_stack(stack, h_convective: float) -> float:
+    """First-order package time constant, in seconds, from the AUTHORED stack
+    and boundary coefficient alone -- no grid or solver required.
+
+        tau = R*C = [1/(h*A)] * [sum_layers(rho*cp * thickness) * A]
+                  = sum_layers(rho*cp * thickness) / h
+
+    The area cancels, which is why this is computable before the user has
+    picked a mesh. Needed so the duration prompt can display the timescale
+    the entered number will be measured against.
+
+    Agrees with ThermalSolver.estimate_time_constant() on the assembled grid
+    to the accuracy of the layer discretization: measured 394.79 ms by both
+    routes for the default 100/40/100 um stack at h = 1000 W/m^2K.
+    """
+    si = MATERIALS["silicon"]
+    comp = MATERIALS["bump_underfill_composite"]
+    rho_cp_si = si["rho"] * si["cp"]
+    rho_cp_comp = comp["rho"] * comp["cp"]
+    areal_c = (rho_cp_si * (stack.interposer_um + stack.die_um) * 1e-6
+               + rho_cp_comp * stack.bump_um * 1e-6)
+    if h_convective <= 0:
+        raise PipelineError(f"h_convective must be > 0 to define a time constant, "
+                            f"got {h_convective}")
+    return areal_c / h_convective
 
 
 class PipelineError(Exception):
@@ -110,6 +147,7 @@ class TimingReport:
     solver_init_s: float = 0.0
     cfl_check_s: float = 0.0
     solve_s: float = 0.0
+    steady_state_s: float = 0.0
     visualization_s: float = 0.0
     # Stage 2 (optional). Stays 0.0 when the optimizer is not run, so it
     # contributes nothing to total_s on a plain Stage 1 invocation. When it
@@ -120,7 +158,8 @@ class TimingReport:
     @property
     def total_s(self) -> float:
         return (self.grid_build_s + self.solver_init_s + self.cfl_check_s
-                + self.solve_s + self.visualization_s + self.optimize_s)
+                + self.solve_s + self.steady_state_s + self.visualization_s
+                + self.optimize_s)
 
     def print_summary(self) -> None:
         print("\n" + "=" * 60)
@@ -131,6 +170,7 @@ class TimingReport:
             ("Solver initialization", self.solver_init_s),
             ("CFL stability check", self.cfl_check_s),
             ("Transient solve (explicit, N steps)", self.solve_s),
+            ("Steady-state solve (direct)", self.steady_state_s),
             ("WebGL 3D export + browser launch", self.visualization_s),
         ]
         if self.optimize_s > 0.0:
@@ -220,7 +260,18 @@ def run_interactive_prompts():
     die_power_w = prompt_float("Active die total power (W)", 12.0)
 
     print("\nSolve parameters:")
-    total_steps = prompt_int("Total simulation steps", 100)
+    # Duration, not step count. A step count is meaningless without dt, and dt
+    # comes from a CFL bound the user never sees -- so "100 steps" silently
+    # meant 0.1776 ms, 0.045% of one time constant, and a threshold verdict
+    # was being drawn from it. Asking in milliseconds against a printed tau
+    # makes the choice interpretable.
+    tau_ms = estimate_tau_from_stack(StackSection(), h_convective) * 1e3
+    print(f"  Package time constant tau ~ {tau_ms:.1f} ms "
+          f"({STEADY_STATE_TAU_MULTIPLE:.0f}*tau ~ {STEADY_STATE_TAU_MULTIPLE*tau_ms:.0f} ms "
+          f"reaches ~95% of steady state).")
+    print("  Steady state is solved directly regardless of this value, and every")
+    print("  threshold check uses that, so a short duration here is not a hazard.")
+    duration_ms = prompt_float("Simulated duration (ms)", round(tau_ms * 0.05, 3))
     safety_factor = prompt_float("Safety factor (0-1]", 0.8)
 
     print()
@@ -236,11 +287,11 @@ def run_interactive_prompts():
                              solver=solver, visualization=viz)
     config.validate()
 
-    # total_steps is intentionally NOT a PipelineConfig/SolverSection field
-    # (avoids ever depending on a field name that might not exist on a
-    # stale local config_loader.py) -- it is threaded through main()
-    # separately as a plain local variable.
-    return config, total_steps
+    # Threaded through main() as plain locals, never as PipelineConfig fields
+    # -- see the interface note in the module docstring. total_steps is None
+    # on this path: the user gave a DURATION, and the step count is derived
+    # from the CFL dt once the solver exists and dt is known.
+    return config, None, duration_ms * 1e-3
 
 
 def build_cli_parser() -> argparse.ArgumentParser:
@@ -280,6 +331,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
                               "(no randomness, no seed dependence). 'anneal' is the simulated-"
                               "annealing heuristic: faster on very fine lattices, but it samples "
                               "rather than proves and a different seed gives a different answer.")
+    parser.add_argument("--no-scale-catalog-power", action="store_true",
+                         help="Do NOT rescale the Stage 2 chiplet catalog to the Stage 1 "
+                              "--die-power-w. By default the catalog (36.0 W as authored) is "
+                              "scaled to match the die power the pipeline was given, "
+                              "preserving the relative split, so both stages model the same "
+                              "chip. Pass this to run the catalog at its authored wattage.")
     parser.add_argument("--placement-pitch-um", type=float, default=2000.0,
                          help="Placement lattice for Stage 2, in micrometers. Exhaustive cost "
                               "grows steeply as this shrinks (10x10 lattice = 8.3M layouts; "
@@ -298,7 +355,10 @@ def build_config_from_flags(args: argparse.Namespace):
     config = PipelineConfig(grid=grid, boundary_conditions=bc, stack=stack, power=power,
                              solver=solver, visualization=viz)
     config.validate()
-    return config, args.total_steps
+    # Flag path keeps --total-steps for scripted runs. duration_s is None
+    # here, so run_pipeline() uses the step count directly (and warns if the
+    # duration it implies is a small fraction of tau).
+    return config, args.total_steps, None
 
 
 EXIT_PREFLIGHT_FAILED = 2
@@ -499,16 +559,59 @@ def _open_in_browser(html_path: str, open_browser: bool, label: str) -> None:
 
 
 def print_stage1_results(config: PipelineConfig, report: dict) -> None:
-    """Prints the Stage 1 thermal findings block."""
+    """Prints the Stage 1 thermal findings block.
+
+    Two temperatures are reported and never conflated: the transient peak,
+    always labelled with the elapsed time it belongs to, and the steady-state
+    peak, which is what the threshold verdict is judged against.
+
+    The safety verdict is GATED. A transient that has covered a fraction of
+    one time constant contains no information about whether a design is safe,
+    and this block previously let the visualizer assert "within safe operating
+    range" from exactly such a run -- a 0.1776 ms snapshot at 0.045% of tau,
+    reporting ambient + 0.1 K. The verdict now comes from the steady state, and
+    when the transient is short that is said explicitly rather than papered
+    over.
+    """
+    threshold = config.visualization.hotspot_threshold_c
+    tau_s = report["tau_s"]
+    t_sim = report["transient_duration_s"]
+    frac = report["converged_fraction"]
+    steady_peak = report["peak_temperature_c"]
+
     print("\n" + "=" * 60)
     print("THERMAL ANALYSIS RESULTS")
     print("=" * 60)
-    print(f"  Peak temperature:      {report['peak_temperature_c']:.2f} °C")
-    print(f"  Peak location (i,j,k): {report['peak_location_ijk']}")
-    print(f"  Peak location (um):    "
+    print(f"  Package time constant: {tau_s*1e3:.2f} ms")
+    print()
+    print(f"  TRANSIENT (t = {t_sim*1e3:.4f} ms = {t_sim/tau_s:.6f} tau, "
+          f"{frac*100:.4f}% of steady rise)")
+    print(f"    Peak at that instant: {report['transient_peak_temperature_c']:.2f} °C")
+    print()
+    print("  STEADY STATE (t -> infinity, direct solve)")
+    print(f"    Peak temperature:     {steady_peak:.2f} °C")
+    print(f"    Peak location (i,j,k):{report['peak_location_ijk']}")
+    print(f"    Peak location (um):   "
           f"({report['peak_location_um'][0]:.1f}, {report['peak_location_um'][1]:.1f}, "
           f"{report['peak_location_um'][2]:.1f})")
-    print(f"  Voxels > {config.visualization.hotspot_threshold_c:.1f}°C:       {report['hotspot_count']}")
+    print(f"    Voxels > {threshold:.1f}°C:      {report['hotspot_count']}")
+    print()
+
+    # --- the verdict, judged on the steady state and only ever on that ---
+    if steady_peak > threshold:
+        print(f"  VERDICT: EXCEEDS THRESHOLD. Steady-state peak {steady_peak:.2f} °C is "
+              f"above {threshold:.1f} °C")
+        print(f"           in {report['hotspot_count']} voxel(s). This design needs "
+              f"attention.")
+    else:
+        print(f"  VERDICT: within threshold. Steady-state peak {steady_peak:.2f} °C is "
+              f"below {threshold:.1f} °C.")
+    if t_sim < STEADY_STATE_TAU_MULTIPLE * tau_s:
+        print(f"           (The transient above reached only {frac*100:.4f}% of steady "
+              f"state and was NOT")
+        print(f"            used for this verdict -- it cannot support one. See the "
+              f"steady-state row.)")
+    print()
     print(f"  Interactive 3D view:   {report['html_path']}")
     print("=" * 60)
 
@@ -520,6 +623,7 @@ def run_stage2_optimizer(
     seed: int,
     method: str = "exhaustive",
     placement_pitch_um: float = 2000.0,
+    scale_power_to_stage1: bool = True,
 ) -> dict:
     """
     Stage 2: automated chiplet placement optimization.
@@ -535,15 +639,36 @@ def run_stage2_optimizer(
     print("\n" + "=" * 60)
     print("STAGE 2 :: AUTOMATED CHIPLET PLACEMENT OPTIMIZATION")
     print("=" * 60)
-    total_power = sum(c.power_w for c in DEFAULT_CHIPLET_CATALOG)
-    print(f"[main] Catalog: {len(DEFAULT_CHIPLET_CATALOG)} chiplets "
-          f"({', '.join(c.name for c in DEFAULT_CHIPLET_CATALOG)}) totalling {total_power:.1f} W")
+
+    # Stage 1 asked the user for a die power. Stage 2 used to ignore it and
+    # run DEFAULT_CHIPLET_CATALOG's 36.0 W regardless -- a 3x mismatch at the
+    # 12 W default, which is two different chips in one invocation with
+    # energy-balance floors 60 K apart. Whatever is chosen here, the per-block
+    # wattage actually used is printed.
+    catalog = DEFAULT_CHIPLET_CATALOG
+    catalog_total = sum(c.power_w for c in catalog)
+    stage1_power = config.power.die_power_w
+    if scale_power_to_stage1 and abs(catalog_total - stage1_power) > 1e-9:
+        catalog = scale_catalog_to_total_power(catalog, stage1_power)
+        print(f"[main] Catalog rescaled {catalog_total:.1f} W -> {stage1_power:.1f} W to match "
+              f"the Stage 1 die power (ratios preserved).")
+    elif abs(catalog_total - stage1_power) > 1e-9:
+        print(f"[main] NOTE: catalog totals {catalog_total:.1f} W but Stage 1 was given "
+              f"{stage1_power:.1f} W. Running the catalog as authored -- these are two "
+              f"different chips, and the Stage 1 and Stage 2 numbers are not comparable.")
+
+    used_total = sum(c.power_w for c in catalog)
+    print(f"[main] Catalog: {len(catalog)} chiplets totalling {used_total:.2f} W")
+    for c in catalog:
+        print(f"[main]   {c.name:<18} {c.power_w:6.2f} W  "
+              f"{c.width_um:6.0f} x {c.depth_um:<6.0f} um  "
+              f"{c.power_density_w_cm2:7.2f} W/cm^2")
     print(f"[main] Objective: steady-state peak temperature "
           f"({iterations} annealing proposals, seed={seed})")
 
     try:
         optimizer = ChipletPlacementOptimizer.from_pipeline_config(
-            config, catalog=DEFAULT_CHIPLET_CATALOG, seed=seed,
+            config, catalog=catalog, seed=seed,
         )
 
         if method == "exhaustive":
@@ -581,7 +706,8 @@ def run_stage2_optimizer(
 
 def run_pipeline(
     config: PipelineConfig,
-    total_steps: int,
+    total_steps: Optional[int],
+    duration_s: Optional[float],
     open_browser: bool,
     run_optimizer: bool = False,
     prompt_for_optimizer: bool = False,
@@ -589,6 +715,7 @@ def run_pipeline(
     optimize_seed: int = 0,
     optimize_method: str = "exhaustive",
     placement_pitch_um: float = 2000.0,
+    scale_power_to_stage1: bool = True,
 ) -> dict:
     timing = TimingReport()
 
@@ -617,12 +744,50 @@ def run_pipeline(
         raise PipelineError(f"CFL stability check failed: {exc}") from exc
     timing.cfl_check_s = time.perf_counter() - t0
 
-    total_time_s = dt_stable * total_steps
+    # Package time constant, from the assembled grid and materials. Everything
+    # downstream that claims anything about convergence keys off this.
+    tau_s = solver.estimate_time_constant()
+
+    # Exactly one of duration_s / total_steps is set. A duration is the
+    # physically meaningful input, so when given it wins and the step count is
+    # derived; --total-steps remains for scripted runs.
+    if duration_s is not None:
+        total_time_s = float(duration_s)
+        total_steps = max(1, int(np.ceil(total_time_s / dt_stable)))
+        print(f"[main] Requested duration {total_time_s*1e3:.4f} ms / dt_stable "
+              f"{dt_stable:.6e}s -> {total_steps:,} explicit steps")
+    else:
+        if total_steps is None:
+            raise PipelineError("run_pipeline() needs either duration_s or total_steps.")
+        total_time_s = dt_stable * total_steps
+        implied_tau = total_time_s / tau_s
+        if implied_tau < STEADY_STATE_TAU_MULTIPLE:
+            print(f"[main] WARNING: --total-steps {total_steps:,} implies only "
+                  f"{total_time_s*1e3:.4f} ms = {implied_tau:.6f} tau. That is a transient "
+                  f"snapshot, not an equilibrium; no threshold verdict will be drawn from "
+                  f"it. Steady state is solved separately below.")
+
+    converged_fraction = solver.steady_state_fraction(total_time_s)
+
     print(
         f"[main] Automated CFL check: dt_stable={dt_stable:.6e}s "
         f"(safety_factor={safety_factor}) -> running exactly {total_steps} explicit steps "
         f"(total_time_s={total_time_s:.6e}s)"
     )
+    print(
+        f"[main] Package thermal time constant tau = {tau_s*1e3:.2f} ms "
+        f"(C/G from the actual grid). This run simulates {total_time_s*1e3:.4f} ms = "
+        f"{total_time_s/tau_s:.6f} tau, reaching ~{converged_fraction*100:.4f}% of the "
+        f"steady-state rise."
+    )
+    if total_time_s < STEADY_STATE_TAU_MULTIPLE * tau_s:
+        steps_for_3tau = int(np.ceil(STEADY_STATE_TAU_MULTIPLE * tau_s / dt_stable))
+        print(
+            f"[main] NOTE: this is a TRANSIENT snapshot, not an equilibrium. Reaching "
+            f"{STEADY_STATE_TAU_MULTIPLE:.0f}*tau would need {steps_for_3tau:,} explicit "
+            f"steps at this dt. The steady-state field is solved separately below (one "
+            f"linear solve, no time-stepping), and all threshold checks use THAT."
+        )
 
     # --- Phase 4: Transient solve for exactly `total_steps` explicit steps ---
     t0 = time.perf_counter()
@@ -640,6 +805,21 @@ def run_pipeline(
 
     print(f"[main] Solve complete: {result['steps_taken']} steps, final_time={result['final_time_s']:.6e}s")
 
+    # --- Phase 4b: Steady state, ALWAYS ---
+    # The transient above answers "how hot is it at t = <duration>". The
+    # threshold question -- "is this design safe" -- is about equilibrium, and
+    # a run of a fraction of a tau cannot answer it. This is one cached linear
+    # solve, so there is no reason not to have the real answer.
+    t0 = time.perf_counter()
+    try:
+        steady_T = solver.solve_steady_state(apply_result=False)
+    except ThermalSolverError as exc:
+        raise PipelineError(f"Steady-state solve failed: {exc}") from exc
+    timing.steady_state_s = time.perf_counter() - t0
+    steady_peak_c = float(np.max(steady_T)) - 273.15
+    print(f"[main] Steady-state solve: peak {steady_peak_c:.2f} °C "
+          f"(equilibrium, t -> infinity) in {timing.steady_state_s:.4f}s")
+
     # --- Phase 5: Interactive WebGL 3D export (replaces static PNG output) ---
     t0 = time.perf_counter()
     try:
@@ -649,16 +829,36 @@ def run_pipeline(
             output_dir=config.visualization.output_dir,
         )
         html_path = viz.render_interactive_webgl(filename="thermal_3d.html")
-        hotspot_report = viz.get_hotspot_report(threshold_c=config.visualization.hotspot_threshold_c)
+
+        # The threshold check runs against the STEADY-STATE field, not the
+        # transient snapshot. Checking a 0.045%-converged field against 85 C
+        # answers a question nobody asked.
+        steady_viz = ThermalVisualizer(
+            temperature_k=steady_T,
+            dx=config.grid.dx, dy=config.grid.dy, dz=config.grid.dz,
+            output_dir=config.visualization.output_dir,
+        )
+        hotspot_report = steady_viz.get_hotspot_report(
+            threshold_c=config.visualization.hotspot_threshold_c
+        )
+        transient_peak = viz.get_peak_hotspot()
 
         _open_in_browser(html_path, open_browser, "the 3D thermal view")
 
         report = {
             "html_path": html_path,
+            # Hotspot count / peak / location all describe the STEADY state,
+            # which is what the threshold verdict is about.
             "hotspot_count": hotspot_report.count,
             "peak_temperature_c": hotspot_report.peak_temperature_c,
             "peak_location_um": hotspot_report.peak_location_um,
             "peak_location_ijk": hotspot_report.peak_location_ijk,
+            # The transient snapshot, kept separate and always labelled with
+            # the duration it corresponds to.
+            "transient_peak_temperature_c": transient_peak["temperature_c"],
+            "transient_duration_s": result["final_time_s"],
+            "tau_s": tau_s,
+            "converged_fraction": converged_fraction,
         }
     except VisualizationError as exc:
         raise PipelineError(f"WebGL visualization export failed: {exc}") from exc
@@ -687,6 +887,7 @@ def run_pipeline(
             config, open_browser=open_browser,
             iterations=optimize_iterations, seed=optimize_seed,
             method=optimize_method, placement_pitch_um=placement_pitch_um,
+            scale_power_to_stage1=scale_power_to_stage1,
         )
         timing.optimize_s = time.perf_counter() - t0
 
@@ -711,13 +912,14 @@ def main(argv=None) -> int:
         if args.config is not None:
             config = load_config(args.config)
             total_steps = args.total_steps
+            duration_s = None
         elif argv is None and len(sys.argv) == 1:
             # `python main.py` with truly no arguments -> interactive prompts.
-            config, total_steps = run_interactive_prompts()
+            config, total_steps, duration_s = run_interactive_prompts()
             interactive = True
         else:
             # Any explicit flag supplied -> non-interactive, flag-driven run.
-            config, total_steps = build_config_from_flags(args)
+            config, total_steps, duration_s = build_config_from_flags(args)
     except ConfigError as exc:
         print(f"\n[FATAL] Configuration error: {exc}", file=sys.stderr)
         return 1
@@ -754,7 +956,7 @@ def main(argv=None) -> int:
 
     try:
         outcome = run_pipeline(
-            config, total_steps,
+            config, total_steps, duration_s,
             open_browser=not args.no_browser,
             run_optimizer=args.optimize,
             prompt_for_optimizer=interactive,
@@ -762,6 +964,7 @@ def main(argv=None) -> int:
             optimize_seed=args.optimize_seed,
             optimize_method=args.optimize_method,
             placement_pitch_um=args.placement_pitch_um,
+            scale_power_to_stage1=not args.no_scale_catalog_power,
         )
     except PipelineError as exc:
         print(f"\n[FATAL] Pipeline aborted: {exc}", file=sys.stderr)

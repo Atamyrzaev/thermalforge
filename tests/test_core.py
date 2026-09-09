@@ -71,6 +71,7 @@ from src.thermal_solver import ThermalSolver, SolverBCConfig, ThermalSolverError
 import src.optimizer as optimizer_module
 from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
 import src.exhaustive as exhaustive_module
+import main as main_module
 
 _EPS = 1e-30
 
@@ -1413,6 +1414,184 @@ class TestExhaustiveSearch:
 
         with pytest.raises(exhaustive_module.ExhaustiveSearchError, match="[Ss]uperposition"):
             search._verify_superposition(search._find_anchor_layout())
+
+
+class TestTransientConvergenceGating:
+    """A transient shorter than a few time constants cannot support a safety
+    verdict, and the pipeline must not print one.
+
+    The defect: a 100-step run covered 0.1776 ms against a 394.79 ms time
+    constant -- 0.045% of one tau -- reported a peak of ambient + 0.1 K, and
+    the visualizer logged "Grid is within safe operating range". The true
+    steady-state peak for that same configuration is 79.97 degC against an
+    85 degC threshold, i.e. a 5 degC margin rather than a 60 degC one. The
+    verdict was not merely imprecise, it was drawn from a field in which
+    nothing had happened yet.
+    """
+
+    def test_tau_estimate_matches_hand_calculation(self):
+        """tau = R*C = [1/(h*A)] * [rho*cp * A * t] = rho*cp*t/h for a uniform
+        slab. Area cancels, so this is exactly checkable by hand."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, dx=500e-6, dy=500e-6,
+                                      dz=20e-6, h_convective=1000.0, die_power_w=0.0)
+        gb = build_uniform_grid(config, "silicon")
+        solver = ThermalSolver.from_grid_builder(gb)
+
+        rho_cp = MATERIALS["silicon"]["rho"] * MATERIALS["silicon"]["cp"]
+        thickness = config.grid.nz * config.grid.dz
+        hand = rho_cp * thickness / config.boundary_conditions.h_convective
+
+        tau = solver.estimate_time_constant()
+        assert tau == pytest.approx(hand, rel=0.05)
+        # This grid is the documented 240 um stack at h=1000 -> ~398 ms.
+        assert 0.35 < tau < 0.45
+
+    def test_steady_state_fraction_is_monotone_and_bounded(self):
+        config = make_pipeline_config(nx=8, ny=8, nz=12, die_power_w=0.0)
+        gb = build_uniform_grid(config, "silicon")
+        solver = ThermalSolver.from_grid_builder(gb)
+        tau = solver.estimate_time_constant()
+
+        assert solver.steady_state_fraction(0.0) == 0.0
+        assert solver.steady_state_fraction(tau) == pytest.approx(0.6321, abs=1e-3)
+        assert solver.steady_state_fraction(3 * tau) == pytest.approx(0.9502, abs=1e-3)
+        assert solver.steady_state_fraction(1e6 * tau) == pytest.approx(1.0, abs=1e-9)
+
+    def test_no_safety_verdict_from_unconverged_transient(self, capsys):
+        """The gate: a run far short of 3*tau must say so, and must not let a
+        transient peak stand in for a verdict."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.05)
+        tau = 0.3948
+        report = {
+            "html_path": "outputs/thermal_3d.html",
+            "hotspot_count": 0,
+            "peak_temperature_c": 79.97,          # steady state
+            "peak_location_um": (9500.0, 9500.0, 220.0),
+            "peak_location_ijk": (19, 19, 11),
+            "transient_peak_temperature_c": 25.10,
+            "transient_duration_s": 1.775751e-04,
+            "tau_s": tau,
+            "converged_fraction": 4.4977e-04,
+        }
+        main_module.print_stage1_results(config, report)
+        out = capsys.readouterr().out
+
+        # The transient is labelled with its duration and its tau fraction.
+        assert "0.1776 ms" in out
+        assert "tau" in out
+        # The unconverged notice appears.
+        assert "NOT" in out and "verdict" in out.lower()
+        # The verdict quotes the STEADY-STATE peak, never the transient one.
+        assert "79.97" in out
+        assert "VERDICT" in out
+        verdict_line = [l for l in out.splitlines() if "VERDICT" in l][0]
+        assert "25.10" not in verdict_line
+
+    def test_converged_transient_reports_no_unconverged_notice(self, capsys):
+        """The gate must not fire when the run really has converged, or it
+        becomes noise that trains the user to ignore it."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.05)
+        tau = 0.3948
+        report = {
+            "html_path": "outputs/thermal_3d.html",
+            "hotspot_count": 0,
+            "peak_temperature_c": 79.97,
+            "peak_location_um": (9500.0, 9500.0, 220.0),
+            "peak_location_ijk": (19, 19, 11),
+            "transient_peak_temperature_c": 79.90,
+            "transient_duration_s": 5.0 * tau,        # well past 3*tau
+            "tau_s": tau,
+            "converged_fraction": 0.9933,
+        }
+        main_module.print_stage1_results(config, report)
+        out = capsys.readouterr().out
+        assert "VERDICT" in out
+        assert "cannot support one" not in out
+
+    def test_verdict_fires_when_steady_peak_exceeds_threshold(self, capsys):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.05)
+        report = {
+            "html_path": "outputs/thermal_3d.html",
+            "hotspot_count": 137,
+            "peak_temperature_c": 161.11,     # above the 85 C default
+            "peak_location_um": (9500.0, 9500.0, 220.0),
+            "peak_location_ijk": (19, 19, 11),
+            "transient_peak_temperature_c": 25.10,
+            "transient_duration_s": 1.775751e-04,
+            "tau_s": 0.3948,
+            "converged_fraction": 4.4977e-04,
+        }
+        main_module.print_stage1_results(config, report)
+        out = capsys.readouterr().out
+        assert "EXCEEDS THRESHOLD" in out
+        assert "161.11" in out
+
+    def test_steady_state_threshold_check_is_used(self):
+        """End to end: the hotspot count and reported peak must come from the
+        steady-state field, not the transient snapshot. Run a deliberately
+        tiny transient and confirm the reported peak is the equilibrium one."""
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.4)
+        outcome = main_module.run_pipeline(
+            config, total_steps=5, duration_s=None, open_browser=False,
+        )
+        rep = outcome["viz_report"]
+
+        # A 5-step transient has heated almost nothing; the steady state has.
+        assert rep["transient_peak_temperature_c"] < rep["peak_temperature_c"]
+        assert rep["converged_fraction"] < 1e-3
+
+        # And the reported peak really is the steady-state solve's.
+        gb, *_ = build_stack_grid(config)
+        solver = ThermalSolver.from_grid_builder(gb)
+        steady = solver.solve_steady_state(apply_result=False)
+        assert rep["peak_temperature_c"] == pytest.approx(
+            float(np.max(steady)) - 273.15, abs=1e-6
+        )
+
+
+class TestStage2PowerMatchesStage1:
+    """Stage 1 asks for a die power; Stage 2 must not silently model a
+    different chip. The catalog was 36.0 W against a 12.0 W default -- 3x, and
+    energy-balance floors 60 K apart."""
+
+    def test_scaling_preserves_total_and_ratios(self):
+        original = optimizer_module.DEFAULT_CHIPLET_CATALOG
+        target = 12.0
+        scaled = optimizer_module.scale_catalog_to_total_power(original, target)
+
+        assert sum(c.power_w for c in scaled) == pytest.approx(target, rel=1e-12)
+        # Relative split is untouched.
+        for a, b in zip(original, scaled):
+            assert b.power_w / sum(c.power_w for c in scaled) == pytest.approx(
+                a.power_w / sum(c.power_w for c in original), rel=1e-12
+            )
+        # Geometry is untouched -- only power scales.
+        for a, b in zip(original, scaled):
+            assert (b.name, b.width_um, b.depth_um) == (a.name, a.width_um, a.depth_um)
+
+    def test_stage2_power_matches_stage1_when_scaling_enabled(self):
+        """The optimizer actually built for Stage 2 must carry the Stage 1
+        wattage."""
+        config = make_pipeline_config(nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6,
+                                      dz=20e-6, die_power_w=12.0, h_convective=1000.0)
+        scaled = optimizer_module.scale_catalog_to_total_power(
+            optimizer_module.DEFAULT_CHIPLET_CATALOG, config.power.die_power_w
+        )
+        opt = ChipletPlacementOptimizer.from_pipeline_config(config, catalog=scaled)
+        assert sum(c.power_w for c in opt.catalog) == pytest.approx(12.0, rel=1e-12)
+
+        # And the physics follows: the energy floor moves with the power.
+        area = (config.grid.nx * config.grid.dx) * (config.grid.ny * config.grid.dy)
+        expected_floor = 12.0 / (config.boundary_conditions.h_convective * area)
+        opt._apply_layout_to_q_map(opt.shelf_packed_layout())
+        T = opt.solver.solve_steady_state(apply_result=False)
+        mean_bottom_rise = float(np.mean(T[:, :, 0])) - opt.solver.bc.t_ambient_k
+        assert mean_bottom_rise == pytest.approx(expected_floor, rel=1e-6)
+
+    def test_scaling_rejects_a_zero_power_catalog(self):
+        dead = (ChipletSpec(name="a", width_um=1000.0, depth_um=1000.0, power_w=0.0),)
+        with pytest.raises(OptimizerError, match="zero"):
+            optimizer_module.scale_catalog_to_total_power(dead, 10.0)
 
 
 if __name__ == "__main__":

@@ -82,18 +82,35 @@ class GridConfig:
         if min(self.nx, self.ny, self.nz) <= 0:
             raise ValueError(f"Grid dimensions must be positive, got "
                               f"({self.nx}, {self.ny}, {self.nz})")
-        if not (DX_DY_MIN * 0.5 <= self.dx <= DX_DY_MAX * 2.0):
+        # SCALE-AWARE resolution check.
+        #
+        # This used to compare dx/dy against an absolute 10-50 um band and
+        # dz against 5-20 um. Those numbers were written for a die-scale mesh
+        # and are simply wrong at package scale: a 20 mm module over 40 voxels
+        # needs dx = 500 um, which is correct and which the old check flagged
+        # on every single run. A warning that is always wrong is worse than no
+        # warning, because it teaches the user to ignore the channel.
+        #
+        # What actually matters is not the absolute cell size but whether the
+        # mesh RESOLVES the domain: too few cells per axis cannot represent
+        # any internal structure, whatever the units say.
+        min_cells_per_axis = 8
+        if min(self.nx, self.ny, self.nz) < min_cells_per_axis:
             logger.warning(
-                "dx=%.3e m is outside the recommended 10-50um range; "
-                "solver stability/accuracy may be affected.", self.dx
+                "Grid is %dx%dx%d; fewer than %d cells on an axis cannot resolve internal "
+                "structure (layers, block edges, gradients) regardless of cell size.",
+                self.nx, self.ny, self.nz, min_cells_per_axis,
             )
-        if not (DX_DY_MIN * 0.5 <= self.dy <= DX_DY_MAX * 2.0):
+
+        # Extreme cell aspect ratios degrade iterative-solver conditioning.
+        # Reported, not forbidden: the package-scale default is 25:1 and
+        # solves cleanly on the direct and CG paths alike.
+        aspect = max(self.dx, self.dy) / self.dz if self.dz > 0 else float("inf")
+        if aspect > 100.0:
             logger.warning(
-                "dy=%.3e m is outside the recommended 10-50um range.", self.dy
-            )
-        if not (DZ_MIN * 0.5 <= self.dz <= DZ_MAX * 2.0):
-            logger.warning(
-                "dz=%.3e m is outside the recommended 5-20um range.", self.dz
+                "Cell aspect ratio is %.0f:1 (dx=%.3e, dz=%.3e). Above ~100:1 the "
+                "steady-state operator becomes poorly conditioned and iterative solves "
+                "may need many more iterations.", aspect, self.dx, self.dz,
             )
         if self.bottom_bc not in ("dirichlet", "robin"):
             raise ValueError(f"bottom_bc must be 'dirichlet' or 'robin', got {self.bottom_bc}")

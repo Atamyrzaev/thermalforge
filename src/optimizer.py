@@ -163,6 +163,7 @@ __all__ = [
     "OptimizationResult",
     "ChipletPlacementOptimizer",
     "DEFAULT_CHIPLET_CATALOG",
+    "scale_catalog_to_total_power",
     "render_optimization_report",
     "OVERLAP_PENALTY_C",
     "OVERLAP_PENALTY_PER_CELL_C",
@@ -284,6 +285,38 @@ DEFAULT_CHIPLET_CATALOG: Tuple[ChipletSpec, ...] = (
     ChipletSpec(name="HBM_Memory",      width_um=11000.0, depth_um=11000.0, power_w=4.0),
     ChipletSpec(name="NPU_Accelerator", width_um=5000.0,  depth_um=5000.0,  power_w=8.0),
 )
+
+
+def scale_catalog_to_total_power(
+    catalog: Sequence[ChipletSpec], target_total_w: float,
+) -> Tuple[ChipletSpec, ...]:
+    """Rescales every block's power by one common factor so the catalog totals
+    `target_total_w`, leaving footprints and the relative power split intact.
+
+    Exists because Stage 1 asks the user for a die power and Stage 2 then used
+    DEFAULT_CHIPLET_CATALOG's 36.0 W regardless -- a 3x mismatch at the 12 W
+    default, i.e. two different chips in one invocation, with energy-balance
+    floors 60 K apart. Silently ignoring a number the tool explicitly asked
+    for is worse than never asking.
+
+    Scaling is uniform, so a 10/14/4/8 W split becomes 10/14/4/8 times k. That
+    preserves which block is hottest, and therefore the shape of the placement
+    problem. It does NOT model a real chip, whose blocks would not scale
+    together -- stated here rather than left implicit.
+    """
+    if target_total_w < 0:
+        raise OptimizerError(f"target_total_w must be >= 0, got {target_total_w}")
+    current = sum(c.power_w for c in catalog)
+    if current <= 0:
+        raise OptimizerError(
+            "Cannot rescale a catalog whose total power is zero -- the ratios are undefined."
+        )
+    k = target_total_w / current
+    return tuple(
+        ChipletSpec(name=c.name, width_um=c.width_um, depth_um=c.depth_um,
+                    power_w=c.power_w * k)
+        for c in catalog
+    )
 
 
 Layout = Tuple[Tuple[int, int], ...]   # one (x0, y0) origin per catalog entry
