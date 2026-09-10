@@ -113,9 +113,10 @@ class StackSection:
         40         6            0.1500              0.0%
 
     That is a -16.7%..+25.0% swing in the thickness of the single most
-    thermally resistive layer in the stack -- the composite's kz is about
-    20 W/mK against silicon's 149, so it dominates the vertical resistance
-    and a thickness error moves the peak temperature directly. A mesh
+    thermally resistive layer in the stack -- the composite's kz is 13.1
+    W/mK (derived from Rao et al. 2023, doi:10.2298/TSCI220805061R; see
+    src/composite_materials.py) against silicon's 150, so a thickness error
+    there moves the stack's resistance more than one anywhere else. A mesh
     refinement study run on fraction-authored layers therefore changes the
     GEOMETRY as it refines, and cannot separate discretization error from a
     silently different stack.

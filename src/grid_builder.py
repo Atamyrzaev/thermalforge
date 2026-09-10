@@ -11,8 +11,9 @@ Design notes:
 - Conductivity is stored as three separate arrays (kx_map, ky_map, kz_map)
   rather than a single scalar k_map, because several layers in the stack
   (microbump+underfill composite, in particular) are strongly anisotropic:
-  vertical (z) conduction through bump/TSV columns is 5-15x higher than
-  lateral (xy) conduction through the surrounding low-k underfill/dielectric.
+  vertical (z) conduction runs up the bump columns while lateral (xy)
+  conduction crosses the low-k underfill -- 44x apart for the derived
+  composite (kz 13.148 vs kxy 0.2975 W/mK, src/composite_materials.py).
 - All spatial assignment methods operate on index slices, not physical
   coordinates, to keep the hot path allocation-free and vectorized.
 - Every public mutating method validates shapes/bounds before writing, and
@@ -29,30 +30,46 @@ from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 
+from src.composite_materials import CITATION as TSCI_CITATION, TSCI_K, bump_underfill_layer_k
+
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("RISC3D-AI.GridBuilder")
 
 
 # ---------------------------------------------------------------------------
-# Material property database (TSMC 3D / Advanced Packaging standards)
-# k values in W/m·K, rho in kg/m^3, cp in J/kg·K
-# Anisotropic entries carry (kx, ky, kz); isotropic entries carry a single k
-# that is broadcast to all three axes.
+# Material property database
+# k in W/(m K), rho in kg/m^3, cp in J/(kg K). Anisotropic entries carry
+# (kx, ky, kz); isotropic entries carry one k broadcast to all three axes.
+#
+# Conductivities are Table 2 of TSCI_CITATION, or derived from it in
+# src/composite_materials.py. Old -> new, replacing values that had no source:
+#   silicon 149 -> 150, copper 400 -> 390, underfill 0.8 -> 0.2,
+#   solder 60 -> 57 (Sn2.5Ag), composite kx=ky 2.0 -> 0.2975, kz 20.0 -> 13.148.
+# rho and cp are NOT from that paper (a steady-state study; it gives none).
+# They are the earlier, uncited values and affect only transients and tau --
+# never a steady-state temperature. Entries marked UNCITED have no source.
 # ---------------------------------------------------------------------------
 
+_COMPOSITE_KX, _COMPOSITE_KY, _COMPOSITE_KZ = bump_underfill_layer_k()
+
 MATERIALS: Dict[str, Dict[str, float]] = {
-    "silicon": {"k": 149.0, "rho": 2330.0, "cp": 712.0},
-    "copper": {"k": 400.0, "rho": 8960.0, "cp": 385.0},
-    "tim": {"k": 12.5, "rho": 2000.0, "cp": 1000.0},          # midpoint of 5-20 W/mK
-    "solder_microbump": {"k": 60.0, "rho": 7300.0, "cp": 230.0},
-    "underfill": {"k": 0.8, "rho": 1200.0, "cp": 1100.0},
-    # Homogenized anisotropic composite (microbump array + underfill).
-    # kx = ky = lateral (underfill-dominated), kz = vertical (bump-dominated).
+    "silicon": {"k": TSCI_K["silicon"], "rho": 2330.0, "cp": 712.0},
+    "copper": {"k": TSCI_K["copper"], "rho": 8960.0, "cp": 385.0},
+    # UNCITED: TSCI220805061R gives no TIM value. Used only by
+    # build_cowos_s_reference_stack() below, never by the main.py pipeline.
+    "tim": {"k": 12.5, "rho": 2000.0, "cp": 1000.0},
+    "solder_microbump": {"k": TSCI_K["sn2.5ag"], "rho": 7300.0, "cp": 230.0},   # Sn2.5Ag
+    "underfill": {"k": TSCI_K["underfill"], "rho": 1200.0, "cp": 1100.0},
+    # Microbump array in underfill: Table 1 bump laminate through eqs.
+    # (10)-(11), then eq. (2) along the pillars and Maxwell-Garnett across
+    # them, at an assumed 40 um pitch. Derivation, validation against the
+    # paper's own numbers, and assumptions: src/composite_materials.py.
     "bump_underfill_composite": {
-        "kx": 2.0, "ky": 2.0, "kz": 20.0,       # midpoints of spec ranges
-        "rho": 3500.0,                          # volumetric mix estimate
-        "cp": 450.0,
+        "kx": _COMPOSITE_KX, "ky": _COMPOSITE_KY, "kz": _COMPOSITE_KZ,
+        "rho": 3500.0,                          # UNCITED volumetric estimate
+        "cp": 450.0,                            # UNCITED
     },
+    # UNCITED textbook value; not used by any stack in this codebase.
     "ambient_air": {"k": 0.026, "rho": 1.2, "cp": 1005.0},
 }
 

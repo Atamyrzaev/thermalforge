@@ -128,17 +128,18 @@ STEADY_STATE_TAU_MULTIPLE = 3.0
 #
 # It also decides whether placement matters. Heat spreads laterally over
 # roughly lambda = sqrt(sum(k_xy * t) / h) before the sink removes it.
-# Measured on the default 40x40x12 grid, 4-block catalog scaled to P,
-# exhaustive search on the 2000 um lattice:
+# Measured on the default 40x40x12 grid with the src/composite_materials.py
+# conductivities, 4-block catalog scaled to P, exhaustive search on the
+# 2000 um lattice:
 #
 #   preset            P      h       lambda   Stage 2: initial -> optimum    gain
-#   passive-lowpower  12 W   1000    5.47 mm   83.30 ->  70.24 degC   13.06 K (22.4% of rise)
-#   cowos-coldplate   150 W  25000   1.09 mm  105.45 -> 100.82 degC    4.63 K ( 5.8% of rise)
+#   passive-lowpower  12 W   1000    5.48 mm   83.23 ->  70.21 degC   13.02 K (22.4% of rise)
+#   cowos-coldplate   150 W  25000   1.10 mm  105.40 -> 100.77 degC    4.63 K ( 5.8% of rise)
 #
 # With lambda comparable to the block spacing, blocks share heat and moving
 # them apart pays. With lambda well under it, each block sees essentially
-# only its own footprint -- the 150 W Stage 1 rise of 59.11 K is within 1.5%
-# of the local 1-D q''/h = 60 K -- and placement is a weak lever. Placement
+# only its own footprint -- the 150 W Stage 1 rise of 59.09 K is 1.5% under
+# the local 1-D q''/h = 60 K -- and placement is a weak lever. Placement
 # optimization is a design lever in weakly cooled packages, not strongly
 # cooled ones.
 @dataclass(frozen=True)

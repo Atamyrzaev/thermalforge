@@ -72,6 +72,7 @@ from src.thermal_solver import ThermalSolver, SolverBCConfig, ThermalSolverError
 import src.optimizer as optimizer_module
 from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
 import src.exhaustive as exhaustive_module
+import src.composite_materials as composite_module
 import main as main_module
 
 _EPS = 1e-30
@@ -1945,6 +1946,56 @@ class TestCoolingPresets:
         # (79.82 - 25) / 12 = 4.5683 K/W; / 2.5 K/W floor = 1.83x
         assert "R_ja (measured):      4.5683 K/W" in out
         assert "1.83x the 1/(hA) floor" in out
+
+
+class TestCompositeMaterials:
+    """Validation plan step 3: conductivities from Rao et al., Thermal Science
+    27(5B), 4193-4207 (2023), doi:10.2298/TSCI220805061R -- checked against
+    the paper's own numbers, not only against themselves."""
+
+    def test_reproduces_the_papers_tsv_out_of_plane_value(self):
+        # Paper: analytical 175.2 W/mK for r_Cu 8, r_SiO2 9, pitch 40 um.
+        _, kz = composite_module.tsv_cell_k(r_core_um=8.0, r_liner_um=9.0, pitch_um=40.0)
+        assert kz == pytest.approx(175.2, abs=0.05)
+
+    def test_in_plane_model_matches_the_papers_fem_within_one_percent(self):
+        # Paper FEM: 115.3 W/mK. (Its analytical eqs. (3)-(7) are not used --
+        # see the composite_materials docstring.)
+        kxy, _ = composite_module.tsv_cell_k(8.0, 9.0, 40.0)
+        assert kxy == pytest.approx(115.3, rel=0.01)
+
+    def test_microbump_laminate_is_table1_through_eqs_10_and_11(self):
+        layers = composite_module.MICROBUMP_LAMINATE_UM
+        assert sum(t for _, t in layers) == pytest.approx(composite_module.MICROBUMP_HEIGHT_UM)
+        kz, kxy = composite_module.microbump_k()
+        # Hand values from Table 2: 10 um Cu, 6 um Ni, 3 um Ni3Sn4, 4 um Sn2.5Ag.
+        assert kz == pytest.approx(23.0 / (10 / 390.0 + 6 / 60.7 + 3 / 19.6 + 4 / 57.0), rel=1e-12)
+        assert kxy == pytest.approx((10 * 390.0 + 6 * 60.7 + 3 * 19.6 + 4 * 57.0) / 23.0, rel=1e-12)
+
+    def test_layer_kz_runs_up_the_pillars(self):
+        """Side-by-side pillars conduct in parallel along z. Eq. (10) applied
+        to the layer by volume fraction would treat them as stacked sheets and
+        return ~0.25 W/mK, barely above the underfill."""
+        kx, ky, kz = composite_module.bump_underfill_layer_k()
+        phi = np.pi * 10.0 ** 2 / 40.0 ** 2
+        kz_bump, _ = composite_module.microbump_k()
+        assert kz == pytest.approx(phi * kz_bump + (1 - phi) * 0.2, rel=1e-12)
+        series_misapplied = 1.0 / (phi / kz_bump + (1 - phi) / 0.2)
+        assert kz > 40 * series_misapplied
+        assert kx == ky and 0.2 < kx < 0.5    # underfill-dominated in plane
+
+    def test_materials_table_carries_the_cited_values(self):
+        assert MATERIALS["silicon"]["k"] == 150.0
+        assert MATERIALS["copper"]["k"] == 390.0
+        assert MATERIALS["underfill"]["k"] == 0.2
+        assert MATERIALS["solder_microbump"]["k"] == 57.0
+        kx, ky, kz = composite_module.bump_underfill_layer_k()
+        comp = MATERIALS["bump_underfill_composite"]
+        assert (comp["kx"], comp["ky"], comp["kz"]) == (kx, ky, kz)
+
+    def test_rejects_pillars_wider_than_their_pitch(self):
+        with pytest.raises(ValueError, match="pitch"):
+            composite_module.bump_underfill_layer_k(pitch_um=15.0, diameter_um=20.0)
 
 
 if __name__ == "__main__":
