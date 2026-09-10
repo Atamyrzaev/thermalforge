@@ -280,7 +280,8 @@ def run_interactive_prompts():
     print()
 
     grid = GridSection(nx=nx, ny=ny, nz=nz, dx=dx_um * 1e-6, dy=dy_um * 1e-6, dz=dz_um * 1e-6)
-    bc = BoundaryConditionsSection(t_ambient_c=t_ambient_c, h_convective=h_convective, bottom_bc="robin")
+    bc = BoundaryConditionsSection(t_ambient_c=t_ambient_c, h_convective=h_convective,
+                                   bottom_bc="neumann", top_bc="robin")
     stack = StackSection()      # fixed defaults: interposer_frac=0.40, bump_frac=0.15
     power = PowerSection(die_power_w=die_power_w)  # fixed default die_footprint_frac=0.5
     solver = SolverSection(safety_factor=safety_factor)  # total_steps handled locally, not stored here
@@ -358,7 +359,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
 def build_config_from_flags(args: argparse.Namespace):
     grid = GridSection(nx=args.nx, ny=args.ny, nz=args.nz,
                         dx=args.dx_um * 1e-6, dy=args.dy_um * 1e-6, dz=args.dz_um * 1e-6)
-    bc = BoundaryConditionsSection(t_ambient_c=args.t_ambient_c, h_convective=args.h_convective, bottom_bc="robin")
+    bc = BoundaryConditionsSection(t_ambient_c=args.t_ambient_c, h_convective=args.h_convective,
+                                   bottom_bc="neumann", top_bc="robin")
     stack = StackSection()
     power = PowerSection(die_power_w=args.die_power_w)
     solver = SolverSection(safety_factor=args.safety_factor)
@@ -484,9 +486,12 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
       z_interposer_top .. z_bump_top     : microbump + underfill composite (anisotropic)
       z_bump_top .. nz                   : Si compute die (top), with an active
                                             power-density footprint in its center
-    Bottom face (z=0, interposer underside) is the heat-sink boundary
-    (Robin, per this file's fixed bottom_bc="robin"); top and all sides
-    are adiabatic.
+    The heat sink is the TOP face (z = nz-1, the die backside), which is how a
+    CoWoS part actually cools: die -> TIM1 -> lid -> TIM2 -> heatsink. The
+    bottom face (interposer underside) and all four sides are adiabatic.
+    Earlier versions sank through the bottom with an adiabatic top -- the
+    package upside down. Which face is the sink comes from
+    config.boundary_conditions.bottom_bc / top_bc, not from this function.
     """
     try:
         gb = GridBuilder(config=config.to_dict())
@@ -679,8 +684,14 @@ def run_stage2_optimizer(
         print(f"[main]   {c.name:<18} {c.power_w:6.2f} W  "
               f"{c.width_um:6.0f} x {c.depth_um:<6.0f} um  "
               f"{c.power_density_w_cm2:7.2f} W/cm^2")
-    print(f"[main] Objective: steady-state peak temperature "
-          f"({iterations} annealing proposals, seed={seed})")
+    if method == "anneal":
+        print(f"[main] Objective: steady-state peak temperature "
+              f"({iterations} annealing proposals, seed={seed})")
+    else:
+        # Iterations and seed are annealer parameters; printing them on an
+        # exhaustive run implied a sampled search that did not happen.
+        print("[main] Objective: steady-state peak temperature "
+              "(exhaustive: every buildable layout on the lattice; no seed)")
 
     try:
         optimizer = ChipletPlacementOptimizer.from_pipeline_config(
@@ -1006,6 +1017,11 @@ def main(argv=None) -> int:
     print(f"Ambient: {config.boundary_conditions.t_ambient_c:.1f}C | "
           f"h_convective: {config.boundary_conditions.h_convective:.1f} W/m^2K | "
           f"Die power: {config.power.die_power_w:.2f}W")
+    bcs = config.boundary_conditions
+    sink_face = "bottom" if bcs.bottom_bc != "neumann" else "top"
+    sink_kind = bcs.bottom_bc if sink_face == "bottom" else bcs.top_bc
+    face_desc = "die backside" if sink_face == "top" else "interposer underside"
+    print(f"Sink: {sink_face} face ({face_desc}), {sink_kind}; all other faces adiabatic")
     if duration_s is not None:
         print(f"Mode: steady state + transient {duration_s*1e3:.4f} ms")
     elif total_steps is not None:

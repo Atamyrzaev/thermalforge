@@ -14,8 +14,9 @@ Euler in time, conservative finite-volume in space) with:
     interfaces (correct treatment for the Si/Cu/TIM/bump-underfill stack;
     a naive arithmetic mean or single-node k badly misrepresents flux at
     the low-k underfill / high-k Cu interfaces).
-  - Neumann (adiabatic) BCs on top and all 4 side faces.
-  - Dirichlet or Robin (convective) BC on the bottom (heat-sink) face.
+  - Dirichlet or Robin (convective) BC on exactly one z-face -- the heat
+    sink; the top face (die backside) by default.
+  - Neumann (adiabatic) BCs on the other z-face and all 4 side faces.
   - An automated, per-cell stability audit (compute_max_dt) that inspects
     the actual assembled coefficients -- not a single global k_max estimate
     -- and will correctly flag the Cu-dominated worst-case cells.
@@ -133,27 +134,29 @@ STEADY_CG_MAXITER = 200_000
 #      system I was handed"; it cannot detect a wrongly assembled operator.
 #
 #   2. PHYSICAL -- at steady state every generated watt must leave through the
-#      Robin/Dirichlet boundary, so
-#          sum(boundary_coeff * (T_bottom - T_ambient)) == sum(q_map / rho_cp)
-#      exactly, independent of mesh, materials, layout and solver. This is a
+#      Robin/Dirichlet sink face, so
+#          sum(boundary_coeff * (T_sink - T_ambient)) == sum(q_map)
+#      exactly, independent of mesh, materials, layout and solver. Both sums
+#      are unweighted; an earlier q_map / rho_cp form was exact only when the
+#      source and sink cells share one rho_cp (see _verify_steady_state). This is a
 #      genuinely independent check: it follows from energy conservation rather
 #      than from the discretization, so it catches operator-assembly errors
 #      that a residual cannot.
 #
-#   3. ORDERING -- peak rise >= mean bottom-surface rise. Necessarily true,
+#   3. ORDERING -- peak rise >= mean sink-face rise. Necessarily true,
 #      since the peak is a maximum over a field that contains that surface, so
 #      it is free when the answer is right. It exists to catch a REPORTING
 #      error rather than a solver one: any quantity that is not actually a
 #      peak (a temperature difference, say) fails it immediately. Check 2
-#      pins the mean bottom rise to P/(h*A), so this transitively enforces
+#      pins the mean sink-face rise to P/(h*A), so this transitively enforces
 #      peak_rise >= P/(h*A) -- the convective floor.
 #
 # All three are cheap beside the solve itself (two sparse mat-vecs and a few
 # reductions), so they run on EVERY call rather than as an opt-in debug mode.
 STEADY_RESIDUAL_TOL = 1e-8
 # The energy imbalance is measured in EQUIVALENT KELVIN, not as a ratio:
-#     imbalance_K = |P_in - P_out| / sum(boundary_coeff / rho_cp)
-# i.e. the uniform bottom-surface temperature error that would account for the
+#     imbalance_K = |P_in - P_out| / sum(boundary_coeff)
+# i.e. the uniform sink-face temperature error that would account for the
 # mismatch. A ratio is unusable here because the zero-power case makes both
 # sides vanish, and dividing float noise by float noise reports 100% error on
 # a perfectly correct solve. Equivalent kelvin stays meaningful at any power,
@@ -184,20 +187,55 @@ class SolverBCConfig:
     dz: float
     t_ambient_k: float = 298.15
     h_convective: float = 2500.0
-    bottom_bc: str = "robin"     # "robin" | "dirichlet"
-    top_bc: str = "neumann"      # only "neumann" supported (adiabatic)
+    # WHICH FACE IS THE HEAT SINK.
+    #
+    # Exactly one of bottom_bc / top_bc carries the sink ("robin" or
+    # "dirichlet"); the other is "neumann" (adiabatic). The default is now
+    # TOP, because that is how a CoWoS part actually cools:
+    #
+    #     die backside -> TIM1 -> lid -> TIM2 -> heatsink        (primary)
+    #     microbumps -> interposer -> C4 -> substrate -> board   (secondary,
+    #                                                             high-R)
+    #
+    # This file previously hardcoded the sink to the BOTTOM (interposer
+    # underside) with an adiabatic top, which is the package upside down: it
+    # forced every watt to leave through the most resistive path and none
+    # through the intended one. Peak temperatures from that configuration are
+    # not merely imprecise, they answer a different problem.
+    bottom_bc: str = "neumann"   # "robin" | "dirichlet" | "neumann"
+    top_bc: str = "robin"        # "robin" | "dirichlet" | "neumann"
     side_bc: str = "neumann"     # only "neumann" supported (adiabatic)
+
+    @property
+    def sink_face(self) -> str:
+        """'top' or 'bottom' -- whichever face carries the non-adiabatic BC."""
+        return "bottom" if self.bottom_bc != "neumann" else "top"
+
+    @property
+    def sink_bc(self) -> str:
+        """'robin' or 'dirichlet' -- the kind of sink on the sink face."""
+        return self.bottom_bc if self.bottom_bc != "neumann" else self.top_bc
 
     def validate(self) -> None:
         if self.dx <= 0 or self.dy <= 0 or self.dz <= 0:
             raise ThermalSolverError(f"Grid spacing must be positive, got dx={self.dx}, dy={self.dy}, dz={self.dz}")
-        if self.bottom_bc not in ("robin", "dirichlet"):
-            raise ThermalSolverError(f"bottom_bc must be 'robin' or 'dirichlet', got '{self.bottom_bc}'")
-        if self.top_bc != "neumann":
-            raise ThermalSolverError("top_bc: only 'neumann' (adiabatic) is currently supported.")
+        valid = ("robin", "dirichlet", "neumann")
+        for name, value in (("bottom_bc", self.bottom_bc), ("top_bc", self.top_bc)):
+            if value not in valid:
+                raise ThermalSolverError(f"{name} must be one of {valid}, got '{value}'")
+        sinks = [n for n, v in (("bottom_bc", self.bottom_bc), ("top_bc", self.top_bc))
+                 if v != "neumann"]
+        if len(sinks) != 1:
+            raise ThermalSolverError(
+                f"Exactly one of bottom_bc / top_bc must be the heat sink ('robin' or "
+                f"'dirichlet') and the other adiabatic ('neumann'); got bottom_bc="
+                f"'{self.bottom_bc}', top_bc='{self.top_bc}'. Two sinks would make the "
+                f"cooling path ambiguous; zero sinks leaves the steady state undefined up "
+                f"to an additive constant and the operator singular."
+            )
         if self.side_bc != "neumann":
             raise ThermalSolverError("side_bc: only 'neumann' (adiabatic) is currently supported.")
-        if self.bottom_bc == "robin" and self.h_convective <= 0:
+        if self.sink_bc == "robin" and self.h_convective <= 0:
             raise ThermalSolverError(f"h_convective must be > 0 for Robin BC, got {self.h_convective}")
 
 
@@ -207,7 +245,8 @@ class ThermalSolver:
     heterogeneous, anisotropic 3D IC / advanced-packaging stacks.
 
     Array indexing convention matches GridBuilder: [ix, iy, iz], iz=0 is the
-    bottom (heat-sink) face, iz=nz-1 is the top (adiabatic) face.
+    bottom face, iz=nz-1 the top. The heat sink is whichever z-face
+    SolverBCConfig makes non-adiabatic (index self._sink_k); the top by default.
     """
 
     def __init__(
@@ -259,7 +298,11 @@ class ThermalSolver:
         # coefficients once at construction -- these depend only on the material
         # maps, not on T, so recomputing them every step would be wasted work.
         self._kx_face, self._ky_face, self._kz_face = self._assemble_face_conductivities()
-        self._bottom_boundary_coeff = self._assemble_boundary_coefficients()
+        # z-index of the heat-sink face. Every boundary term below indexes
+        # this rather than a hardcoded 0, so flipping the sink is a one-line
+        # configuration change and not a code change.
+        self._sink_k = 0 if self.bc.sink_face == "bottom" else self.nz - 1
+        self._sink_boundary_coeff = self._assemble_boundary_coefficients()
 
         # Sparse linear conduction operator for the implicit (Crank-Nicolson)
         # time-stepper. Built once here since it depends only on the static
@@ -287,9 +330,9 @@ class ThermalSolver:
 
         logger.info(
             "ThermalSolver initialized: shape=%s, dx=%.2eum dy=%.2eum dz=%.2eum, "
-            "bottom_bc=%s, t_ambient=%.2fK",
+            "sink=%s (%s), t_ambient=%.2fK",
             self.shape, self.bc.dx * 1e6, self.bc.dy * 1e6, self.bc.dz * 1e6,
-            self.bc.bottom_bc, self.bc.t_ambient_k,
+            self.bc.sink_face, self.bc.sink_bc, self.bc.t_ambient_k,
         )
 
     # ------------------------------------------------------------------
@@ -354,14 +397,15 @@ class ThermalSolver:
     def _assemble_boundary_coefficients(self) -> np.ndarray:
         """
         Coefficient (W/m^3K per unit T-difference, i.e. units matching
-        k/d^2) for the bottom (iz=0) boundary face, per the chosen BC:
+        k/d^2) for the HEAT-SINK face -- iz = self._sink_k, which is nz-1 for
+        the default top sink or 0 for a bottom sink -- per the chosen BC:
           - Dirichlet: half-cell-distance ghost at fixed T_ambient ->
-                coeff = 2 * kz[:, :, 0] / dz^2
+                coeff = 2 * kz[:, :, sink_k] / dz^2
           - Robin (convective film): coeff = h_convective / dz
-        Returned as a (nx, ny) array (broadcastable over the bottom layer).
+        Returned as a (nx, ny) array, broadcastable over the sink layer.
         """
-        if self.bc.bottom_bc == "dirichlet":
-            coeff = 2.0 * self.kz_map[:, :, 0] / (self.bc.dz ** 2)
+        if self.bc.sink_bc == "dirichlet":
+            coeff = 2.0 * self.kz_map[:, :, self._sink_k] / (self.bc.dz ** 2)
         else:  # robin
             coeff = np.full((self.nx, self.ny), self.bc.h_convective / self.bc.dz, dtype=np.float64)
         return coeff
@@ -375,8 +419,8 @@ class ThermalSolver:
             dT/dt = M @ T_flat + b + Q_flat / rho_cp_flat
 
         i.e. M encodes exactly the same physics as _compute_divergence()
-        (harmonic-mean face conductivities, adiabatic top/sides, Robin/
-        Dirichlet bottom BC) but as an explicit sparse matrix instead of a
+        (harmonic-mean face conductivities, adiabatic sides and non-sink
+        z-face, Robin/Dirichlet sink face) but as an explicit sparse matrix instead of a
         vectorized stencil pass -- required for the implicit (Crank-
         Nicolson) time-stepper, which needs to solve a linear system rather
         than just evaluate the operator once per step.
@@ -428,13 +472,14 @@ class ThermalSolver:
         add_axis_couplings(self._ky_face, self.bc.dy, axis=1)
         add_axis_couplings(self._kz_face, self.bc.dz, axis=2)
 
-        # Bottom (z=0) boundary term: self-coupling only (references the
-        # external T_ambient, which becomes part of the constant forcing
-        # vector `b`, not the linear operator M).
-        idx_bottom = flat_idx(ii[:, :, 0], jj[:, :, 0], kk[:, :, 0]).ravel()
-        coeff_b_flat = self._bottom_boundary_coeff.ravel()
-        rho_cp_bottom = rho_cp_flat[idx_bottom]
-        rows.append(idx_bottom); cols.append(idx_bottom); data.append(-coeff_b_flat / rho_cp_bottom)
+        # Sink-face boundary term (z = self._sink_k): self-coupling only
+        # (references the external T_ambient, which becomes part of the
+        # constant forcing vector `b`, not the linear operator M).
+        k = self._sink_k
+        idx_sink = flat_idx(ii[:, :, k], jj[:, :, k], kk[:, :, k]).ravel()
+        coeff_b_flat = self._sink_boundary_coeff.ravel()
+        rho_cp_sink = rho_cp_flat[idx_sink]
+        rows.append(idx_sink); cols.append(idx_sink); data.append(-coeff_b_flat / rho_cp_sink)
 
         row_arr = np.concatenate(rows)
         col_arr = np.concatenate(cols)
@@ -444,7 +489,7 @@ class ThermalSolver:
         M.sum_duplicates()
 
         boundary_forcing = np.zeros(N, dtype=np.float64)
-        boundary_forcing[idx_bottom] = (coeff_b_flat * self.bc.t_ambient_k) / rho_cp_bottom
+        boundary_forcing[idx_sink] = (coeff_b_flat * self.bc.t_ambient_k) / rho_cp_sink
 
         return M, boundary_forcing
 
@@ -456,7 +501,8 @@ class ThermalSolver:
         Computes the full conservative divergence term
             d/dx(kx dT/dx) + d/dy(ky dT/dy) + d/dz(kz dT/dz)
         evaluated at the current temperature field T, with adiabatic
-        (Neumann) BCs on top/sides and the configured BC on the bottom face.
+        (Neumann) BCs on the sides and the non-sink z-face, and the
+        configured BC on the sink face (index self._sink_k).
         Returns an array of shape self.shape with units W/m^3 (pre rho*cp
         division).
         """
@@ -474,24 +520,25 @@ class ThermalSolver:
         div[:, 0, :] += flux_y[:, 0, :] / self.bc.dy
         div[:, -1, :] += -flux_y[:, -1, :] / self.bc.dy
 
-        # --- z-direction: interior faces (top is adiabatic, handled by the
-        # same "no flux beyond domain" logic as x/y; bottom gets the special
-        # Robin/Dirichlet boundary term added on top of the interior coupling
-        # to the z=1 layer) ---
+        # --- z-direction ---
+        # Interior coupling first, for EVERY layer including both end faces.
+        # Each end couples only to its single inward neighbour, exactly as the
+        # adiabatic x/y ends do.
         flux_z = self._kz_face * (T[:, :, 1:] - T[:, :, :-1]) / self.bc.dz  # (nx,ny,nz-1)
         div[:, :, 1:-1] += (flux_z[:, :, 1:] - flux_z[:, :, :-1]) / self.bc.dz
-        div[:, :, -1] += -flux_z[:, :, -1] / self.bc.dz  # top: adiabatic, no term beyond domain
+        div[:, :, 0] += flux_z[:, :, 0] / self.bc.dz     # couples up to z=1
+        div[:, :, -1] += -flux_z[:, :, -1] / self.bc.dz  # couples down to z=nz-2
 
-        # z=0 layer: interior coupling to z=1 (from flux_z[...,0]) PLUS the
-        # boundary exchange with T_ambient through the configured BC.
-        if self.bc.bottom_bc == "dirichlet":
-            boundary_flux = self._bottom_boundary_coeff * (T[:, :, 0] - self.bc.t_ambient_k)
-        else:  # robin
-            boundary_flux = self._bottom_boundary_coeff * (T[:, :, 0] - self.bc.t_ambient_k)
-            # NOTE: for Robin the coefficient already equals h/dz (units differ
-            # from the Dirichlet 2k/dz^2 case) but the flux expression has the
-            # same form: coeff * (T_cell - T_ambient).
-        div[:, :, 0] += flux_z[:, :, 0] / self.bc.dz - boundary_flux
+        # Then the sink term, on whichever face carries it. Keeping the two
+        # separate matters: the interior coupling exists at BOTH ends
+        # regardless of where the sink is, and folding them together (as this
+        # did while the sink was hardcoded to z=0) silently drops one of them
+        # the moment the sink moves to the top.
+        k = self._sink_k
+        # For Robin the coefficient is h/dz; for Dirichlet it is 2k/dz^2. The
+        # units differ but the flux has the same form: coeff * (T_cell - T_amb).
+        boundary_flux = self._sink_boundary_coeff * (T[:, :, k] - self.bc.t_ambient_k)
+        div[:, :, k] -= boundary_flux
 
         return div
 
@@ -528,11 +575,8 @@ class ThermalSolver:
         right_z = np.zeros(self.shape); right_z[:, :, :-1] = cz
         total += left_z + right_z
 
-        # Bottom boundary coefficient adds to the diagonal of the z=0 layer.
-        if self.bc.bottom_bc == "dirichlet":
-            total[:, :, 0] += self._bottom_boundary_coeff
-        else:
-            total[:, :, 0] += self._bottom_boundary_coeff  # h/dz, same additive role
+        # Sink boundary coefficient adds to the diagonal of the sink layer.
+        total[:, :, self._sink_k] += self._sink_boundary_coeff
 
         return total
 
@@ -593,11 +637,12 @@ class ThermalSolver:
         """
         v_cell = self.bc.dx * self.bc.dy * self.bc.dz
         c_total = float(np.sum(self._rho_cp)) * v_cell            # J/K
-        g_boundary = float(np.sum(self._bottom_boundary_coeff)) * v_cell   # W/K
+        g_boundary = float(np.sum(self._sink_boundary_coeff)) * v_cell   # W/K
         if g_boundary <= 0:
             raise ThermalSolverError(
                 "Total boundary conductance is non-positive, so the package has no path "
-                "to ambient and no finite time constant exists. Check the bottom BC."
+                "to ambient and no finite time constant exists. Check the sink-face BC "
+                "(bottom_bc / top_bc)."
             )
         return c_total / g_boundary
 
@@ -953,9 +998,9 @@ class ThermalSolver:
 
         Check 2 (physical): at equilibrium the net rate of change is zero
         everywhere, so summing rho_cp * (dT/dt) over the domain gives total
-        generation minus total boundary loss = 0. Expressed in the operator's
-        own units, total power in must equal total power out through the
-        bottom boundary.
+        generation minus total boundary loss = 0: total power in must equal
+        total power out through the sink face. Note the rho_cp weighting --
+        the balance is taken on A = rho_cp * M, not on M; see the code below.
         """
         N = self.nx * self.ny * self.nz
         M = self._conduction_operator
@@ -973,10 +1018,20 @@ class ThermalSolver:
             )
 
         # --- 2. physical energy balance, independent of the discretization ---
+        # UNWEIGHTED sums. Conservation holds on A = rho_cp * M, the symmetric
+        # conductance matrix, whose interior face fluxes cancel exactly. It
+        # does not hold on M itself once rho_cp varies: dividing each row by
+        # its own rho_cp stops those fluxes cancelling. The earlier form here,
+        # sum(q / rho_cp) against sum(coeff / rho_cp * (T - T_amb)), was exact
+        # only when every source cell and every sink cell share one rho_cp --
+        # true of the standard stack (die and interposer both silicon), so it
+        # never fired, but with a copper sink layer over a silicon source it
+        # reported a 47.97 K imbalance on a correct solve (measured; see
+        # test_energy_balance_holds_when_sink_and_source_materials_differ).
         T_grid = T_flat.reshape(self.shape)
-        boundary_conductance = self._bottom_boundary_coeff / self._rho_cp[:, :, 0]
-        power_in = float(np.sum(self.q_map / self._rho_cp))
-        power_out = float(np.sum(boundary_conductance * (T_grid[:, :, 0] - self.bc.t_ambient_k)))
+        boundary_conductance = self._sink_boundary_coeff               # W/(m^3 K)
+        power_in = float(np.sum(self.q_map))                           # W/m^3; x V_cell = W
+        power_out = float(np.sum(boundary_conductance * (T_grid[:, :, self._sink_k] - self.bc.t_ambient_k)))
 
         # Normalize by the total boundary conductance so the result is an
         # equivalent surface-temperature error in kelvin. A ratio would be
@@ -986,7 +1041,8 @@ class ThermalSolver:
         if total_conductance <= 0:
             raise ThermalSolverError(
                 "Total boundary conductance is non-positive, so no heat can leave the "
-                "domain and no steady state exists. Check h_convective and the bottom BC."
+                "domain and no steady state exists. Check h_convective and the sink-face "
+                "BC (bottom_bc / top_bc)."
             )
         imbalance_k = abs(power_in - power_out) / total_conductance
         if not np.isfinite(imbalance_k) or imbalance_k > STEADY_ENERGY_BALANCE_TOL_K:
@@ -1000,7 +1056,7 @@ class ThermalSolver:
             )
 
         # --- 3. the peak must clear the convective floor ---
-        # At steady state the mean bottom-surface rise is pinned to P/(h*A) by
+        # At steady state the mean sink-face rise is pinned to P/(h*A) by
         # check 2, and the peak is a maximum over a field that includes that
         # surface, so peak_rise >= P/(h*A) necessarily. Cheap to assert, and
         # it catches a whole class of reporting error: a number that is not
@@ -1008,11 +1064,11 @@ class ThermalSolver:
         # has happened twice in review, where an "improvement" of ~39 K was
         # read as a peak and appeared to violate a 90 K floor.
         peak_rise = float(np.max(T_grid)) - self.bc.t_ambient_k
-        mean_bottom_rise = float(np.mean(T_grid[:, :, 0])) - self.bc.t_ambient_k
-        if peak_rise < mean_bottom_rise - STEADY_ENERGY_BALANCE_TOL_K:
+        mean_sink_rise = float(np.mean(T_grid[:, :, self._sink_k])) - self.bc.t_ambient_k
+        if peak_rise < mean_sink_rise - STEADY_ENERGY_BALANCE_TOL_K:
             raise ThermalSolverError(
-                f"Peak rise {peak_rise:.6f} K is below the mean bottom-surface rise "
-                f"{mean_bottom_rise:.6f} K, which is impossible: the peak is a maximum over "
+                f"Peak rise {peak_rise:.6f} K is below the mean sink-face rise "
+                f"{mean_sink_rise:.6f} K, which is impossible: the peak is a maximum over "
                 f"a field that contains that surface. This indicates a corrupted field or a "
                 f"mis-assembled operator."
             )
@@ -1021,7 +1077,7 @@ class ThermalSolver:
             "residual": resid,
             "energy_imbalance_k": imbalance_k,
             "peak_rise_k": peak_rise,
-            "mean_bottom_rise_k": mean_bottom_rise,
+            "mean_sink_rise_k": mean_sink_rise,
         }
 
     def solve_steady_state(self, apply_result: bool = True) -> np.ndarray:
@@ -1039,8 +1095,8 @@ class ThermalSolver:
         wanted for hotspot analysis (peak steady-state die temperature)
         rather than any particular elapsed-time snapshot.
 
-        Only well-posed because bottom_bc is always Robin or Dirichlet
-        (never pure Neumann everywhere) -- that boundary term is what keeps
+        Only well-posed because exactly one of bottom_bc / top_bc is always
+        Robin or Dirichlet (never pure Neumann everywhere) -- that boundary term is what keeps
         M non-singular. A hypothetical fully-adiabatic domain would leave
         the steady state defined only up to an additive constant and this
         solve would fail or blow up; SolverBCConfig.validate() already
@@ -1066,12 +1122,13 @@ class ThermalSolver:
         not supported; rebuild the solver instead.
 
         A useful independent check on any result this returns: at steady
-        state all generated power must leave through the Robin boundary, so
+        state all generated power must leave through the Robin sink face, so
 
-            mean(T[:, :, 0]) - T_ambient == P / (h * A)
+            mean(T[:, :, sink_k]) - T_ambient == P / (h * A)
 
-        exactly, independent of the mesh. A deviation indicates a failed
-        solve rather than discretization error.
+        exactly, independent of the mesh, where sink_k is the heat-sink face
+        (nz-1 by default, i.e. the die backside). A deviation indicates a
+        failed solve rather than discretization error.
 
         Parameters
         ----------
@@ -1251,7 +1308,7 @@ if __name__ == "__main__":
     }
     bc_config = SolverBCConfig(dx=25e-6, dy=25e-6, dz=10e-6,
                                 t_ambient_k=298.15, h_convective=2500.0,
-                                bottom_bc="robin")
+                                bottom_bc="neumann", top_bc="robin")
 
     solver = ThermalSolver(grid_arrays, bc_config)
     dt_max = solver.compute_max_dt(safety_factor=0.9)

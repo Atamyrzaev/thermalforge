@@ -84,7 +84,8 @@ _EPS = 1e-30
 def make_pipeline_config(
     nx: int = 10, ny: int = 10, nz: int = 12,
     dx: float = 25e-6, dy: float = 25e-6, dz: float = 10e-6,
-    t_ambient_c: float = 25.0, h_convective: float = 2500.0, bottom_bc: str = "robin",
+    t_ambient_c: float = 25.0, h_convective: float = 2500.0,
+    bottom_bc: str = "neumann", top_bc: str = "robin",
     interposer_um: Optional[float] = None, bump_um: Optional[float] = None,
     die_um: Optional[float] = None,
     die_power_w: float = 0.05, die_footprint_frac: float = 0.5,
@@ -106,7 +107,8 @@ def make_pipeline_config(
     return PipelineConfig(
         grid=GridSection(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz),
         boundary_conditions=BoundaryConditionsSection(
-            t_ambient_c=t_ambient_c, h_convective=h_convective, bottom_bc=bottom_bc,
+            t_ambient_c=t_ambient_c, h_convective=h_convective,
+            bottom_bc=bottom_bc, top_bc=top_bc,
         ),
         stack=StackSection(interposer_um=interposer_um, bump_um=bump_um, die_um=die_um),
         power=PowerSection(die_power_w=die_power_w, die_footprint_frac=die_footprint_frac),
@@ -186,11 +188,12 @@ def reference_max_dt(gb: GridBuilder, safety_factor: float = 1.0) -> float:
     right = np.zeros_like(kz); right[:, :, :-1] = kzf
     total += left + right
 
-    if gb.config.bottom_bc == "dirichlet":
-        coeff_b = 2.0 * kz[:, :, 0] / dz ** 2
+    sink_k = 0 if gb.config.sink_face == "bottom" else nz - 1
+    if gb.config.sink_bc == "dirichlet":
+        coeff_b = 2.0 * kz[:, :, sink_k] / dz ** 2
     else:
         coeff_b = np.full((nx, ny), gb.config.h_convective / dz)
-    total[:, :, 0] += coeff_b
+    total[:, :, sink_k] += coeff_b
 
     dt_per_cell = (rho * cp) / total
     return float(np.min(dt_per_cell)) * safety_factor
@@ -217,7 +220,7 @@ class TestConfigDictInterface:
             "grid": {"nx": 8, "ny": 8, "nz": 10, "dx": 25e-6, "dy": 25e-6, "dz": 10e-6},
             "boundary_conditions": {
                 "t_ambient_k": 298.15, "h_convective": 2500.0,
-                "bottom_bc": "robin", "top_bc": "neumann", "side_bc": "neumann",
+                "bottom_bc": "neumann", "top_bc": "robin", "side_bc": "neumann",
             },
         }
         gb = GridBuilder(config=raw)
@@ -259,7 +262,7 @@ class TestCFLStability:
         ("bump_underfill_composite", "robin"),
     ])
     def test_compute_max_dt_matches_independent_reference(self, material, bottom_bc):
-        config = make_pipeline_config(bottom_bc=bottom_bc, die_power_w=0.0)
+        config = make_pipeline_config(bottom_bc=bottom_bc, top_bc="neumann", die_power_w=0.0)
         gb = build_uniform_grid(config, material)
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -332,7 +335,7 @@ class TestEnergyConservationAndPositivity:
         dt * (sum(Q*cell_vol) - sum(boundary_outflow*cell_area... )) exactly,
         i.e. the discretization neither creates nor destroys energy beyond
         the explicit source term and the explicit boundary exchange term."""
-        config = make_pipeline_config(die_power_w=0.08, bottom_bc="robin")
+        config = make_pipeline_config(die_power_w=0.08, bottom_bc="robin", top_bc="neumann")
         gb, *_ = build_stack_grid(config)
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -465,7 +468,7 @@ class TestRobinBoundaryConvection:
         gradient, so zero conduction anywhere), only the bottom (z=0) layer
         should change after one step -- via the Robin term referencing the
         external T_ambient -- while every other layer stays exactly fixed."""
-        config = make_pipeline_config(bottom_bc="robin", die_power_w=0.0, h_convective=1800.0)
+        config = make_pipeline_config(bottom_bc="robin", top_bc="neumann", die_power_w=0.0, h_convective=1800.0)
         gb = build_uniform_grid(config, "silicon")
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -491,7 +494,7 @@ class TestRobinBoundaryConvection:
         assert np.allclose(T1[:, :, 0], expected_bottom, rtol=1e-9, atol=1e-9)
 
     def test_robin_cools_toward_ambient_never_past_it(self):
-        config = make_pipeline_config(bottom_bc="robin", die_power_w=0.0)
+        config = make_pipeline_config(bottom_bc="robin", top_bc="neumann", die_power_w=0.0)
         gb = build_uniform_grid(config, "silicon")
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -516,7 +519,7 @@ class TestRobinBoundaryConvection:
         delta_T = 15.0
 
         def run_and_get_bottom_mean(h_value: float) -> float:
-            config = make_pipeline_config(bottom_bc="robin", die_power_w=0.0, h_convective=h_value)
+            config = make_pipeline_config(bottom_bc="robin", top_bc="neumann", die_power_w=0.0, h_convective=h_value)
             gb = build_uniform_grid(config, "silicon")
             solver = ThermalSolver.from_grid_builder(gb)
             T_initial = np.full(solver.shape, solver.bc.t_ambient_k + delta_T, dtype=np.float64)
@@ -538,7 +541,7 @@ class TestRobinBoundaryConvection:
         """Cross-check the Dirichlet boundary coefficient (2*k/dz^2) used
         internally by comparing its effect against a hand-derived one-step
         prediction, analogous to the Robin isolation test above."""
-        config = make_pipeline_config(bottom_bc="dirichlet", die_power_w=0.0)
+        config = make_pipeline_config(bottom_bc="dirichlet", top_bc="neumann", die_power_w=0.0)
         gb = build_uniform_grid(config, "silicon")
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -641,7 +644,7 @@ class TestImplicitSolver:
         explicit scheme must also hold (to CN's linear-solve tolerance) for
         Crank-Nicolson: conduction redistributes energy internally and only
         Q and the boundary term are true sources/sinks."""
-        config = make_pipeline_config(die_power_w=0.08, bottom_bc="robin")
+        config = make_pipeline_config(die_power_w=0.08, bottom_bc="robin", top_bc="neumann")
         gb, *_ = build_stack_grid(config)
         solver = ThermalSolver.from_grid_builder(gb)
 
@@ -705,7 +708,8 @@ class TestSteadyStateSolve:
 
         coeff_b = np.full((config.grid.nx, config.grid.ny),
                            config.boundary_conditions.h_convective / config.grid.dz)
-        boundary_outflow = float(np.sum(coeff_b * (T_steady[:, :, 0] - solver.bc.t_ambient_k)))
+        sk = solver._sink_k
+        boundary_outflow = float(np.sum(coeff_b * (T_steady[:, :, sk] - solver.bc.t_ambient_k)))
         total_q = float(np.sum(solver.q_map))
 
         assert boundary_outflow == pytest.approx(total_q, rel=1e-4, abs=1e-9)
@@ -812,11 +816,65 @@ class TestSteadyStateVerification:
         with pytest.raises(ThermalSolverError, match="relative residual"):
             solver._verify_steady_state(corrupted, forcing)
 
-        # A uniform bottom-layer offset breaks the energy balance.
-        corrupted2 = T.copy()
-        corrupted2[:, :, 0] += 5.0
-        with pytest.raises(ThermalSolverError):
-            solver._verify_steady_state(corrupted2.reshape(N), forcing)
+        # The energy-balance check exists to catch a WRONG OPERATOR OR FORCING
+        # -- a field that exactly satisfies the system it was solved against,
+        # while that system is not the physics. Perturbing T cannot exercise
+        # it: any change to T also breaks the residual, which runs first, so
+        # the energy check is never reached. (An earlier version of this test
+        # did exactly that and passed on the residual while claiming to test
+        # conservation.)
+        #
+        # So inject a phantom heat source into the forcing but NOT into q_map.
+        # T_bad solves M T = -(forcing + phantom) exactly, so the residual
+        # against that forcing is at machine precision -- but the boundary now
+        # removes power that q_map never generated, which only the
+        # conservation check can see.
+        phantom = np.zeros(N)
+        phantom[N // 2] = 1.0e3
+        f_bad = forcing + phantom
+        T_bad = solver._steady_lu.solve(-f_bad)
+        with pytest.raises(ThermalSolverError, match="energy-balance"):
+            solver._verify_steady_state(T_bad, f_bad)
+
+    def test_energy_balance_holds_when_sink_and_source_materials_differ(self):
+        """Conservation is sum(q) == sum(coeff * (T_sink - T_amb)), UNWEIGHTED.
+
+        Interior face fluxes cancel exactly in the symmetric conductance
+        matrix A, but not in M = A / rho_cp. An earlier version of the check
+        compared sum(q / rho_cp) against sum(coeff / rho_cp * (T - T_amb)),
+        which is only equal when every heat-source cell and every sink cell
+        share one rho_cp. The standard stack happens to satisfy that (die and
+        interposer are both silicon), so it never fired -- but a lid or TIM on
+        the sink face breaks it. Here the sink layer is copper (rho*cp ~2.1x
+        silicon's) and the source sits in silicon: a correct solve must pass
+        verification, and the watts leaving the sink face -- computed here
+        from h, dx, dy alone, not from any solver internal -- must equal the
+        watts injected.
+        """
+        config = make_pipeline_config(nx=12, ny=12, nz=12, h_convective=2500.0,
+                                      bottom_bc="neumann", top_bc="robin")
+        nx, ny, nz = config.grid.nx, config.grid.ny, config.grid.nz
+        gb = GridBuilder(config=config.to_dict())
+        gb.assign_layer(slice(0, nz - 1), "silicon")
+        gb.assign_layer(slice(nz - 1, nz), "copper")
+        gb.tag_boundaries()
+        power_w = 0.01
+        gb.add_power_source(power_watts=power_w, x_slice=slice(3, 9), y_slice=slice(3, 9),
+                            z_slice=slice(nz // 2, nz // 2 + 1))
+        gb.validate_grid()
+        solver = ThermalSolver.from_grid_builder(gb)
+        assert solver._sink_k == nz - 1
+
+        rho_cp_sink = MATERIALS["copper"]["rho"] * MATERIALS["copper"]["cp"]
+        rho_cp_source = MATERIALS["silicon"]["rho"] * MATERIALS["silicon"]["cp"]
+        assert rho_cp_sink / rho_cp_source > 2.0   # the case under test
+
+        T = solver.solve_steady_state(apply_result=False)   # the weighted check raised here
+
+        dx, dy = config.grid.dx, config.grid.dy
+        h = config.boundary_conditions.h_convective
+        p_out = float(np.sum(h * dx * dy * (T[:, :, nz - 1] - solver.bc.t_ambient_k)))
+        assert p_out == pytest.approx(power_w, rel=1e-9)
 
     def test_cg_path_matches_the_exact_direct_solve(self):
         """The large-grid path is iterative, so it must be shown to agree with
@@ -1169,7 +1227,7 @@ class TestSteadyStateBackend:
         solver = ThermalSolver.from_grid_builder(gb)
 
         T = solver.solve_steady_state(apply_result=False)
-        rise = float(np.mean(T[:, :, 0])) - solver.bc.t_ambient_k
+        rise = float(np.mean(T[:, :, solver._sink_k])) - solver.bc.t_ambient_k
         expected = self._analytic_mean_bottom_rise(config, config.power.die_power_w)
 
         assert rise == pytest.approx(expected, rel=1e-6)
@@ -1218,7 +1276,7 @@ class TestSteadyStateBackend:
 
         assert np.max(np.abs(T_direct - T_iter)) < 1e-6
         # and the iterative result independently satisfies the physical invariant
-        rise = float(np.mean(T_iter[:, :, 0])) - solver_iter.bc.t_ambient_k
+        rise = float(np.mean(T_iter[:, :, solver_iter._sink_k])) - solver_iter.bc.t_ambient_k
         assert rise == pytest.approx(
             self._analytic_mean_bottom_rise(config, config.power.die_power_w), rel=1e-6
         )
@@ -1586,7 +1644,7 @@ class TestStage2PowerMatchesStage1:
         expected_floor = 12.0 / (config.boundary_conditions.h_convective * area)
         opt._apply_layout_to_q_map(opt.shelf_packed_layout())
         T = opt.solver.solve_steady_state(apply_result=False)
-        mean_bottom_rise = float(np.mean(T[:, :, 0])) - opt.solver.bc.t_ambient_k
+        mean_bottom_rise = float(np.mean(T[:, :, opt.solver._sink_k])) - opt.solver.bc.t_ambient_k
         assert mean_bottom_rise == pytest.approx(expected_floor, rel=1e-6)
 
     def test_scaling_rejects_a_zero_power_catalog(self):
@@ -1720,6 +1778,35 @@ class TestFactorizationReuse:
             ChipletPlacementOptimizer.from_pipeline_config(
                 config, catalog=optimizer_module.DEFAULT_CHIPLET_CATALOG,
                 reuse_solver=wrong,
+            )
+
+    def test_reuse_is_refused_when_sink_kind_differs_on_the_same_face(self):
+        """The case a bottom_bc-only identity check cannot see.
+
+        Both configurations sink through the TOP face and share shape,
+        spacing, h and every material map -- they differ only in whether that
+        top sink is Robin or Dirichlet. bottom_bc is 'neumann' in both, so a
+        guard comparing bottom_bc alone passes them as identical and reuses a
+        factorization of the Robin operator to solve a Dirichlet problem:
+        silently, a different chip. The guard must compare top_bc as well.
+        """
+        robin_top = make_pipeline_config(
+            nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6, dz=20e-6,
+            die_power_w=12.0, h_convective=1000.0,
+            bottom_bc="neumann", top_bc="robin",
+        )
+        dirichlet_top = make_pipeline_config(
+            nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6, dz=20e-6,
+            die_power_w=12.0, h_convective=1000.0,
+            bottom_bc="neumann", top_bc="dirichlet",
+        )
+        stage1 = ThermalSolver.from_grid_builder(main_module.build_chiplet_stack(robin_top))
+        assert stage1.bc.bottom_bc == dirichlet_top.boundary_conditions.bottom_bc
+
+        with pytest.raises(OptimizerError, match="top_bc differs"):
+            ChipletPlacementOptimizer.from_pipeline_config(
+                dirichlet_top, catalog=optimizer_module.DEFAULT_CHIPLET_CATALOG,
+                reuse_solver=stage1,
             )
 
     def test_batched_precompute_matches_loop(self):

@@ -79,8 +79,11 @@ class GridSection:
 class BoundaryConditionsSection:
     t_ambient_c: float = 25.0
     h_convective: float = 2500.0
-    bottom_bc: str = "robin"      # "robin" | "dirichlet"
-    top_bc: str = "neumann"       # only "neumann" currently supported
+    # Sink on the TOP face by default: a CoWoS part cools through the die
+    # backside into TIM1/lid/TIM2/heatsink, not down through the interposer.
+    # Exactly one of bottom_bc / top_bc is the sink; the other is adiabatic.
+    bottom_bc: str = "neumann"    # "robin" | "dirichlet" | "neumann"
+    top_bc: str = "robin"         # "robin" | "dirichlet" | "neumann"
     side_bc: str = "neumann"      # only "neumann" currently supported
 
 
@@ -215,11 +218,22 @@ class PipelineConfig:
             raise ConfigError(f"grid.dx/dy/dz must be positive, got ({g.dx}, {g.dy}, {g.dz})")
 
         bc = self.boundary_conditions
-        if bc.bottom_bc not in ("robin", "dirichlet"):
-            raise ConfigError(f"boundary_conditions.bottom_bc must be 'robin' or 'dirichlet', got '{bc.bottom_bc}'")
-        if bc.top_bc != "neumann" or bc.side_bc != "neumann":
-            raise ConfigError("boundary_conditions.top_bc/side_bc: only 'neumann' is currently supported.")
-        if bc.bottom_bc == "robin" and bc.h_convective <= 0:
+        valid_bc = ("robin", "dirichlet", "neumann")
+        for name, value in (("bottom_bc", bc.bottom_bc), ("top_bc", bc.top_bc)):
+            if value not in valid_bc:
+                raise ConfigError(f"boundary_conditions.{name} must be one of {valid_bc}, "
+                                   f"got '{value}'")
+        sink_faces = [n for n, v in (("bottom_bc", bc.bottom_bc), ("top_bc", bc.top_bc))
+                      if v != "neumann"]
+        if len(sink_faces) != 1:
+            raise ConfigError(
+                f"Exactly one of boundary_conditions.bottom_bc / top_bc must be the heat "
+                f"sink ('robin' or 'dirichlet'), the other 'neumann'; got bottom_bc="
+                f"'{bc.bottom_bc}', top_bc='{bc.top_bc}'.")
+        if bc.side_bc != "neumann":
+            raise ConfigError("boundary_conditions.side_bc: only 'neumann' is supported.")
+        sink_kind = bc.bottom_bc if bc.bottom_bc != "neumann" else bc.top_bc
+        if sink_kind == "robin" and bc.h_convective <= 0:
             raise ConfigError(f"boundary_conditions.h_convective must be > 0 for Robin BC, got {bc.h_convective}")
 
         s = self.stack

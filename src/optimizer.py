@@ -497,7 +497,11 @@ class ChipletPlacementOptimizer:
         catalog: Sequence[ChipletSpec] = DEFAULT_CHIPLET_CATALOG,
         t_ambient_c: float = 25.0,
         h_convective: float = 1000.0,
-        bottom_bc: str = "robin",
+        # Heat sink on the TOP face (die backside -> TIM -> lid -> heatsink),
+        # which is how a CoWoS part actually cools. Exactly one of the two is
+        # the sink; the other is adiabatic.
+        bottom_bc: str = "neumann",
+        top_bc: str = "robin",
         stack: Optional["StackSection"] = None,
         placement_pitch_um: float = DEFAULT_PLACEMENT_PITCH_UM,
         reuse_solver: Optional[ThermalSolver] = None,
@@ -616,8 +620,13 @@ class ChipletPlacementOptimizer:
             "boundary_conditions": {
                 "t_ambient_k": self.t_ambient_c + 273.15,
                 "h_convective": float(h_convective),
+                # Both faces come from the caller. This dict previously
+                # hardcoded "top_bc": "neumann", which silently pinned Stage 2
+                # to a bottom sink regardless of the pipeline configuration --
+                # and, once the default sink moved to the top, left BOTH faces
+                # adiabatic and crashed every Stage 2 run.
                 "bottom_bc": bottom_bc,
-                "top_bc": "neumann",
+                "top_bc": top_bc,
                 "side_bc": "neumann",
             },
         }
@@ -695,11 +704,19 @@ class ChipletPlacementOptimizer:
                 raise OptimizerError(
                     f"Cannot reuse solver: {name} differs ({a!r} != {b!r})."
                 )
-        if solver.bc.bottom_bc != cfg.bottom_bc:
-            raise OptimizerError(
-                f"Cannot reuse solver: bottom_bc differs "
-                f"({solver.bc.bottom_bc!r} != {cfg.bottom_bc!r})."
-            )
+        # BOTH faces, not just the bottom. The sink can now sit on either face,
+        # and the cached factorization encodes which one: a solver that sinks
+        # through the top and a grid that sinks through the bottom have the
+        # same shape, spacing and materials, so checking bottom_bc alone would
+        # pass them as identical and reuse a factorization of the wrong
+        # operator -- silently solving a different chip.
+        for face in ("bottom_bc", "top_bc"):
+            a, b = getattr(solver.bc, face), getattr(cfg, face)
+            if a != b:
+                raise OptimizerError(
+                    f"Cannot reuse solver: {face} differs ({a!r} != {b!r}). The cached "
+                    f"factorization encodes which face is the heat sink."
+                )
         for name, a, b in (("kx_map", solver.kx_map, gb.kx_map),
                            ("ky_map", solver.ky_map, gb.ky_map),
                            ("kz_map", solver.kz_map, gb.kz_map),
@@ -788,6 +805,7 @@ class ChipletPlacementOptimizer:
             t_ambient_c=config.boundary_conditions.t_ambient_c,
             h_convective=config.boundary_conditions.h_convective,
             bottom_bc=config.boundary_conditions.bottom_bc,
+            top_bc=config.boundary_conditions.top_bc,
             stack=config.stack,
             reuse_solver=reuse_solver,
             seed=seed,

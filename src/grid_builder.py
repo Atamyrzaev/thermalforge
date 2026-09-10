@@ -74,9 +74,19 @@ class GridConfig:
     dz: float
     t_ambient_k: float = 298.15          # 25 degC in Kelvin
     h_convective: float = 2500.0          # W/m^2K, midpoint of 1000-5000
-    bottom_bc: BoundaryType = "robin"
-    top_bc: BoundaryType = "neumann"
+    bottom_bc: BoundaryType = "neumann"
+    top_bc: BoundaryType = "robin"
     side_bc: BoundaryType = "neumann"
+
+    @property
+    def sink_face(self) -> str:
+        """'top' or 'bottom' -- whichever face carries the non-adiabatic BC."""
+        return "bottom" if self.bottom_bc != "neumann" else "top"
+
+    @property
+    def sink_bc(self) -> str:
+        """'robin' or 'dirichlet' -- the kind of sink on the sink face."""
+        return self.bottom_bc if self.bottom_bc != "neumann" else self.top_bc
 
     def validate(self) -> None:
         if min(self.nx, self.ny, self.nz) <= 0:
@@ -112,13 +122,18 @@ class GridConfig:
                 "steady-state operator becomes poorly conditioned and iterative solves "
                 "may need many more iterations.", aspect, self.dx, self.dz,
             )
-        if self.bottom_bc not in ("dirichlet", "robin"):
-            raise ValueError(f"bottom_bc must be 'dirichlet' or 'robin', got {self.bottom_bc}")
-        if self.top_bc != "neumann" or self.side_bc != "neumann":
-            logger.warning(
-                "Top/side BC is non-adiabatic (%s/%s); confirm this is intentional.",
-                self.top_bc, self.side_bc,
-            )
+        valid = ("dirichlet", "robin", "neumann")
+        for name, value in (("bottom_bc", self.bottom_bc), ("top_bc", self.top_bc)):
+            if value not in valid:
+                raise ValueError(f"{name} must be one of {valid}, got {value}")
+        sinks = [v for v in (self.bottom_bc, self.top_bc) if v != "neumann"]
+        if len(sinks) != 1:
+            raise ValueError(
+                f"Exactly one of bottom_bc / top_bc must be the heat sink; got "
+                f"bottom_bc={self.bottom_bc}, top_bc={self.top_bc}")
+        if self.side_bc != "neumann":
+            logger.warning("Side BC is non-adiabatic (%s); confirm this is intentional.",
+                           self.side_bc)
 
 
 class GridBuilderError(Exception):
@@ -131,8 +146,10 @@ class GridBuilder:
     TSMC-style advanced packaging thermal stack (CoWoS-S / SoIC / InFO).
 
     Arrays are indexed [ix, iy, iz] with ix in [0, nx), iy in [0, ny),
-    iz in [0, nz). iz=0 is the bottom of the stack (heat sink interface)
-    by convention; iz=nz-1 is the topmost layer.
+    iz in [0, nz). iz=0 is the bottom of the stack (interposer underside);
+    iz=nz-1 is the topmost layer (die backside). Which of the two faces is
+    the heat sink is a boundary condition, not an indexing convention -- see
+    GridConfig.sink_face; the default is the top.
     """
 
     DEFAULT_CONFIG_PATH = os.path.join("config", "simulation_config.json")
@@ -218,8 +235,8 @@ class GridBuilder:
             dz=float(grid_section.get("dz", 10e-6)),
             t_ambient_k=float(bc_section.get("t_ambient_k", 298.15)),
             h_convective=float(bc_section.get("h_convective", 2500.0)),
-            bottom_bc=bc_section.get("bottom_bc", "robin"),
-            top_bc=bc_section.get("top_bc", "neumann"),
+            bottom_bc=bc_section.get("bottom_bc", "neumann"),
+            top_bc=bc_section.get("top_bc", "robin"),
             side_bc=bc_section.get("side_bc", "neumann"),
         )
 
@@ -387,13 +404,14 @@ class GridBuilder:
     def tag_boundaries(self) -> None:
         """
         Populate boundary_mask with face flags for voxels adjacent to the
-        6 outer faces of the domain, so ThermalSolver can apply the correct
-        Dirichlet/Robin (bottom) or Neumann (top/sides) BC without re-deriving
-        adjacency at solve time.
+        6 outer faces of the domain. These bits are pure GEOMETRY -- which
+        face a voxel touches -- and say nothing about which face is the heat
+        sink. That is set by GridConfig.bottom_bc / top_bc (see sink_face);
+        the default is the TOP face, the die backside.
         """
         self.boundary_mask[:, :, :] = 0
-        self.boundary_mask[:, :, 0] |= 0b000001         # bottom (-z): sink interface
-        self.boundary_mask[:, :, -1] |= 0b000010        # top (+z): adiabatic
+        self.boundary_mask[:, :, 0] |= 0b000001         # bottom (-z) face
+        self.boundary_mask[:, :, -1] |= 0b000010        # top (+z) face
         self.boundary_mask[0, :, :] |= 0b000100         # -x side
         self.boundary_mask[-1, :, :] |= 0b001000        # +x side
         self.boundary_mask[:, 0, :] |= 0b010000         # -y side
