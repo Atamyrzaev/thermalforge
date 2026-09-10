@@ -5,16 +5,16 @@ RISC3D-AI :: End-to-End 3D IC Thermal Simulation Pipeline (Interactive CLI)
 
 Entry point that:
   1. Prompts the user directly in the terminal for all simulation parameters
-     (grid size, spacing, ambient temp, convective coefficient, die power,
-     step count, safety factor) -- NO configs/config.json dependency for
-     the default interactive workflow. Press Enter on any prompt to accept
-     the bracketed default.
+     (grid size, spacing, ambient temp, cooling preset, convective
+     coefficient, die power, safety factor) -- NO configs/config.json
+     dependency for the default interactive workflow. Press Enter on any
+     prompt to accept the bracketed default.
   2. Configures a multi-layer TSMC-style advanced-packaging chiplet stack
      (Interposer -> Microbump+Underfill composite -> Silicon Die with an
      active compute-block power density Q) via src.grid_builder.GridBuilder.
-  3. Constructs src.thermal_solver.ThermalSolver, computes the automated
-     CFL-stable timestep, and runs the explicit solver for exactly the
-     requested number of steps.
+  3. Constructs src.thermal_solver.ThermalSolver and solves the steady state
+     directly (one sparse linear solve). A transient is opt-in via
+     --transient <ms>, time-stepped at the automated CFL-stable dt.
   4. Renders the result as a single interactive WebGL 3D HTML file
      (orbit/zoom/pan, Z-layer slicing, click-to-inspect voxel temperatures)
      via src.visualization.ThermalVisualizer.render_interactive_webgl(),
@@ -52,29 +52,36 @@ STAGE 2 DIE-SIZE NOTE:
 Stage 2's chiplet footprints are PHYSICAL (micrometers, see
 src.optimizer.ChipletSpec) and do not shrink when the mesh is refined, so the
 die must be large enough in real terms: nx*dx by ny*dy. The default catalog is
-192 mm^2 of realistic blocks, which does NOT fit on this file's default grid
-(60x60 at 25 um = a 1.5 x 1.5 mm die). Passing --optimize with a die that is
-too small, or with a grid that would push Stage 2 onto the non-converging
-iterative solver path, exits EXIT_PREFLIGHT_FAILED (2) BEFORE any solving,
-with a concrete suggested command. Exit 2 therefore means "this configuration
-cannot work", distinct from exit 1 for a genuine runtime failure.
+192 mm^2 of realistic blocks; the default grid (40x40 at 500 um) is a 20 x 20
+mm die and holds it at 48% fill. Passing --optimize with a die that is too
+small exits EXIT_PREFLIGHT_FAILED (2) BEFORE any solving, with a concrete
+suggested command. Exit 2 therefore means "this configuration cannot work",
+distinct from exit 1 for a genuine runtime failure.
+
+COOLING REGIME NOTE:
+Every absolute temperature here is set mostly by one input, the effective
+sink coefficient h, and results at different h describe different products.
+So the regime is always named: two presets (COOLING_PRESETS), and a header
+that prints the heat flux in W/cm^2, the 1/(h*A) floor on R_ja and the
+lateral spreading length lambda before anything is solved, then the measured
+R_ja with the result. See the COOLING REGIMES block below for why lambda
+decides whether Stage 2 placement is worth running at all.
 
 Usage:
     python main.py                     # interactive prompts (default)
     python main.py --config foo.json   # load parameters from a JSON file instead
-    python main.py --nx 80 --ny 80 --nz 50 --die-power-w 20   # non-interactive, explicit flags
+    python main.py --preset cowos-coldplate                      # 150 W, h = 25000
+    python main.py --preset cowos-coldplate --h-convective 10000 # reported as 'custom'
+    python main.py --die-power-w 20 --h-convective 5000          # custom regime
 
-    # Stage 1 + Stage 2 in one run, on a 19.6 x 19.6 mm package. nz=12 keeps
-    # the grid at 19,200 unknowns (direct sparse path); at nz=24 this mesh
-    # falls to the iterative backend and does not converge.
-    python main.py --optimize --nx 40 --ny 40 --nz 12
-                   --dx-um 490 --dy-um 490 --dz-um 40
-    (one command; wrapped here for width)
+    # Stage 1 + Stage 2 in one run on the default 20 x 20 mm package
+    python main.py --optimize --no-browser
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 import webbrowser
@@ -108,6 +115,140 @@ from src.exhaustive import ExhaustivePlacementSearch, ExhaustiveSearchError
 # field is still visibly moving. Used to gate the verdict in
 # print_stage1_results() and to warn on --total-steps.
 STEADY_STATE_TAU_MULTIPLE = 3.0
+
+
+# ---------------------------------------------------------------------------
+# COOLING REGIMES
+# ---------------------------------------------------------------------------
+# h is an EFFECTIVE coefficient on the die backside: TIM1, lid, TIM2 and the
+# heatsink or cold plate lumped into one film, so 1/h is the whole area-
+# specific resistance above the die (h = 1000 W/m^2K is 1000 mm^2K/W; h =
+# 25000 is 40 mm^2K/W). It sets the absolute temperature more than anything
+# else in the model, so it is never left implicit.
+#
+# It also decides whether placement matters. Heat spreads laterally over
+# roughly lambda = sqrt(sum(k_xy * t) / h) before the sink removes it.
+# Measured on the default 40x40x12 grid, 4-block catalog scaled to P,
+# exhaustive search on the 2000 um lattice:
+#
+#   preset            P      h       lambda   Stage 2: initial -> optimum    gain
+#   passive-lowpower  12 W   1000    5.47 mm   83.30 ->  70.24 degC   13.06 K (22.4% of rise)
+#   cowos-coldplate   150 W  25000   1.09 mm  105.45 -> 100.82 degC    4.63 K ( 5.8% of rise)
+#
+# With lambda comparable to the block spacing, blocks share heat and moving
+# them apart pays. With lambda well under it, each block sees essentially
+# only its own footprint -- the 150 W Stage 1 rise of 59.11 K is within 1.5%
+# of the local 1-D q''/h = 60 K -- and placement is a weak lever. Placement
+# optimization is a design lever in weakly cooled packages, not strongly
+# cooled ones.
+@dataclass(frozen=True)
+class CoolingPreset:
+    name: str
+    die_power_w: float
+    h_convective: float     # effective W/m^2K, referenced to the die backside
+    description: str
+
+
+COOLING_PRESETS = {
+    "passive-lowpower": CoolingPreset(
+        name="passive-lowpower", die_power_w=12.0, h_convective=1000.0,
+        description="low-power part, spreader to forced air; weakly cooled",
+    ),
+    "cowos-coldplate": CoolingPreset(
+        name="cowos-coldplate", die_power_w=150.0, h_convective=25000.0,
+        description="CoWoS-class part under a liquid cold plate; strongly cooled",
+    ),
+}
+DEFAULT_COOLING_PRESET = "passive-lowpower"
+
+# Materials of the stack build_chiplet_stack() assembles, bottom to top.
+# Shared with the spreading-length calculation so the two cannot drift apart
+# when a material's properties change.
+STACK_MATERIALS = ("silicon", "bump_underfill_composite", "silicon")
+
+
+def _k_inplane(material: str) -> float:
+    """In-plane conductivity sqrt(kx*ky) of an isotropic or anisotropic
+    MATERIALS entry."""
+    props = MATERIALS[material]
+    kx = float(props.get("kx", props.get("k")))
+    ky = float(props.get("ky", props.get("k")))
+    return math.sqrt(kx * ky)
+
+
+def active_footprint_slices(config: PipelineConfig):
+    """(x_slice, y_slice) of the centred active power footprint.
+
+    The one definition shared by build_chiplet_stack(), which puts the power
+    there, and the regime header, which reports the heat flux over it -- so
+    the W/cm^2 printed is over the area the solver actually heats.
+    """
+    nx, ny = config.grid.nx, config.grid.ny
+    margin_x = int(round(nx * (1.0 - config.power.die_footprint_frac) / 2.0))
+    margin_y = int(round(ny * (1.0 - config.power.die_footprint_frac) / 2.0))
+    return slice(margin_x, nx - margin_x), slice(margin_y, ny - margin_y)
+
+
+def regime_label(config: PipelineConfig) -> str:
+    """The preset whose power AND h both match this config, else 'custom'.
+
+    Derived from the values, not from which flag was typed, so an overridden
+    preset can never be reported under the preset's name.
+    """
+    for preset in COOLING_PRESETS.values():
+        if (math.isclose(config.power.die_power_w, preset.die_power_w, rel_tol=1e-12)
+                and math.isclose(config.boundary_conditions.h_convective,
+                                 preset.h_convective, rel_tol=1e-12)):
+            return preset.name
+    return "custom"
+
+
+def regime_summary(config: PipelineConfig) -> dict:
+    """The numbers that fix the cooling regime, all known before any solve."""
+    g, bcs = config.grid, config.boundary_conditions
+    x_sl, y_sl = active_footprint_slices(config)
+    footprint_m2 = (x_sl.stop - x_sl.start) * g.dx * (y_sl.stop - y_sl.start) * g.dy
+    sink_m2 = g.nx * g.dx * g.ny * g.dy
+    p = config.power.die_power_w
+    h = bcs.h_convective
+    robin = (bcs.bottom_bc if bcs.bottom_bc != "neumann" else bcs.top_bc) == "robin"
+    # A Dirichlet sink pins its face at ambient: no film, a zero floor, and
+    # no spreading length (the sink takes heat out wherever it arrives).
+    r_conv = 1.0 / (h * sink_m2) if robin else 0.0
+    thicknesses_m = (config.stack.interposer_um * 1e-6, config.stack.bump_um * 1e-6,
+                     config.stack.die_um * 1e-6)
+    sheet_w_per_k = sum(_k_inplane(m) * t for m, t in zip(STACK_MATERIALS, thicknesses_m))
+    return {
+        "label": regime_label(config),
+        "footprint_mm2": footprint_m2 * 1e6,
+        "sink_mm2": sink_m2 * 1e6,
+        "flux_footprint_w_cm2": p / (footprint_m2 * 1e4) if footprint_m2 > 0 else float("nan"),
+        "flux_sink_w_cm2": p / (sink_m2 * 1e4),
+        "r_conv_k_per_w": r_conv,
+        "floor_rise_k": p * r_conv,
+        "lambda_mm": math.sqrt(sheet_w_per_k / h) * 1e3 if robin else 0.0,
+    }
+
+
+def print_regime_header(config: PipelineConfig) -> dict:
+    """Prints the cooling regime -- name, heat flux, R_ja floor, spreading
+    length -- so no result is ever read without it. R_ja itself needs the
+    solved peak and is printed with the results; what is known up front is
+    its hard lower bound 1/(h*A), because the peak rise can never be below
+    the mean sink-face rise and that is pinned to exactly P/(h*A)."""
+    r = regime_summary(config)
+    tag = "preset" if r["label"] != "custom" else "not a preset; compare with care"
+    print(f"Cooling regime: {r['label']} ({tag})")
+    print(f"Heat flux: {r['flux_footprint_w_cm2']:.2f} W/cm^2 over the active footprint "
+          f"({r['footprint_mm2']:.1f} mm^2) | {r['flux_sink_w_cm2']:.2f} W/cm^2 over the "
+          f"sink face ({r['sink_mm2']:.1f} mm^2)")
+    if r["r_conv_k_per_w"] > 0:
+        print(f"R_ja floor: 1/(h*A_sink) = {r['r_conv_k_per_w']:.4f} K/W, so the peak rise "
+              f"is at least P*R = {r['floor_rise_k']:.2f} K (measured R_ja follows the solve)")
+        print(f"Spreading length: lambda = sqrt(sum(k_xy*t)/h) = {r['lambda_mm']:.2f} mm")
+    else:
+        print("R_ja floor: 0 (Dirichlet sink pinned at ambient; no film resistance)")
+    return r
 
 
 def estimate_tau_from_stack(stack, h_convective: float) -> float:
@@ -252,12 +393,26 @@ def run_interactive_prompts():
     dy_um = prompt_float("dy (um)", 500.0)
     dz_um = prompt_float("dz (um)", 20.0)
 
+    print("\nCooling regime:")
+    names = list(COOLING_PRESETS)
+    for i, name in enumerate(names, start=1):
+        p = COOLING_PRESETS[name]
+        print(f"  {i}) {name:<17} {p.die_power_w:6.1f} W at h = {p.h_convective:>6,.0f} "
+              f"W/m^2K -- {p.description}")
+    default_choice = names.index(DEFAULT_COOLING_PRESET) + 1
+    choice = prompt_int("Preset number (its values become the defaults below)", default_choice)
+    if not 1 <= choice <= len(names):
+        print(f"    No preset {choice} -- using {DEFAULT_COOLING_PRESET}")
+        choice = default_choice
+    preset = COOLING_PRESETS[names[choice - 1]]
+
     print("\nThermal boundary conditions:")
     t_ambient_c = prompt_float("Ambient temperature (C)", 25.0)
-    h_convective = prompt_float("Heat transfer coefficient h_convective (W/m^2K)", 1000.0)
+    h_convective = prompt_float("Heat transfer coefficient h_convective (W/m^2K)",
+                                preset.h_convective)
 
     print("\nActive power source:")
-    die_power_w = prompt_float("Active die total power (W)", 12.0)
+    die_power_w = prompt_float("Active die total power (W)", preset.die_power_w)
 
     print("\nSolve parameters:")
     # No duration prompt. The default run solves the steady state directly --
@@ -282,7 +437,7 @@ def run_interactive_prompts():
     grid = GridSection(nx=nx, ny=ny, nz=nz, dx=dx_um * 1e-6, dy=dy_um * 1e-6, dz=dz_um * 1e-6)
     bc = BoundaryConditionsSection(t_ambient_c=t_ambient_c, h_convective=h_convective,
                                    bottom_bc="neumann", top_bc="robin")
-    stack = StackSection()      # fixed defaults: interposer_frac=0.40, bump_frac=0.15
+    stack = StackSection()      # authored defaults: 100 / 40 / 100 um
     power = PowerSection(die_power_w=die_power_w)  # fixed default die_footprint_frac=0.5
     solver = SolverSection(safety_factor=safety_factor)  # total_steps handled locally, not stored here
     viz = VisualizationSection()  # output_dir="outputs", hotspot_threshold_c=85.0
@@ -314,8 +469,17 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dy-um", type=float, default=500.0, help="Voxel size along Y (micrometers).")
     parser.add_argument("--dz-um", type=float, default=20.0, help="Voxel size along Z (micrometers).")
     parser.add_argument("--t-ambient-c", type=float, default=25.0, help="Ambient temperature (degC).")
-    parser.add_argument("--h-convective", type=float, default=1000.0, help="Convective coefficient (W/m^2K).")
-    parser.add_argument("--die-power-w", type=float, default=12.0, help="Active die total power (W).")
+    parser.add_argument("--preset", choices=tuple(COOLING_PRESETS), default=None,
+                         help="Named cooling regime; sets --die-power-w and --h-convective "
+                              "together. passive-lowpower = 12 W at h=1000 (used when neither "
+                              "is given); cowos-coldplate = 150 W at h=25000. An explicit "
+                              "--die-power-w or --h-convective overrides the preset's value, "
+                              "and the header then reports the regime as 'custom'.")
+    parser.add_argument("--h-convective", type=float, default=None,
+                         help="Effective sink coefficient on the die backside (W/m^2K). "
+                              "Default: the preset's value.")
+    parser.add_argument("--die-power-w", type=float, default=None,
+                         help="Active die total power (W). Default: the preset's value.")
     parser.add_argument("--transient", type=float, default=None, metavar="MS",
                          help="Also run a transient for this many milliseconds and record a "
                               "log-spaced peak-vs-time series. Omitted by default: the "
@@ -359,10 +523,15 @@ def build_cli_parser() -> argparse.ArgumentParser:
 def build_config_from_flags(args: argparse.Namespace):
     grid = GridSection(nx=args.nx, ny=args.ny, nz=args.nz,
                         dx=args.dx_um * 1e-6, dy=args.dy_um * 1e-6, dz=args.dz_um * 1e-6)
-    bc = BoundaryConditionsSection(t_ambient_c=args.t_ambient_c, h_convective=args.h_convective,
+    # Preset first, explicit flags over it. regime_label() later names the
+    # result from the VALUES, so an overridden preset reports as 'custom'.
+    preset = COOLING_PRESETS[args.preset or DEFAULT_COOLING_PRESET]
+    h_convective = args.h_convective if args.h_convective is not None else preset.h_convective
+    die_power_w = args.die_power_w if args.die_power_w is not None else preset.die_power_w
+    bc = BoundaryConditionsSection(t_ambient_c=args.t_ambient_c, h_convective=h_convective,
                                    bottom_bc="neumann", top_bc="robin")
     stack = StackSection()
-    power = PowerSection(die_power_w=args.die_power_w)
+    power = PowerSection(die_power_w=die_power_w)
     solver = SolverSection(safety_factor=args.safety_factor)
     viz = VisualizationSection(output_dir=args.output_dir)
     config = PipelineConfig(grid=grid, boundary_conditions=bc, stack=stack, power=power,
@@ -386,10 +555,11 @@ def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATA
     Why this runs up front: chiplet footprints are authored in micrometers
     (src.optimizer.ChipletSpec) while the die size is nx*dx by ny*dy, so a
     grid that is fine for Stage 1 can be far too small in PHYSICAL terms for
-    a realistic catalog. The default catalog is 192 mm^2 of real blocks, but
-    this file's default grid (60x60 at 25 um) is a 1.5 x 1.5 mm die -- only
-    2.25 mm^2. Without this check the user pays for a full Stage 1 solve and
-    only then discovers Stage 2 cannot run.
+    a realistic catalog. The default catalog is 192 mm^2 of real blocks; a
+    60x60 grid at 25 um -- a reasonable Stage 1 mesh, and this file's default
+    before the scale fix -- is a 1.5 x 1.5 mm die, only 2.25 mm^2. Without
+    this check the user pays for a full Stage 1 solve and only then discovers
+    Stage 2 cannot run.
 
     Deliberately reads only the public physical properties of ChipletSpec
     (width_um / depth_um / area_mm2) and does not construct an optimizer, so
@@ -509,15 +679,12 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
     realized = config.stack.realized_thicknesses_um(nz, config.grid.dz)
 
     try:
-        gb.assign_layer(slice(0, z_interposer_end), "silicon")
-        gb.assign_layer(slice(z_interposer_end, z_bump_end), "bump_underfill_composite")
-        gb.assign_layer(slice(z_bump_end, nz), "silicon")
+        gb.assign_layer(slice(0, z_interposer_end), STACK_MATERIALS[0])
+        gb.assign_layer(slice(z_interposer_end, z_bump_end), STACK_MATERIALS[1])
+        gb.assign_layer(slice(z_bump_end, nz), STACK_MATERIALS[2])
         gb.tag_boundaries()
 
-        margin_x = int(round(nx * (1.0 - config.power.die_footprint_frac) / 2.0))
-        margin_y = int(round(ny * (1.0 - config.power.die_footprint_frac) / 2.0))
-        x_slice = slice(margin_x, nx - margin_x)
-        y_slice = slice(margin_y, ny - margin_y)
+        x_slice, y_slice = active_footprint_slices(config)
         z_slice = slice(z_bump_end, nz)
 
         gb.add_power_source(power_watts=config.power.die_power_w, x_slice=x_slice, y_slice=y_slice, z_slice=z_slice)
@@ -533,7 +700,7 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
         f"[main] Stack assembled: interposer z[0:{z_interposer_end}], "
         f"bump+underfill z[{z_interposer_end}:{z_bump_end}], "
         f"Si die z[{z_bump_end}:{nz}] with {config.power.die_power_w:.2f}W active source "
-        f"over footprint x[{margin_x}:{nx - margin_x}] y[{margin_y}:{ny - margin_y}]"
+        f"over footprint x[{x_slice.start}:{x_slice.stop}] y[{y_slice.start}:{y_slice.stop}]"
     )
     print(
         f"[main] Layer thicknesses (authored -> realized at dz={config.grid.dz*1e6:.2f}um): "
@@ -615,6 +782,12 @@ def print_stage1_results(config: PipelineConfig, report: dict) -> None:
           f"({report['peak_location_um'][0]:.1f}, {report['peak_location_um'][1]:.1f}, "
           f"{report['peak_location_um'][2]:.1f})")
     print(f"    Voxels > {threshold:.1f}°C:      {report['hotspot_count']}")
+    p_w = config.power.die_power_w
+    if p_w > 0:
+        floor = regime_summary(config)["r_conv_k_per_w"]
+        r_ja = (steady_peak - config.boundary_conditions.t_ambient_c) / p_w
+        vs_floor = f", {r_ja / floor:.2f}x the 1/(hA) floor" if floor > 0 else ""
+        print(f"    R_ja (measured):      {r_ja:.4f} K/W  [(peak - ambient) / P{vs_floor}]")
     print()
 
     # --- the verdict, judged on the steady state and only ever on that ---
@@ -990,6 +1163,10 @@ def main(argv=None) -> int:
 
     try:
         if args.config is not None:
+            if args.preset is not None:
+                raise ConfigError(
+                    "--preset applies to flag-driven runs; a --config file sets its own "
+                    "die power and h_convective. Pass one or the other.")
             config = load_config(args.config)
             total_steps = args.total_steps
             duration_s = args.transient * 1e-3 if args.transient is not None else None
@@ -1022,6 +1199,7 @@ def main(argv=None) -> int:
     sink_kind = bcs.bottom_bc if sink_face == "bottom" else bcs.top_bc
     face_desc = "die backside" if sink_face == "top" else "interposer underside"
     print(f"Sink: {sink_face} face ({face_desc}), {sink_kind}; all other faces adiabatic")
+    print_regime_header(config)
     if duration_s is not None:
         print(f"Mode: steady state + transient {duration_s*1e3:.4f} ms")
     elif total_steps is not None:

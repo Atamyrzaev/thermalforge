@@ -1840,6 +1840,113 @@ class TestFactorizationReuse:
             search.precompute_batched(verbose=False)
 
 
+class TestCoolingPresets:
+    """Validation plan step 2: two named cooling regimes, and a header that
+    states the regime -- heat flux, R_ja floor, spreading length -- so no
+    temperature is ever read without it."""
+
+    @staticmethod
+    def _flags(*argv):
+        args = main_module.build_cli_parser().parse_args(list(argv))
+        config, _, _ = main_module.build_config_from_flags(args)
+        return config
+
+    def test_presets_are_the_two_named_regimes(self):
+        presets = main_module.COOLING_PRESETS
+        assert set(presets) == {"passive-lowpower", "cowos-coldplate"}
+        low, cold = presets["passive-lowpower"], presets["cowos-coldplate"]
+        assert (low.die_power_w, low.h_convective) == (12.0, 1000.0)
+        assert (cold.die_power_w, cold.h_convective) == (150.0, 25000.0)
+
+    def test_no_flags_is_the_default_preset(self):
+        config = self._flags()
+        assert config.power.die_power_w == 12.0
+        assert config.boundary_conditions.h_convective == 1000.0
+        assert main_module.regime_label(config) == "passive-lowpower"
+
+    def test_preset_flag_sets_power_and_h_together(self):
+        config = self._flags("--preset", "cowos-coldplate")
+        assert config.power.die_power_w == 150.0
+        assert config.boundary_conditions.h_convective == 25000.0
+        assert main_module.regime_label(config) == "cowos-coldplate"
+
+    def test_explicit_flag_overrides_preset_and_regime_becomes_custom(self):
+        """An overridden preset is a different package. Reporting it under the
+        preset's name would make the regime implicit again -- the thing the
+        presets exist to prevent."""
+        config = self._flags("--preset", "cowos-coldplate", "--h-convective", "10000")
+        assert config.boundary_conditions.h_convective == 10000.0
+        assert config.power.die_power_w == 150.0     # the half not overridden survives
+        assert main_module.regime_label(config) == "custom"
+
+    def test_preset_and_config_file_are_mutually_exclusive(self, tmp_path, capsys):
+        # The file does not exist; the check must fire BEFORE load_config, or
+        # this would pass vacuously on a missing-file error. Hence the message
+        # assertion, not just the exit code.
+        rc = main_module.main(["--config", str(tmp_path / "unused.json"),
+                               "--preset", "cowos-coldplate"])
+        assert rc == 1
+        assert "--preset applies to flag-driven runs" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("preset, flux_fp, flux_sink, r_conv, floor", [
+        # Hand values: footprint 20x20 cells x 500 um = 100 mm^2 = 1 cm^2;
+        # sink 40x40 x 500 um = 400 mm^2 = 4 cm^2; R = 1/(h * 4e-4 m^2).
+        ("passive-lowpower", 12.00, 3.00, 2.5000, 30.00),
+        ("cowos-coldplate", 150.00, 37.50, 0.1000, 15.00),
+    ])
+    def test_header_states_flux_rja_floor_and_lambda(self, capsys, preset, flux_fp,
+                                                     flux_sink, r_conv, floor):
+        config = self._flags("--preset", preset)
+        main_module.print_regime_header(config)
+        out = capsys.readouterr().out
+        assert f"Cooling regime: {preset} (preset)" in out
+        assert f"{flux_fp:.2f} W/cm^2 over the active footprint (100.0 mm^2)" in out
+        assert f"{flux_sink:.2f} W/cm^2 over the sink face (400.0 mm^2)" in out
+        assert f"1/(h*A_sink) = {r_conv:.4f} K/W" in out
+        assert f"P*R = {floor:.2f} K" in out
+        # lambda recomputed here from MATERIALS and the authored stack, not
+        # from the helper, so a drift between the two is caught.
+        comp = MATERIALS["bump_underfill_composite"]
+        sheet = (MATERIALS["silicon"]["k"] * (100e-6 + 100e-6)
+                 + np.sqrt(comp["kx"] * comp["ky"]) * 40e-6)
+        lam_mm = 1e3 * np.sqrt(sheet / config.boundary_conditions.h_convective)
+        assert f"= {lam_mm:.2f} mm" in out
+
+    @pytest.mark.parametrize("preset", ["passive-lowpower", "cowos-coldplate"])
+    def test_printed_floor_is_the_solved_mean_sink_rise(self, preset):
+        """The header's floor is not decoration: at steady state the mean
+        sink-face rise equals P/(h*A) exactly, so the number printed before
+        the solve must match the field after it, and the measured R_ja can
+        never fall below it."""
+        config = self._flags("--preset", preset)
+        regime = main_module.regime_summary(config)
+        solver = ThermalSolver.from_grid_builder(main_module.build_chiplet_stack(config))
+        T = solver.solve_steady_state(apply_result=False)
+        mean_rise = float(np.mean(T[:, :, solver._sink_k])) - solver.bc.t_ambient_k
+        assert mean_rise == pytest.approx(regime["floor_rise_k"], rel=1e-9)
+        peak_rise = float(np.max(T)) - solver.bc.t_ambient_k
+        assert peak_rise / config.power.die_power_w >= regime["r_conv_k_per_w"]
+
+    def test_results_block_reports_measured_rja(self, capsys):
+        config = self._flags("--preset", "passive-lowpower")
+        report = {
+            "html_path": "outputs/thermal_3d.html",
+            "hotspot_count": 0,
+            "peak_temperature_c": 79.82,
+            "peak_location_um": (10000.0, 10000.0, 160.0),
+            "peak_location_ijk": (20, 20, 8),
+            "transient_peak_temperature_c": None,
+            "transient_duration_s": None,
+            "tau_s": 0.3948,
+            "converged_fraction": 0.0,
+        }
+        main_module.print_stage1_results(config, report)
+        out = capsys.readouterr().out
+        # (79.82 - 25) / 12 = 4.5683 K/W; / 2.5 K/W floor = 1.83x
+        assert "R_ja (measured):      4.5683 K/W" in out
+        assert "1.83x the 1/(hA) floor" in out
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
