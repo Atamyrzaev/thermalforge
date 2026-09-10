@@ -108,6 +108,9 @@ from src.optimizer import (
     scale_catalog_to_total_power,
 )
 from src.exhaustive import ExhaustivePlacementSearch, ExhaustiveSearchError
+from src.validation_status import (
+    html_block as validation_html_block, text_block as validation_text_block,
+)
 
 
 # A transient shorter than this many time constants cannot support a
@@ -806,6 +809,8 @@ def print_stage1_results(config: PipelineConfig, report: dict) -> None:
         print(f"            used for this verdict -- it cannot support one. See the "
               f"steady-state row.)")
     print()
+    print(validation_text_block())
+    print()
     print(f"  Interactive 3D view:   {report['html_path']}")
     print("=" * 60)
 
@@ -899,6 +904,7 @@ def run_stage2_optimizer(
     except (OptimizerError, ExhaustiveSearchError) as exc:
         raise PipelineError(f"Stage 2 placement optimization failed: {exc}") from exc
 
+    print(validation_text_block())
     print(f"  Optimization report:   {report_path}")
 
     _open_in_browser(report_path, open_browser, "the optimization report")
@@ -1058,6 +1064,7 @@ def run_pipeline(
             banner_html=(
                 '<div class="banner"><b>Steady state</b> (t &rarr; &infin;). This is the '
                 'equilibrium field the threshold verdict is judged against.</div>'
+                f'<div class="banner">{validation_html_block()}</div>'
             ),
         )
         hotspot_report = steady_viz.get_hotspot_report(
@@ -1088,6 +1095,7 @@ def run_pipeline(
                     f'{converged_fraction*100:.4f}% of the steady-state rise.<br>'
                     f'The steady state is in <b>thermal_3d.html</b>, and every threshold '
                     f'verdict uses that field, not this one.</div>'
+                    f'<div class="banner">{validation_html_block(transient=True)}</div>'
                 ),
             )
             print(f"[main] Transient snapshot written separately: {transient_html_path}")

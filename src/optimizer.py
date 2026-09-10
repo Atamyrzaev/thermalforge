@@ -148,6 +148,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from src.config_loader import StackSection, ConfigError
+from src.validation_status import html_block as validation_html_block
 from src.grid_builder import GridBuilder, GridBuilderError
 from src.thermal_solver import (
     ThermalSolver, ThermalSolverError, DIRECT_SOLVE_MAX_UNKNOWNS,
@@ -1279,6 +1280,10 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="note">
+    __VALIDATION__
+  </div>
+
+  <div class="note">
     <b>Scale note.</b> __SCALE_NOTE__
   </div>
 
@@ -1518,6 +1523,7 @@ def render_optimization_report(
     html = html.replace("__TOTAL_POWER__", f"{result.total_power_w:.1f}")
     html = html.replace("__ELAPSED__", f"{result.elapsed_s:.2f}")
     html = html.replace("__SCALE_NOTE__", scale_note)
+    html = html.replace("__VALIDATION__", validation_html_block())
     html = html.replace("__CONVERGENCE_PNG__", convergence_png)
     html = html.replace("__PLACEMENT_PNG__", placement_png)
     html = html.replace("__PLACEMENT_ROWS__", "".join(rows))

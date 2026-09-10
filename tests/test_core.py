@@ -73,6 +73,7 @@ import src.optimizer as optimizer_module
 from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
 import src.exhaustive as exhaustive_module
 import src.composite_materials as composite_module
+import src.validation_status as validation_module
 import main as main_module
 
 _EPS = 1e-30
@@ -1996,6 +1997,63 @@ class TestCompositeMaterials:
     def test_rejects_pillars_wider_than_their_pitch(self):
         with pytest.raises(ValueError, match="pitch"):
             composite_module.bump_underfill_layer_k(pitch_um=15.0, diameter_um=20.0)
+
+
+class TestValidationStatusOnReports:
+    """Standing rule of the validation plan: until step 5 passes, every
+    reported temperature says 'verified, not validated' on the report itself,
+    alongside the known limitations. Checked on each artifact that shows a
+    temperature, not on the helper that formats the text."""
+
+    NAMES = [name for name, _ in validation_module.LIMITATIONS]
+
+    def test_stage1_results_block(self, capsys):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.05)
+        report = {
+            "html_path": "outputs/thermal_3d.html",
+            "hotspot_count": 0,
+            "peak_temperature_c": 79.75,
+            "peak_location_um": (9500.0, 9500.0, 160.0),
+            "peak_location_ijk": (19, 20, 8),
+            "transient_peak_temperature_c": None,
+            "transient_duration_s": None,
+            "tau_s": 0.3948,
+            "converged_fraction": 0.0,
+        }
+        main_module.print_stage1_results(config, report)
+        out = capsys.readouterr().out
+        assert "STATUS: VERIFIED, NOT VALIDATED." in out
+        for name in self.NAMES:
+            assert name in out
+
+    def test_stage1_html_views(self, tmp_path):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, die_power_w=0.4)
+        config.visualization.output_dir = str(tmp_path)
+        rep = main_module.run_pipeline(
+            config, total_steps=5, duration_s=None, open_browser=False,
+        )["viz_report"]
+        steady = pathlib.Path(rep["html_path"]).read_text(encoding="utf-8")
+        transient = pathlib.Path(rep["transient_html_path"]).read_text(encoding="utf-8")
+        for html in (steady, transient):
+            assert "Verified, not validated." in html
+            for name in self.NAMES:
+                assert name in html
+        # Only the transient view says the per-solve checks do not cover it.
+        assert "transient snapshot; the per-solve checks" in transient
+        assert "transient snapshot; the per-solve checks" not in steady
+
+    def test_stage2_report(self, tmp_path):
+        opt = ChipletPlacementOptimizer(
+            nx=20, ny=20, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+            h_convective=1000.0, placement_pitch_um=5000.0, seed=0,
+        )
+        result = opt.optimize(iterations=2, verbose=False)
+        path = optimizer_module.render_optimization_report(result, output_dir=str(tmp_path))
+        html = pathlib.Path(path).read_text(encoding="utf-8")
+        assert "__VALIDATION__" not in html
+        assert "Verified, not validated." in html
+        for name in self.NAMES:
+            assert name in html
 
 
 if __name__ == "__main__":
