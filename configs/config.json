@@ -1,4 +1,9 @@
 {
+  "case": {
+    "name": "passive-lowpower",
+    "purpose": "the default operating point -- the passive-lowpower preset (12 W, h = 1000 W/m^2K) on the 20 x 20 mm reference package",
+    "expect_threshold_exceeded": false
+  },
   "grid": {
     "nx": 40,
     "ny": 40,
@@ -8,8 +13,8 @@
     "dz": 2e-05
   },
   "boundary_conditions": {
-    "t_ambient_c": 30.0,
-    "h_convective": 3500.0,
+    "t_ambient_c": 25.0,
+    "h_convective": 1000.0,
     "bottom_bc": "neumann",
     "top_bc": "robin",
     "side_bc": "neumann"
@@ -20,7 +25,7 @@
     "die_um": 100.0
   },
   "power": {
-    "die_power_w": 60.0,
+    "die_power_w": 12.0,
     "die_footprint_frac": 0.5
   },
   "solver": {
@@ -34,7 +39,7 @@
   },
   "visualization": {
     "output_dir": "outputs",
-    "hotspot_threshold_c": 90.0,
+    "hotspot_threshold_c": 85.0,
     "use_pyvista": true
   }
 }

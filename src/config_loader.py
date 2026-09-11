@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, asdict, fields
+from dataclasses import MISSING, dataclass, asdict, field, fields
 from typing import Any, Dict, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
@@ -87,8 +87,12 @@ class GridSection:
 
 @dataclass
 class BoundaryConditionsSection:
+    # h_convective has NO default. It sets the absolute temperature more than
+    # any other input, so every configuration must state it. It used to
+    # default to 2500 W/m^2K here while the default preset and the optimizer
+    # used 1000 -- two silent answers to the most consequential number.
+    h_convective: float
     t_ambient_c: float = 25.0
-    h_convective: float = 2500.0
     # Sink on the TOP face by default: a CoWoS part cools through the die
     # backside into TIM1/lid/TIM2/heatsink, not down through the interposer.
     # Exactly one of bottom_bc / top_bc is the sink; the other is adiabatic.
@@ -248,6 +252,17 @@ class VisualizationSection:
 
 
 @dataclass
+class CaseSection:
+    """What a configuration file is FOR, stated in the file so a run can say
+    so. `expect_threshold_exceeded` marks a deliberate stress case: an
+    EXCEEDS THRESHOLD verdict is then the intended result rather than a
+    regression, and a verdict below the threshold is flagged as unexpected."""
+    name: str = "unnamed"
+    purpose: str = ""
+    expect_threshold_exceeded: bool = False
+
+
+@dataclass
 class PipelineConfig:
     grid: GridSection
     boundary_conditions: BoundaryConditionsSection
@@ -255,6 +270,7 @@ class PipelineConfig:
     power: PowerSection
     solver: SolverSection
     visualization: VisualizationSection
+    case: CaseSection = field(default_factory=CaseSection)
 
     # ------------------------------------------------------------------
     def validate(self) -> None:
@@ -322,6 +338,9 @@ class PipelineConfig:
         if v.hotspot_threshold_c is None:
             raise ConfigError("visualization.hotspot_threshold_c must be set.")
 
+        if not self.case.name.strip():
+            raise ConfigError("case.name must be a non-empty string.")
+
     # ------------------------------------------------------------------
     def to_grid_builder_dict(self) -> Dict[str, Any]:
         """Converts to the nested dict schema GridBuilder(config=...) expects."""
@@ -352,6 +371,7 @@ class PipelineConfig:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
+            "case": asdict(self.case),
             "grid": asdict(self.grid),
             "boundary_conditions": asdict(self.boundary_conditions),
             "stack": asdict(self.stack),
@@ -378,6 +398,7 @@ RETIRED_KEYS: Dict[str, Dict[str, Tuple[str, str]]] = {
 
 # The file's sections, in order, and the dataclass each one builds.
 SECTIONS: Tuple[Tuple[str, type], ...] = (
+    ("case", CaseSection),
     ("grid", GridSection),
     ("boundary_conditions", BoundaryConditionsSection),
     ("stack", StackSection),
@@ -385,6 +406,23 @@ SECTIONS: Tuple[Tuple[str, type], ...] = (
     ("solver", SolverSection),
     ("visualization", VisualizationSection),
 )
+
+
+_TEMPLATE_BY_TYPE = {"float": 0.0, "int": 0, "str": "", "bool": False}
+
+
+def _type_template(f) -> Any:
+    """A value whose type _check_type() checks against: the field's default,
+    or, for a field with no default (h_convective), a sample of its annotated
+    type. Annotations are strings here (from __future__ import annotations)."""
+    if f.default is not MISSING:
+        return f.default
+    if f.default_factory is not MISSING:
+        return f.default_factory()
+    type_name = f.type if isinstance(f.type, str) else getattr(f.type, "__name__", repr(f.type))
+    if type_name not in _TEMPLATE_BY_TYPE:
+        raise ConfigError(f"no type rule for field '{f.name}' of type {f.type!r}")   # schema bug
+    return _TEMPLATE_BY_TYPE[type_name]
 
 
 def _check_type(section: str, key: str, value: Any, default: Any) -> Any:
@@ -426,7 +464,7 @@ def _build_section(dataclass_type, raw: Any, section_name: str):
     if not isinstance(raw, dict):
         raise ConfigError(f"config section '{section_name}' must be a JSON object, "
                           f"got {type(raw).__name__}")
-    schema = {f.name: f.default for f in fields(dataclass_type)}
+    schema = {f.name: _type_template(f) for f in fields(dataclass_type)}
     retired = RETIRED_KEYS.get(section_name, {})
     stale = sorted(k for k in raw if k in retired)
     if stale:
@@ -489,11 +527,12 @@ def load_config(path: Optional[str] = None) -> PipelineConfig:
     return config
 
 
-def write_default_config(path: str = DEFAULT_CONFIG_PATH) -> str:
-    """Writes the hardcoded default PipelineConfig to `path` as pretty JSON.
-    Useful for bootstrapping a fresh configs/config.json."""
+def write_default_config(path: str = DEFAULT_CONFIG_PATH, *, h_convective: float) -> str:
+    """Writes the default PipelineConfig to `path` as pretty JSON, for
+    bootstrapping a config file. h_convective must be given: it has no
+    default anywhere in this schema (see BoundaryConditionsSection)."""
     default_config = PipelineConfig(
-        grid=GridSection(), boundary_conditions=BoundaryConditionsSection(),
+        grid=GridSection(), boundary_conditions=BoundaryConditionsSection(h_convective=h_convective),
         stack=StackSection(), power=PowerSection(),
         solver=SolverSection(), visualization=VisualizationSection(),
     )
@@ -509,6 +548,9 @@ def write_default_config(path: str = DEFAULT_CONFIG_PATH) -> str:
 
 if __name__ == "__main__":
     # Smoke test: write and reload the default config.
-    written_path = write_default_config(os.path.join("configs_smoke_test", "config.json"))
+    # h = 1000 W/m^2K is the passive-lowpower preset's value (main.py
+    # COOLING_PRESETS), stated here rather than defaulted.
+    written_path = write_default_config(os.path.join("configs_smoke_test", "config.json"),
+                                        h_convective=1000.0)
     reloaded = load_config(written_path)
     print("Reloaded config:", reloaded.as_dict())

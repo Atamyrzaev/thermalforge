@@ -43,6 +43,9 @@ LIMITATIONS: Tuple[Tuple[str, str], ...] = (
     ("Unconverged mesh",
      "no grid-convergence (GCI) study at the default mesh yet, so the "
      "discretization error is unquantified"),
+    ("No independent benchmark",
+     "Validation step 5 requires the dac143 FFT benchmark source, which is not present. "
+     "Status remains VERIFIED, NOT VALIDATED"),
 )
 
 MATERIALS_NOTE = ("conductivities from Rao et al. 2023, doi:10.2298/TSCI220805061R; "
@@ -59,7 +62,7 @@ def text_block(indent: str = "  ", transient: bool = False) -> str:
     ]
     if transient:
         lines.append(f"{indent}  Note: {TRANSIENT_NOTE}.")
-    lines.append(f"{indent}  Known limitations:")
+    lines.append(f"{indent}  Remaining limitations:")
     for i, (name, detail) in enumerate(LIMITATIONS, start=1):
         lines.append(f"{indent}    {i}. {name}: {detail}.")
     lines.append(f"{indent}  Materials: {MATERIALS_NOTE}.")

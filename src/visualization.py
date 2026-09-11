@@ -266,9 +266,11 @@ for (let i = 0; i < DATA.nx; i++) {
       const temp = DATA.temps_c[n];
       const v = (DATA.t_max > DATA.t_min) ? (temp - DATA.t_min) / (DATA.t_max - DATA.t_min) : 0.5;
       const [r, g, b] = colormap(v);
-      allPositions[n * 3 + 0] = i * DATA.dx_um;
-      allPositions[n * 3 + 1] = k * DATA.dz_um;   // Z (layer) mapped to screen-up for intuitive slicing
-      allPositions[n * 3 + 2] = j * DATA.dy_um;
+      // Cell centres. Sub-sampled cell i is original cell i*stride, centred at
+      // (i*stride + 0.5)*dx = (i + 0.5/stride) * (dx*stride) = (i + 0.5/stride) * DATA.dx_um.
+      allPositions[n * 3 + 0] = (i + 0.5 / DATA.stride) * DATA.dx_um;
+      allPositions[n * 3 + 1] = (k + 0.5 / DATA.stride) * DATA.dz_um;   // Z (layer) mapped to screen-up for intuitive slicing
+      allPositions[n * 3 + 2] = (j + 0.5 / DATA.stride) * DATA.dy_um;
       allColors[n * 3 + 0] = r; allColors[n * 3 + 1] = g; allColors[n * 3 + 2] = b;
       allK[n] = k;
       n++;
@@ -356,8 +358,10 @@ renderer.domElement.addEventListener('click', (e) => {
     const temp = DATA.temps_c[origIdx];
     selectedVoxelDiv.innerHTML =
       '<b>Selected voxel</b><br>' +
-      'Index (i,j,k): (' + i + ', ' + j + ', ' + k + ')<br>' +
-      'Position: (' + (i * DATA.dx_um).toFixed(1) + ', ' + (j * DATA.dy_um).toFixed(1) + ', ' + (k * DATA.dz_um).toFixed(1) + ') &mu;m<br>' +
+      'Index (i,j,k): (' + i * DATA.stride + ', ' + j * DATA.stride + ', ' + k * DATA.stride + ')<br>' +
+      'Position (cell centre): (' + ((i + 0.5 / DATA.stride) * DATA.dx_um).toFixed(1) + ', ' +
+      ((j + 0.5 / DATA.stride) * DATA.dy_um).toFixed(1) + ', ' +
+      ((k + 0.5 / DATA.stride) * DATA.dz_um).toFixed(1) + ') &mu;m<br>' +
       'Temperature: <b>' + temp.toFixed(2) + ' &deg;C</b>';
   }
 });
@@ -431,10 +435,14 @@ class ThermalVisualizer:
         except OSError as exc:
             raise VisualizationError(f"Could not create output_dir '{self.output_dir}': {exc}") from exc
 
-        # Physical-unit coordinate axes (micrometers), for plot extents/labels.
-        self.x_um = np.arange(self.nx) * self.dx * 1e6
-        self.y_um = np.arange(self.ny) * self.dy * 1e6
-        self.z_um = np.arange(self.nz) * self.dz * 1e6
+        # Physical coordinates (micrometres) of the cell CENTRES. The mesh is
+        # cell-centred: cell i spans [i*dx, (i+1)*dx] and its centre is
+        # (i + 0.5)*dx. These used to be the lower corners, i*dx, which put
+        # every reported location half a cell off (10 um in z at dz = 20 um,
+        # 250 um in x and y at dx = 500 um).
+        self.x_um = (np.arange(self.nx) + 0.5) * self.dx * 1e6
+        self.y_um = (np.arange(self.ny) + 0.5) * self.dy * 1e6
+        self.z_um = (np.arange(self.nz) + 0.5) * self.dz * 1e6
 
         logger.info(
             "ThermalVisualizer initialized: grid=%s, T range=[%.2f, %.2f] C, output_dir='%s'",
@@ -465,7 +473,9 @@ class ThermalVisualizer:
         i, j, k = (int(v) for v in idx)
         return {
             "index_ijk": (i, j, k),
-            "location_um": (float(self.x_um[i]), float(self.y_um[j]), float(self.z_um[k])),
+            "location_um": ((i + 0.5) * self.dx * 1e6,
+                            (j + 0.5) * self.dy * 1e6,
+                            (k + 0.5) * self.dz * 1e6),
             "temperature_c": float(self.T_c[i, j, k]),
         }
 
@@ -572,7 +582,7 @@ class ThermalVisualizer:
             # YZ plane at fixed x=i
             im0 = axes[0].imshow(
                 self.T_c[i, :, :].T, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                extent=[self.y_um[0], self.y_um[-1], self.z_um[0], self.z_um[-1]], aspect="auto",
+                extent=[0.0, self.ny * self.dy * 1e6, 0.0, self.nz * self.dz * 1e6], aspect="auto",
             )
             axes[0].set_title(f"YZ plane @ x={self.x_um[i]:.1f} \u03bcm (i={i})")
             axes[0].set_xlabel("Y (\u03bcm)"); axes[0].set_ylabel("Z (\u03bcm)")
@@ -581,7 +591,7 @@ class ThermalVisualizer:
             # XZ plane at fixed y=j
             im1 = axes[1].imshow(
                 self.T_c[:, j, :].T, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                extent=[self.x_um[0], self.x_um[-1], self.z_um[0], self.z_um[-1]], aspect="auto",
+                extent=[0.0, self.nx * self.dx * 1e6, 0.0, self.nz * self.dz * 1e6], aspect="auto",
             )
             axes[1].set_title(f"XZ plane @ y={self.y_um[j]:.1f} \u03bcm (j={j})")
             axes[1].set_xlabel("X (\u03bcm)"); axes[1].set_ylabel("Z (\u03bcm)")
@@ -590,7 +600,7 @@ class ThermalVisualizer:
             # XY plane at fixed z=k
             im2 = axes[2].imshow(
                 self.T_c[:, :, k].T, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                extent=[self.x_um[0], self.x_um[-1], self.y_um[0], self.y_um[-1]], aspect="auto",
+                extent=[0.0, self.nx * self.dx * 1e6, 0.0, self.ny * self.dy * 1e6], aspect="auto",
             )
             axes[2].set_title(f"XY plane @ z={self.z_um[k]:.1f} \u03bcm (k={k})")
             axes[2].set_xlabel("X (\u03bcm)"); axes[2].set_ylabel("Y (\u03bcm)")
@@ -816,6 +826,7 @@ class ThermalVisualizer:
             payload = {
                 "nx": sub_nx, "ny": sub_ny, "nz": sub_nz,
                 "dx_um": dx_um * stride, "dy_um": dy_um * stride, "dz_um": dz_um * stride,
+                "stride": stride,
                 "temps_c": [round(float(v), 3) for v in temps_flat],
                 "t_min": round(t_min, 3), "t_max": round(t_max, 3),
             }

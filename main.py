@@ -803,6 +803,12 @@ def print_stage1_results(config: PipelineConfig, report: dict) -> None:
     else:
         print(f"  VERDICT: within threshold. Steady-state peak {steady_peak:.2f} °C is "
               f"below {threshold:.1f} °C.")
+    if config.case.expect_threshold_exceeded:
+        if steady_peak > threshold:
+            print("           (Expected: this configuration is a stress case -- see the banner.)")
+        else:
+            print(f"  NOTE: case '{config.case.name}' is a stress case, EXPECTED to exceed the "
+                  f"threshold and did not. The case or the model has changed; check both.")
     if has_transient and t_sim < STEADY_STATE_TAU_MULTIPLE * tau_s:
         print(f"           (The transient above reached only {frac*100:.4f}% of steady "
               f"state and was NOT")
@@ -870,6 +876,12 @@ def print_startup_banner(config: PipelineConfig, source: str,
     print("RISC3D-AI :: 3D IC Thermal Simulation Pipeline")
     print("=" * 60)
     print(f"Config source: {source}")
+    if from_file or config.case.name != "unnamed":
+        print(f"Case: {config.case.name} -- {config.case.purpose}")
+    if config.case.expect_threshold_exceeded:
+        print(f"STRESS CASE: EXPECTED to exceed the "
+              f"{config.visualization.hotspot_threshold_c:.1f} C threshold -- an EXCEEDS "
+              f"verdict is the intended result, not a regression.")
     print("Units: SI in the model (m, W, K); um, mm and degC appear only in this banner.")
     print(f"Domain: {g.nx * g.dx * 1e3:.3f} x {g.ny * g.dy * 1e3:.3f} mm x "
           f"{g.nz * dz_um:.3f} um = {g.nx} x {g.ny} x {g.nz} cells of "
@@ -880,6 +892,18 @@ def print_startup_banner(config: PipelineConfig, source: str,
                              (s.interposer_um, s.bump_um, s.die_um), cells):
         print(f"  {name:<10}  {t_um:7.3f} um -> {k * dz_um:7.3f} um  ({k} cells)")
     print(f"  {'total':<10}  {s.total_um:7.3f} um = nz*dz = {g.nz} x {dz_um:.3f} um")
+    # The die is DERIVED from the mesh (nx*dx by ny*dy), never stored, so it
+    # cannot drift from it.
+    catalog = DEFAULT_CHIPLET_CATALOG
+    die_w_mm, die_h_mm = g.nx * g.dx * 1e3, g.ny * g.dy * 1e3
+    catalog_mm2 = sum(c.area_mm2 for c in catalog)
+    largest = max(catalog, key=lambda c: c.area_um2)
+    fits = preflight_optimizer_fit(config, catalog) is None
+    print(f"Die:            {die_w_mm:.3f} x {die_h_mm:.3f} mm")
+    print(f"Catalog:        {catalog_mm2:.2f} mm² across {len(catalog)} blocks "
+          f"({100.0 * catalog_mm2 / (die_w_mm * die_h_mm):.1f}% fill)")
+    print(f"Catalog fits:   {'yes' if fits else 'no'} (largest block "
+          f"{largest.width_um / 1e3:.3f} x {largest.depth_um / 1e3:.3f} mm)")
     print(f"Ambient: {bcs.t_ambient_c:.1f}C | h_convective: {bcs.h_convective:.1f} W/m^2K | "
           f"Die power: {config.power.die_power_w:.2f}W")
     sink_face = "bottom" if bcs.bottom_bc != "neumann" else "top"
@@ -983,7 +1007,7 @@ def run_stage2_optimizer(
             print("        --optimize-method exhaustive for a guaranteed global best.")
 
         report_path = render_optimization_report(
-            result, output_dir=config.visualization.output_dir,
+            result, output_dir=config.visualization.output_dir, method=method,
         )
     except (OptimizerError, ExhaustiveSearchError) as exc:
         raise PipelineError(f"Stage 2 placement optimization failed: {exc}") from exc

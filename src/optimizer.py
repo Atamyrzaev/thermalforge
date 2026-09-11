@@ -1262,7 +1262,7 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="wrap">
   <h1>__TITLE__</h1>
-  <div class="sub">Stage 2 simulated-annealing chiplet placement &middot; generated __GENERATED__</div>
+  <div class="sub">Stage 2 __METHOD_SUBTITLE__ chiplet placement &middot; generated __GENERATED__</div>
 
   <div class="cards">
     <div class="card"><div class="label">Optimized peak</div>
@@ -1271,7 +1271,7 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
       <div class="value plain">__INITIAL_PEAK__ &deg;C</div></div>
     <div class="card"><div class="label">Improvement</div>
       <div class="value good">__IMPROVEMENT__ &deg;C</div></div>
-    <div class="card"><div class="label">SA iterations</div>
+    <div class="card"><div class="label">__ITERATIONS_LABEL__</div>
       <div class="value plain">__ITERATIONS__</div></div>
     <div class="card"><div class="label">Total power</div>
       <div class="value plain">__TOTAL_POWER__ W</div></div>
@@ -1288,7 +1288,7 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <h2>Convergence</h2>
-  <div class="figure"><img alt="Simulated annealing convergence history"
+  <div class="figure"><img alt="__CONVERGENCE_ALT__"
        src="data:image/png;base64,__CONVERGENCE_PNG__"></div>
 
   <h2>Optimized placement and resulting thermal field</h2>
@@ -1430,6 +1430,7 @@ def render_optimization_report(
     output_dir: str = "outputs",
     filename: str = "optimized_thermal_report.html",
     title: str = "RISC3D-AI :: Optimized Chiplet Placement",
+    method: str = "anneal",
 ) -> str:
     """
     Writes a single self-contained HTML report for one optimize() run and
@@ -1447,6 +1448,24 @@ def render_optimization_report(
             "OptimizationResult.best_peak_temperature_c is None; refusing to render a "
             "report for a layout that was never successfully solved."
         )
+    # Report wording per search method -- presentation only; the numbers
+    # come from the same OptimizationResult either way. An exhaustive result
+    # (ExhaustiveResult.to_optimization_result) carries layouts evaluated in
+    # `iterations` and layouts pruned as overlapping in `overlap_candidates`,
+    # and has no proposal stream and no seed.
+    labels_by_method = {
+        "anneal": {"subtitle": "simulated-annealing",
+                   "iterations_label": "SA iterations",
+                   "convergence_alt": "Simulated annealing convergence history"},
+        "exhaustive": {"subtitle": "exhaustive lattice-search",
+                       "iterations_label": "Layouts evaluated",
+                       "convergence_alt": "Initial layout and lattice optimum "
+                                          "(an exhaustive search has no trajectory)"},
+    }
+    if method not in labels_by_method:
+        raise OptimizerError(f"render_optimization_report: method must be 'anneal' or "
+                             f"'exhaustive', got {method!r}")
+    labels = labels_by_method[method]
 
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -1486,11 +1505,17 @@ def render_optimization_report(
                              f"({result.fill_factor_pct:.1f}% fill)"),
             ("Die layer", f"z[{result.die_z_range[0]}:{result.die_z_range[1]}]"),
             ("Objective", "steady-state peak temperature (solve_steady_state)"),
+        ] + ([
+            ("Search", "exhaustive over the placement lattice: every buildable layout evaluated"),
+            ("Layouts evaluated", f"{result.iterations:,}"),
+            ("Pruned as overlapping", f"{result.overlap_candidates:,} "
+                                      f"(never solved, never promoted)"),
+        ] if method == "exhaustive" else [
             ("SA proposals", f"{result.iterations} "
                              f"({result.accepted_moves} accepted / {result.rejected_moves} rejected)"),
             ("Overlapping proposals", f"{result.overlap_candidates} (never solved, never promoted)"),
             ("Random seed", str(result.seed)),
-        ]
+        ])
     )
 
     area_cm2 = (nx * dx * 1e2) * (ny * dy * 1e2)
@@ -1519,7 +1544,11 @@ def render_optimization_report(
     html = html.replace("__BEST_PEAK__", f"{result.best_peak_temperature_c:,.1f}")
     html = html.replace("__INITIAL_PEAK__", f"{result.initial_peak_temperature_c:,.1f}")
     html = html.replace("__IMPROVEMENT__", f"{result.improvement_c:,.1f}")
-    html = html.replace("__ITERATIONS__", str(result.iterations))
+    html = html.replace("__METHOD_SUBTITLE__", labels["subtitle"])
+    html = html.replace("__ITERATIONS_LABEL__", labels["iterations_label"])
+    html = html.replace("__CONVERGENCE_ALT__", labels["convergence_alt"])
+    html = html.replace("__ITERATIONS__", f"{result.iterations:,}" if method == "exhaustive"
+                        else str(result.iterations))
     html = html.replace("__TOTAL_POWER__", f"{result.total_power_w:.1f}")
     html = html.replace("__ELAPSED__", f"{result.elapsed_s:.2f}")
     html = html.replace("__SCALE_NOTE__", scale_note)

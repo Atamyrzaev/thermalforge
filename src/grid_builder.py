@@ -90,6 +90,7 @@ class GridConfig:
     dy: float
     dz: float
     t_ambient_k: float = 298.15          # 25 degC in Kelvin
+    # Defensive fallback, reachable only via direct GridBuilder(config=...); main.py always passes h.
     h_convective: float = 2500.0          # W/m^2K, midpoint of 1000-5000
     bottom_bc: BoundaryType = "neumann"
     top_bc: BoundaryType = "robin"
@@ -214,6 +215,9 @@ class GridBuilder:
     # ------------------------------------------------------------------
     # Config loading
     # ------------------------------------------------------------------
+    # This loader and its .get() defaults exist for DIRECT GridBuilder(config=...)
+    # construction only. The pipeline passes PipelineConfig.to_dict(), which always
+    # carries every grid and boundary key (test_main_always_supplies_every_grid_key).
     def _load_config(self, config: Optional[Union[str, Dict]]) -> GridConfig:
         raw: Dict
         try:

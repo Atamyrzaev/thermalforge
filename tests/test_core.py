@@ -2076,6 +2076,7 @@ class TestValidationStatusOnReports:
 # ---------------------------------------------------------------------------
 
 SHIPPED_CONFIG = pathlib.Path(__file__).resolve().parent.parent / "configs" / "config.json"
+STRESS_CONFIG = SHIPPED_CONFIG.parent / "stress_high_power_low_cool.json"
 
 
 def _config_file(tmp_path, edit=None) -> str:
@@ -2203,8 +2204,9 @@ class TestShippedConfig:
     its mesh with the authored stack in whole cells, matches the catalog's
     20 x 20 mm die, and sinks through the die backside."""
 
-    def test_loads_and_satisfies_every_invariant(self):
-        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+    @pytest.mark.parametrize("path", [SHIPPED_CONFIG, STRESS_CONFIG], ids=["config", "stress"])
+    def test_loads_and_satisfies_every_invariant(self, path):
+        config = config_loader_module.load_config(str(path))
         g, s = config.grid, config.stack
         assert abs(g.nz * g.dz - s.total_um * 1e-6) / (g.nz * g.dz) < 1e-9
         assert s.layer_cells(g.nz, g.dz) == (5, 2, 5)
@@ -2213,8 +2215,9 @@ class TestShippedConfig:
         assert main_module.preflight_optimizer_fit(config) is None
         assert g.nx * g.ny * g.nz <= thermal_solver_module.DIRECT_SOLVE_MAX_UNKNOWNS
 
-    def test_sink_is_the_die_backside(self):
-        bc = config_loader_module.load_config(str(SHIPPED_CONFIG)).boundary_conditions
+    @pytest.mark.parametrize("path", [SHIPPED_CONFIG, STRESS_CONFIG], ids=["config", "stress"])
+    def test_sink_is_the_die_backside(self, path):
+        bc = config_loader_module.load_config(str(path)).boundary_conditions
         assert (bc.bottom_bc, bc.top_bc) == ("neumann", "robin")
         flags, _, _ = main_module.build_config_from_flags(
             main_module.build_cli_parser().parse_args([]))
@@ -2275,6 +2278,194 @@ class TestStartupBanner:
         out = capsys.readouterr().out
         assert rc == 0
         assert out.index("(authored -> realized)") < out.index("Steady-state solve")
+
+    def test_banner_reports_die_and_catalog_fit(self, capsys):
+        """Decision 8: the die is DERIVED from nx*dx, ny*dy -- there is no
+        die_size field to drift from the mesh -- and the banner states it with
+        the catalog's area, fill and whether it fits."""
+        config = make_pipeline_config(nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6, dz=20e-6,
+                                      interposer_um=100.0, bump_um=40.0, die_um=100.0,
+                                      die_power_w=12.0, h_convective=1000.0)
+        main_module.print_startup_banner(config, source="test")
+        out = capsys.readouterr().out
+        assert "Die:            20.000 x 20.000 mm" in out
+        assert "Catalog:        192.00 mm² across 4 blocks (48.0% fill)" in out
+        assert "Catalog fits:   yes (largest block 11.000 x 11.000 mm)" in out
+
+    def test_banner_says_when_the_catalog_does_not_fit(self, capsys):
+        config = make_pipeline_config(nx=40, ny=40, nz=12, dx=25e-6, dy=25e-6, dz=20e-6,
+                                      interposer_um=100.0, bump_um=40.0, die_um=100.0)
+        main_module.print_startup_banner(config, source="test")
+        assert "Catalog fits:   no (largest block 11.000 x 11.000 mm)" in capsys.readouterr().out
+
+
+class TestStressCase:
+    """Decision 1: the 150.56 degC operating point is not a preset. It ships
+    as its own file, which states that it is a stress case EXPECTED to exceed
+    its 90 degC threshold, and every run of it says so."""
+
+    def test_stress_file_is_a_custom_regime_with_its_own_threshold(self):
+        config = config_loader_module.load_config(str(STRESS_CONFIG))
+        assert config.case.name == "stress_high_power_low_cool"
+        assert config.case.expect_threshold_exceeded is True
+        assert config.visualization.hotspot_threshold_c == 90.0
+        assert main_module.regime_label(config) == "custom"
+
+    def test_stress_case_really_exceeds_its_threshold(self):
+        """The expectation is physics, not a label: solve it and check."""
+        config = config_loader_module.load_config(str(STRESS_CONFIG))
+        solver = ThermalSolver.from_grid_builder(main_module.build_chiplet_stack(config))
+        peak_c = float(np.max(solver.solve_steady_state(apply_result=False))) - 273.15
+        assert peak_c > config.visualization.hotspot_threshold_c
+
+    def test_banner_names_the_stress_case(self, capsys):
+        config = config_loader_module.load_config(str(STRESS_CONFIG))
+        main_module.print_startup_banner(config, source="test", from_file=True)
+        out = capsys.readouterr().out
+        assert "Case: stress_high_power_low_cool" in out
+        assert "STRESS CASE: EXPECTED to exceed the 90.0 C threshold" in out
+
+    def test_a_stress_case_that_stays_below_threshold_is_flagged(self, capsys):
+        config = config_loader_module.load_config(str(STRESS_CONFIG))
+        report = {
+            "html_path": "outputs/thermal_3d.html", "hotspot_count": 0,
+            "peak_temperature_c": 80.0, "peak_location_um": (0.0, 0.0, 0.0),
+            "peak_location_ijk": (0, 0, 0), "transient_peak_temperature_c": None,
+            "transient_duration_s": None, "tau_s": 0.1, "converged_fraction": 0.0,
+        }
+        main_module.print_stage1_results(config, report)
+        assert "EXPECTED to exceed the threshold and did not" in capsys.readouterr().out
+
+    def test_default_config_is_the_default_preset(self):
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        assert main_module.regime_label(config) == "passive-lowpower"
+        assert config.case.expect_threshold_exceeded is False
+
+
+def _pipeline_configs(monkeypatch):
+    """One config per way main.py obtains one: flags, a preset, each shipped
+    file, and the interactive prompts with every default accepted."""
+    parse = main_module.build_cli_parser().parse_args
+    configs = {
+        "flags": main_module.build_config_from_flags(parse([]))[0],
+        "preset": main_module.build_config_from_flags(parse(["--preset", "cowos-coldplate"]))[0],
+        "config.json": config_loader_module.load_config(str(SHIPPED_CONFIG)),
+        "stress": config_loader_module.load_config(str(STRESS_CONFIG)),
+    }
+    monkeypatch.setattr("builtins.input", lambda *_: "")
+    configs["interactive"] = main_module.run_interactive_prompts()[0]
+    return configs
+
+
+class TestPipelineSuppliesEveryGridBuilderKey:
+    """Decisions 2 and 3: GridBuilder keeps its .get() defaults (h_convective
+    2500, nx 200, ...) for direct GridBuilder(config=...) construction. These
+    pin that no pipeline path can reach them."""
+
+    def test_main_always_supplies_h_convective(self, monkeypatch):
+        for name, config in _pipeline_configs(monkeypatch).items():
+            assert "h_convective" in config.to_dict()["boundary_conditions"], name
+            gb = main_module.build_chiplet_stack(config)
+            assert gb.config.h_convective == config.boundary_conditions.h_convective, name
+
+    def test_main_always_supplies_every_grid_key(self, monkeypatch):
+        for name, config in _pipeline_configs(monkeypatch).items():
+            g = config.grid
+            assert set(config.to_dict()["grid"]) == {"nx", "ny", "nz", "dx", "dy", "dz"}, name
+            built = main_module.build_chiplet_stack(config).config
+            assert (built.nx, built.ny, built.nz, built.dx, built.dy, built.dz) == \
+                (g.nx, g.ny, g.nz, g.dx, g.dy, g.dz), name
+
+    def test_optimizer_supplies_h_convective(self):
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        stage1 = ThermalSolver.from_grid_builder(main_module.build_chiplet_stack(config))
+        opt = ChipletPlacementOptimizer.from_pipeline_config(config, reuse_solver=stage1)
+        assert opt.grid_builder.config.h_convective == config.boundary_conditions.h_convective
+
+    def test_h_convective_has_no_default(self):
+        with pytest.raises(TypeError):
+            BoundaryConditionsSection()
+
+
+class TestReportLabelsMatchTheMethod:
+    """Decision 5: the Stage 2 report labelled exhaustive runs as simulated
+    annealing ('SA iterations', 'Random seed'). Presentation only."""
+
+    @staticmethod
+    def _exhaustive_result():
+        opt = ChipletPlacementOptimizer(nx=20, ny=20, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+                                        h_convective=1000.0, placement_pitch_um=5000.0, seed=0)
+        search = exhaustive_module.ExhaustivePlacementSearch(opt, placement_pitch_um=5000.0)
+        return search.search(verbose=False).to_optimization_result(opt)
+
+    @staticmethod
+    def _label_text(path):
+        """The report without its embedded images, whose base64 could hold
+        any letter sequence by chance."""
+        import re as _re
+        html = pathlib.Path(path).read_text(encoding="utf-8")
+        return _re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "", html)
+
+    def test_report_labels_exhaustive_as_exhaustive(self, tmp_path):
+        path = optimizer_module.render_optimization_report(
+            self._exhaustive_result(), output_dir=str(tmp_path), method="exhaustive")
+        text = self._label_text(path)
+        assert "exhaustive" in text.lower()
+        assert "anneal" not in text.lower()
+        assert "SA iterations" not in text and "Random seed" not in text
+
+    def test_annealing_report_is_still_labelled_annealing(self, tmp_path):
+        result = make_small_optimizer(seed=1).optimize(iterations=2, verbose=False)
+        text = self._label_text(optimizer_module.render_optimization_report(
+            result, output_dir=str(tmp_path), method="anneal"))
+        assert "simulated-annealing" in text
+        assert "SA iterations" in text
+
+    def test_unknown_method_is_refused(self, tmp_path):
+        with pytest.raises(OptimizerError, match="method"):
+            optimizer_module.render_optimization_report(
+                self._exhaustive_result(), output_dir=str(tmp_path), method="guess")
+
+
+class TestPeakLocationIsTheCellCentre:
+    """Decision 6: a location is the cell CENTRE, (i + 0.5) * d, not the
+    cell's lower corner i * d. Indices are unchanged."""
+
+    def test_injected_peak_reports_its_cell_centre(self, tmp_path):
+        import csv as _csv
+        from src.visualization import ThermalVisualizer
+        dx, dy, dz = 500e-6, 250e-6, 20e-6
+        T = np.full((10, 8, 6), 300.0)
+        i, j, k = 7, 2, 4
+        T[i, j, k] = 400.0
+        viz = ThermalVisualizer(T, dx=dx, dy=dy, dz=dz, output_dir=str(tmp_path))
+        expected = ((i + 0.5) * dx * 1e6, (j + 0.5) * dy * 1e6, (k + 0.5) * dz * 1e6)
+
+        peak = viz.get_peak_hotspot()
+        assert peak["index_ijk"] == (i, j, k)
+        assert peak["location_um"] == pytest.approx(expected, rel=1e-12)
+        assert viz.get_hotspot_report(threshold_c=100.0).peak_location_um == \
+            pytest.approx(expected, rel=1e-12)
+        with open(viz.export_hotspot_csv(threshold_c=100.0), newline="") as f:
+            rows = list(_csv.reader(f))
+        assert [float(v) for v in rows[1][3:6]] == pytest.approx(expected, abs=1e-3)
+
+    def test_webgl_readout_uses_cell_centres(self, tmp_path):
+        from src.visualization import ThermalVisualizer
+        viz = ThermalVisualizer(np.full((4, 4, 4), 300.0), dx=1e-3, dy=1e-3, dz=1e-5,
+                                output_dir=str(tmp_path))
+        html = pathlib.Path(viz.render_interactive_webgl()).read_text(encoding="utf-8")
+        assert '"stride":1' in html
+        assert "(i + 0.5 / DATA.stride) * DATA.dx_um" in html
+
+
+class TestRemainingLimitations:
+    def test_remaining_limitations_name_the_missing_benchmark(self):
+        sentence = ("Validation step 5 requires the dac143 FFT benchmark source, which is "
+                    "not present. Status remains VERIFIED, NOT VALIDATED.")
+        assert "Remaining limitations:" in validation_module.text_block()
+        assert sentence in validation_module.text_block()
+        assert sentence in validation_module.html_block()
 
 
 if __name__ == "__main__":

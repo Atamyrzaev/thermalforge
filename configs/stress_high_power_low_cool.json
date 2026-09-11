@@ -1,0 +1,45 @@
+{
+  "case": {
+    "name": "stress_high_power_low_cool",
+    "purpose": "60 W on the 20 x 20 mm package under weak cooling (h = 3500 W/m^2K) -- a deliberate stress case, not a design point",
+    "expect_threshold_exceeded": true
+  },
+  "grid": {
+    "nx": 40,
+    "ny": 40,
+    "nz": 12,
+    "dx": 0.0005,
+    "dy": 0.0005,
+    "dz": 2e-05
+  },
+  "boundary_conditions": {
+    "t_ambient_c": 30.0,
+    "h_convective": 3500.0,
+    "bottom_bc": "neumann",
+    "top_bc": "robin",
+    "side_bc": "neumann"
+  },
+  "stack": {
+    "interposer_um": 100.0,
+    "bump_um": 40.0,
+    "die_um": 100.0
+  },
+  "power": {
+    "die_power_w": 60.0,
+    "die_footprint_frac": 0.5
+  },
+  "solver": {
+    "method": "explicit",
+    "steady_state": false,
+    "total_time_s": null,
+    "dt": null,
+    "safety_factor": 0.9,
+    "record_steps": 50,
+    "max_steps": 2000000
+  },
+  "visualization": {
+    "output_dir": "outputs",
+    "hotspot_threshold_c": 90.0,
+    "use_pyvista": true
+  }
+}
