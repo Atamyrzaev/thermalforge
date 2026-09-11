@@ -10,14 +10,19 @@ schema -- instead of being redefined ad hoc as argparse defaults scattered
 across main.py.
 
 Design goals:
-  - `python main.py` with zero CLI flags must run end-to-end using
-    configs/config.json defaults.
-  - Missing file / malformed JSON / missing keys must never crash the
-    pipeline silently -- fall back to hardcoded safe defaults per-section
-    with a clear warning, exactly like GridBuilder._load_config() already
-    does for its own grid/BC section.
-  - main.py's optional CLI flags override individual fields of the loaded
-    config without needing to duplicate the whole schema.
+  - FAIL CLOSED. A run uses exactly the configuration it was given or it
+    does not start. A missing or unreadable file, malformed JSON, and any
+    unknown, retired, missing or mistyped key raise ConfigError naming the
+    key. Nothing is ignored and nothing falls back to a default. This
+    replaced a loader that fell back per section with a warning, which is
+    how a retired key, a bottom-sink boundary and a 44 um mesh under a
+    240 um stack all ran without an error.
+  - Geometry is checked, never repaired: the authored stack must fill
+    nz*dz exactly, in whole cells (StackSection.layer_cells).
+  - A run has exactly one configuration source: a file (main.py --config),
+    command-line flags, or the interactive prompts. Flags do not override a
+    file. The dataclass defaults below serve programmatic construction on
+    the flag and prompt paths; they never fill a gap in a file.
 """
 
 from __future__ import annotations
@@ -26,12 +31,17 @@ import json
 import logging
 import os
 from dataclasses import dataclass, asdict, fields
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("RISC3D-AI.ConfigLoader")
 
 DEFAULT_CONFIG_PATH = os.path.join("configs", "config.json")
+
+# Relative tolerance for "these two lengths are the same", compared in SI.
+# The micrometre/metre conversions carry ~1e-16 of round-off; anything above
+# 1e-9 is a real geometric mismatch, not arithmetic.
+GEOMETRY_REL_TOL = 1e-9
 
 
 class ConfigError(Exception):
@@ -121,11 +131,12 @@ class StackSection:
     GEOMETRY as it refines, and cannot separate discretization error from a
     silently different stack.
 
-    resolve_layer_boundaries() converts these thicknesses to z-indices
-    against a specific dz, which is the single point where mesh resolution
-    is allowed to enter. Choose dz so each thickness is a whole number of
-    cells (the defaults share a 20 um GCD, exact at dz = 20, 10, 5 and
-    2.5 um) and the geometry is then identical at every refinement level.
+    layer_cells() is the single point where mesh resolution meets the
+    stack, and it only ever CHECKS: the mesh must hold the authored stack
+    exactly, in whole cells, or the run is refused. Choose dz so every
+    layer is whole -- the defaults share a 20 um GCD, so any dz dividing
+    20 um works (20, 10, 5, 2.5 um) -- and the geometry is then identical at
+    every refinement level by construction.
     """
     interposer_um: float = 100.0
     bump_um: float = 40.0
@@ -135,44 +146,79 @@ class StackSection:
     def total_um(self) -> float:
         return self.interposer_um + self.bump_um + self.die_um
 
-    def resolve_layer_boundaries(self, nz: int, dz: float):
-        """Resolves the stack to (z_interposer_end, z_bump_end) voxel indices
-        on a mesh of spacing `dz` metres with `nz` layers.
+    def layer_cells(self, nz: int, dz: float) -> Tuple[int, int, int]:
+        """(interposer, composite, die) cell counts on a mesh of `nz` cells of
+        `dz` METRES, or ConfigError if that mesh cannot hold the stack as
+        authored. Both conditions are hard errors, compared in SI:
 
-        Returns indices such that:
+          - the stack fills the mesh: |nz*dz - total| / (nz*dz) < 1e-9
+          - every layer is a whole number of cells, and at least one.
+
+        There is no rounding and no clamping. Both used to happen here, and
+        each silently models a different stack from the one authored: the
+        default 240 um stack on a 120 um mesh was built as 100/10/10 um
+        (composite -75%, die -90%), and the shipped configs/config.json --
+        44 cells of 1 um -- as 42/1/1 um.
+        """
+        if nz < 3:
+            raise ConfigError(
+                f"the stack needs at least 3 z-cells (interposer / composite / die), "
+                f"got nz={nz}")
+        if not dz > 0:
+            raise ConfigError(f"grid.dz must be > 0 m, got {dz!r}")
+        mesh_m = nz * dz
+        total_m = self.total_um * 1e-6
+        if abs(mesh_m - total_m) / mesh_m >= GEOMETRY_REL_TOL:
+            raise ConfigError(
+                f"stack thickness {self.total_um:.3f} um ({self.interposer_um:g} interposer "
+                f"+ {self.bump_um:g} composite + {self.die_um:g} die) does not equal the grid "
+                f"z-extent nz*dz = {nz} x {dz * 1e6:.3f} um = {mesh_m * 1e6:.3f} um. The mesh "
+                f"must hold the authored stack exactly: choose nz and dz with nz*dz = "
+                f"{self.total_um:.3f} um.")
+        cells = []
+        for name, t_um in (("interposer_um", self.interposer_um),
+                           ("bump_um", self.bump_um),
+                           ("die_um", self.die_um)):
+            t_m = t_um * 1e-6
+            n = t_m / dz
+            k = int(round(n))
+            if not t_m > 0 or k < 1 or abs(t_m - k * dz) > GEOMETRY_REL_TOL * t_m:
+                raise ConfigError(
+                    f"stack.{name} = {t_um:.3f} um is {n:.4f} cells of dz = {dz * 1e6:.3f} um, "
+                    f"not a whole number of cells (at least one). Rounding it would model a "
+                    f"different layer; choose dz so every layer is whole.")
+            cells.append(k)
+        if sum(cells) != nz:     # unreachable when both checks pass; guarded anyway
+            raise ConfigError(f"stack cells {cells} sum to {sum(cells)}, not nz = {nz}")
+        return cells[0], cells[1], cells[2]
+
+    def resolve_layer_boundaries(self, nz: int, dz: float) -> Tuple[int, int]:
+        """(z_interposer_end, z_bump_end) indices on a mesh of `nz` cells of
+        `dz` metres, such that
+
             interposer = z[0 : z_interposer_end]
             composite  = z[z_interposer_end : z_bump_end]
             die        = z[z_bump_end : nz]
 
-        Rounds each interface to the nearest cell face and guarantees every
-        layer is at least one voxel thick, so a mesh too coarse to represent
-        the stack still yields a valid three-region grid rather than an empty
-        layer. realized_thicknesses_um() reports what was actually built.
+        Raises ConfigError (from layer_cells) if the mesh cannot hold the
+        stack exactly. This used to round each interface to the nearest cell
+        face and clamp every layer to at least one cell, which built a
+        different stack instead of refusing.
         """
-        if nz < 3:
-            raise ConfigError(
-                f"stack requires at least 3 z-layers to represent interposer / "
-                f"composite / die, got nz={nz}"
-            )
-        dz_um = dz * 1e6
-        z_i = int(round(self.interposer_um / dz_um))
-        z_b = int(round((self.interposer_um + self.bump_um) / dz_um))
+        n_i, n_b, _ = self.layer_cells(nz, dz)
+        return n_i, n_i + n_b
 
-        # Clamp so all three layers are non-empty and in order.
-        z_i = max(1, min(z_i, nz - 2))
-        z_b = max(z_i + 1, min(z_b, nz - 1))
-        return z_i, z_b
-
-    def realized_thicknesses_um(self, nz: int, dz: float):
-        """Returns {'interposer_um', 'bump_um', 'die_um', 'total_um'} as
-        ACTUALLY discretized on this mesh, for reporting alongside any result
-        so a geometry change cannot hide inside a refinement study."""
-        z_i, z_b = self.resolve_layer_boundaries(nz, dz)
+    def realized_thicknesses_um(self, nz: int, dz: float) -> Dict[str, float]:
+        """{'interposer_um', 'bump_um', 'die_um', 'total_um'} as discretized on
+        this mesh -- equal to the authored values (to GEOMETRY_REL_TOL),
+        because layer_cells() refuses any mesh where they would differ.
+        Reported next to the authored values so that is visible, not assumed."""
+        n_i, n_b, n_d = self.layer_cells(nz, dz)
         dz_um = dz * 1e6
         return {
-            "interposer_um": z_i * dz_um,
-            "bump_um": (z_b - z_i) * dz_um,
-            "die_um": (nz - z_b) * dz_um,
+            "interposer_um": n_i * dz_um,
+            "bump_um": n_b * dz_um,
+            "die_um": n_d * dz_um,
             "total_um": nz * dz_um,
         }
 
@@ -244,24 +290,13 @@ class PipelineConfig:
             if value <= 0:
                 raise ConfigError(f"stack.{name} must be > 0 um, got {value}")
 
-        # The grid's z-extent and the stack's authored thickness describe the
-        # same physical object. A mismatch means the realized stack is not the
-        # authored one, so warn loudly -- but do not raise: StackSection.
-        # resolve_layer_boundaries() clamps to a valid three-region grid, and
-        # main.py prints the realized thicknesses next to the authored ones,
-        # so the discrepancy is visible rather than silent. Raising here would
-        # make nz and dz un-varyable independently of the stack, which is
-        # exactly what a mesh-refinement study needs to do.
-        grid_total_um = self.grid.nz * self.grid.dz * 1e6
-        if abs(grid_total_um - s.total_um) > 0.5 * self.grid.dz * 1e6:
-            logger.warning(
-                "Stack thickness (%.1f um = %.1f interposer + %.1f composite + %.1f die) "
-                "does not match the grid z-extent (nz=%d x dz=%.2f um = %.1f um). The stack "
-                "will be clamped to fit; realized thicknesses are reported at build time. "
-                "Set nz*dz equal to the authored stack thickness to model it exactly.",
-                s.total_um, s.interposer_um, s.bump_um, s.die_um,
-                self.grid.nz, self.grid.dz * 1e6, grid_total_um,
-            )
+        # The grid's z-extent and the authored stack are the same physical
+        # object, so they must agree exactly, in whole cells -- a hard error.
+        # This used to be a warning, after which the stack was rounded and
+        # clamped to whatever the mesh could hold: a different stack,
+        # reported only in a log line. A refinement study varies nz and dz
+        # TOGETHER with nz*dz fixed, so it never needs a mismatch.
+        s.layer_cells(self.grid.nz, self.grid.dz)
 
         p = self.power
         if p.die_power_w < 0:
@@ -330,71 +365,127 @@ class PipelineConfig:
 # Loading
 # ---------------------------------------------------------------------------
 
-def _build_section(dataclass_type, raw: Dict[str, Any], section_name: str):
-    """Builds a section dataclass from a raw dict, ignoring unknown keys
-    (with a warning) and falling back to the dataclass default for any
-    missing key -- never raises on partial/incomplete sections."""
-    valid_keys = {f.name for f in fields(dataclass_type)}
-    unknown = set(raw.keys()) - valid_keys
+# Keys removed from the schema: section -> {retired key: (replacement, note)}.
+# Git history (11ac3ff) shows these two are the only fields ever removed.
+# A retired key is an error that names its replacement -- never dropped.
+RETIRED_KEYS: Dict[str, Dict[str, Tuple[str, str]]] = {
+    "stack": {
+        "interposer_frac": ("interposer_um", "a physical thickness in micrometres, not a "
+                                             "fraction of nz"),
+        "bump_frac": ("bump_um", "a physical thickness in micrometres, not a fraction of nz"),
+    },
+}
+
+# The file's sections, in order, and the dataclass each one builds.
+SECTIONS: Tuple[Tuple[str, type], ...] = (
+    ("grid", GridSection),
+    ("boundary_conditions", BoundaryConditionsSection),
+    ("stack", StackSection),
+    ("power", PowerSection),
+    ("solver", SolverSection),
+    ("visualization", VisualizationSection),
+)
+
+
+def _check_type(section: str, key: str, value: Any, default: Any) -> Any:
+    """Checks one value against the type of its dataclass default and returns
+    it (ints promoted to float where a float is expected). bool is rejected
+    where a number is expected, since JSON true/false would otherwise pass
+    as 1/0. A None default marks an Optional[float] field."""
+    where = f"{section}.{key}"
+    number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if default is None:
+        if value is None:
+            return None
+        if not number:
+            raise ConfigError(f"{where} must be a number or null, got {value!r}")
+        return float(value)
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            raise ConfigError(f"{where} must be true or false, got {value!r}")
+        return value
+    if isinstance(default, int):
+        if not number or not isinstance(value, int):
+            raise ConfigError(f"{where} must be an integer, got {value!r}")
+        return value
+    if isinstance(default, float):
+        if not number:
+            raise ConfigError(f"{where} must be a number, got {value!r}")
+        return float(value)
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            raise ConfigError(f"{where} must be a string, got {value!r}")
+        return value
+    raise ConfigError(f"{where}: no type rule for a default of {default!r}")   # schema bug
+
+
+def _build_section(dataclass_type, raw: Any, section_name: str):
+    """Builds one section dataclass from its JSON object. Fail-closed: a
+    retired, unknown, missing or mistyped key raises ConfigError naming it.
+    Nothing is ignored, and no dataclass default fills a gap in the file."""
+    if not isinstance(raw, dict):
+        raise ConfigError(f"config section '{section_name}' must be a JSON object, "
+                          f"got {type(raw).__name__}")
+    schema = {f.name: f.default for f in fields(dataclass_type)}
+    retired = RETIRED_KEYS.get(section_name, {})
+    stale = sorted(k for k in raw if k in retired)
+    if stale:
+        raise ConfigError("; ".join(
+            f"{section_name}.{k} is retired: use {section_name}.{retired[k][0]}, "
+            f"{retired[k][1]}" for k in stale))
+    unknown = sorted(k for k in raw if k not in schema)
     if unknown:
-        logger.warning("Ignoring unknown key(s) in config section '%s': %s", section_name, sorted(unknown))
-    filtered = {k: v for k, v in raw.items() if k in valid_keys}
-    try:
-        return dataclass_type(**filtered)
-    except TypeError as exc:
-        raise ConfigError(f"Invalid value type in config section '{section_name}': {exc}") from exc
+        raise ConfigError(
+            f"unknown key(s) {', '.join(f'{section_name}.{k}' for k in unknown)}; "
+            f"valid keys in '{section_name}' are {', '.join(sorted(schema))}")
+    missing = [k for k in schema if k not in raw]
+    if missing:
+        raise ConfigError(
+            f"missing required key(s) {', '.join(f'{section_name}.{k}' for k in missing)}; "
+            f"a config file must state every value -- none is defaulted")
+    return dataclass_type(**{k: _check_type(section_name, k, raw[k], schema[k])
+                             for k in schema})
 
 
 def load_config(path: Optional[str] = None) -> PipelineConfig:
     """
-    Loads and validates the full pipeline configuration.
+    Loads and validates the full pipeline configuration from `path`, or from
+    DEFAULT_CONFIG_PATH when none is given.
 
-    Resolution order:
-      1. `path` if explicitly given.
-      2. DEFAULT_CONFIG_PATH ("configs/config.json") if it exists.
-      3. Hardcoded dataclass defaults for every section, with a warning,
-         if neither of the above is available or the file is malformed.
-
-    This mirrors GridBuilder._load_config()'s fallback behavior so the
-    pipeline never hard-crashes on a missing/partial config file.
+    Fail-closed: a missing or unreadable file, malformed JSON, a top level
+    that is not an object, an unknown or missing section, and any unknown,
+    retired, missing or mistyped key all raise ConfigError. There is no
+    fallback to hardcoded defaults -- a run uses exactly this file, or it
+    does not start. validate() then enforces the physical invariants.
     """
-    resolved_path = path or DEFAULT_CONFIG_PATH
-    raw: Dict[str, Any] = {}
-
-    if path is not None and not os.path.exists(path):
-        raise ConfigError(f"Explicitly specified config path does not exist: '{path}'")
-
-    if os.path.exists(resolved_path):
-        try:
-            with open(resolved_path, "r") as f:
-                raw = json.load(f)
-            logger.info("Loaded pipeline configuration from %s", resolved_path)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.error("Failed to parse config at '%s' (%s); falling back to hardcoded defaults.",
-                         resolved_path, exc)
-            raw = {}
-    else:
-        logger.warning(
-            "Config file '%s' not found; running with hardcoded pipeline defaults. "
-            "Create configs/config.json (see config_loader.write_default_config()) to customize.",
-            resolved_path,
-        )
-
+    resolved_path = path if path is not None else DEFAULT_CONFIG_PATH
+    if not os.path.exists(resolved_path):
+        raise ConfigError(f"config file '{resolved_path}' does not exist")
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"config file '{resolved_path}' is not valid JSON: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"config file '{resolved_path}' could not be read: {exc}") from exc
     if not isinstance(raw, dict):
-        logger.error("Top-level config content is not a JSON object; falling back to hardcoded defaults.")
-        raw = {}
+        raise ConfigError(f"config file '{resolved_path}' must hold a JSON object at top level, "
+                          f"got {type(raw).__name__}")
 
-    config = PipelineConfig(
-        grid=_build_section(GridSection, raw.get("grid", {}), "grid"),
-        boundary_conditions=_build_section(
-            BoundaryConditionsSection, raw.get("boundary_conditions", {}), "boundary_conditions"
-        ),
-        stack=_build_section(StackSection, raw.get("stack", {}), "stack"),
-        power=_build_section(PowerSection, raw.get("power", {}), "power"),
-        solver=_build_section(SolverSection, raw.get("solver", {}), "solver"),
-        visualization=_build_section(VisualizationSection, raw.get("visualization", {}), "visualization"),
-    )
+    names = [name for name, _ in SECTIONS]
+    unknown = sorted(set(raw) - set(names))
+    if unknown:
+        raise ConfigError(f"unknown config section(s) {', '.join(unknown)} in "
+                          f"'{resolved_path}'; valid sections are {', '.join(names)}")
+    missing = [name for name in names if name not in raw]
+    if missing:
+        raise ConfigError(f"missing required config section(s) {', '.join(missing)} in "
+                          f"'{resolved_path}'")
+
+    config = PipelineConfig(**{name: _build_section(cls, raw[name], name)
+                               for name, cls in SECTIONS})
     config.validate()
+    logger.info("Loaded pipeline configuration from %s", resolved_path)
     return config
 
 

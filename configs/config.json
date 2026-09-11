@@ -1,22 +1,23 @@
 {
   "grid": {
-    "nx": 90,
-    "ny": 87,
-    "nz": 44,
-    "dx": 2.5e-06,
-    "dy": 2.5e-06,
-    "dz": 1e-06
+    "nx": 40,
+    "ny": 40,
+    "nz": 12,
+    "dx": 0.0005,
+    "dy": 0.0005,
+    "dz": 2e-05
   },
   "boundary_conditions": {
     "t_ambient_c": 30.0,
     "h_convective": 3500.0,
-    "bottom_bc": "robin",
-    "top_bc": "neumann",
+    "bottom_bc": "neumann",
+    "top_bc": "robin",
     "side_bc": "neumann"
   },
   "stack": {
-    "interposer_frac": 0.4,
-    "bump_frac": 0.15
+    "interposer_um": 100.0,
+    "bump_um": 40.0,
+    "die_um": 100.0
   },
   "power": {
     "die_power_w": 60.0,

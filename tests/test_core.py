@@ -49,6 +49,7 @@ Coverage:
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Optional
 
@@ -73,6 +74,7 @@ import src.optimizer as optimizer_module
 from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
 import src.exhaustive as exhaustive_module
 import src.composite_materials as composite_module
+import src.config_loader as config_loader_module
 import src.validation_status as validation_module
 import main as main_module
 
@@ -94,18 +96,26 @@ def make_pipeline_config(
 ) -> PipelineConfig:
     """Builds a small, fast-to-solve PipelineConfig for unit testing.
 
-    Stack layers are authored in MICROMETERS (see StackSection). When not
-    given explicitly they are derived from the grid's own z-extent in the
-    40%/20%/40% proportion the old fraction-based defaults produced, so the
-    authored stack always matches nz*dz exactly and these unit tests never
-    trip the grid/stack mismatch warning."""
+    Stack layers are authored in MICROMETERS (see StackSection) and must be
+    whole cells that fill nz*dz exactly -- the stack check refuses anything
+    else. When not given they are derived from the grid: the layer
+    interfaces are exactly the ones the old 40/20/40-of-nz*dz authoring was
+    ROUNDED to, so every fixture keeps the geometry it always had. The
+    difference is that the geometry is now authored, where before it was an
+    unreported rounding of a thickness the mesh could not hold."""
     total_um = nz * dz * 1e6
-    if interposer_um is None:
-        interposer_um = 0.4 * total_um
-    if bump_um is None:
-        bump_um = 0.2 * total_um
-    if die_um is None:
-        die_um = total_um - interposer_um - bump_um
+    given = [v is not None for v in (interposer_um, bump_um, die_um)]
+    if any(given) and not all(given):
+        raise ValueError("give all three stack thicknesses or none")
+    if not any(given):
+        dz_um = dz * 1e6
+        z_i = int(round(0.4 * total_um / dz_um))
+        z_b = int(round(0.6 * total_um / dz_um))
+        z_i = max(1, min(z_i, nz - 2))
+        z_b = max(z_i + 1, min(z_b, nz - 1))
+        interposer_um = z_i * dz_um
+        bump_um = (z_b - z_i) * dz_um
+        die_um = (nz - z_b) * dz_um
     return PipelineConfig(
         grid=GridSection(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz),
         boundary_conditions=BoundaryConditionsSection(
@@ -952,10 +962,17 @@ def make_small_optimizer(seed: int = 0, placement_pitch_um: float = 25.0
     placement_pitch_um defaults to 25 um (one voxel here) rather than the
     package-scale DEFAULT_PLACEMENT_PITCH_UM of 1000 um: this fixture models a
     500 x 500 um die, on which a 1000 um placement lattice is larger than the
-    whole die and leaves no placeable positions."""
+    whole die and leaves no placeable positions.
+
+    The stack is given explicitly. This fixture used to take the default
+    100/40/100 um stack on a 12 x 10 um = 120 um mesh, which the old clamp in
+    StackSection silently built as 100/10/10 um. That clamp is gone -- such a
+    mesh is now refused -- so the geometry these tests always actually ran
+    on is written down here instead, unchanged."""
     return ChipletPlacementOptimizer(
         nx=20, ny=20, nz=12, dx=25e-6, dy=25e-6, dz=10e-6,
         catalog=SMALL_CATALOG, t_ambient_c=25.0, h_convective=2500.0,
+        stack=StackSection(interposer_um=100.0, bump_um=10.0, die_um=10.0),
         placement_pitch_um=placement_pitch_um,
         seed=seed,
     )
@@ -1141,14 +1158,12 @@ class TestChipletPhysicalDimensions:
             ChipletPlacementOptimizer(nx=40, ny=40, nz=24,
                                       dx=25e-6, dy=25e-6, dz=10e-6)
 
-        # 40x40 at 500 um = 20 x 20 mm = 400 mm^2 die -> accepted. nz=12 here
-        # (19,200 unknowns, direct sparse path) rather than 24: at 38,400 this
-        # mesh falls to the iterative backend, which does not converge on a
-        # grid this anisotropic. Only construction and geometry matter to this
-        # test, but there is no reason for it to stand on a configuration the
-        # module documents as unusable.
+        # 40x40 at 500 um = 20 x 20 mm = 400 mm^2 die -> accepted. nz=12 at
+        # dz=20 um holds the 100/40/100 um stack exactly (5/2/5 cells). This
+        # used dz=40 um, a 480 um mesh under a 240 um stack that the old
+        # clamp silently built as 80/80/320 um; that mesh is now refused.
         opt = ChipletPlacementOptimizer(nx=40, ny=40, nz=12,
-                                        dx=500e-6, dy=500e-6, dz=40e-6)
+                                        dx=500e-6, dy=500e-6, dz=20e-6)
         assert opt.nx == 40 and opt.ny == 40      # same nx/ny as the refused case
         assert opt.is_valid(opt.shelf_packed_layout())
 
@@ -2054,6 +2069,212 @@ class TestValidationStatusOnReports:
         assert "Verified, not validated." in html
         for name in self.NAMES:
             assert name in html
+
+
+# ---------------------------------------------------------------------------
+# Master prompt, Phase 1: configuration and physical consistency
+# ---------------------------------------------------------------------------
+
+SHIPPED_CONFIG = pathlib.Path(__file__).resolve().parent.parent / "configs" / "config.json"
+
+
+def _config_file(tmp_path, edit=None) -> str:
+    """The shipped config, optionally edited, written to tmp_path."""
+    raw = json.loads(SHIPPED_CONFIG.read_text(encoding="utf-8"))
+    if edit is not None:
+        edit(raw)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return str(path)
+
+
+class TestConfigFailsClosed:
+    """Phase 1A: an unknown, retired, missing or mistyped key raises
+    ConfigError naming the key. Nothing is ignored and nothing defaults."""
+
+    def test_unknown_key_is_named(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r["grid"].update(nxx=40))
+        with pytest.raises(ConfigError, match=r"grid\.nxx"):
+            config_loader_module.load_config(path)
+
+    def test_unknown_section_is_named(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r.update(meshing={"n": 1}))
+        with pytest.raises(ConfigError, match="meshing"):
+            config_loader_module.load_config(path)
+
+    @pytest.mark.parametrize("old, new", [("interposer_frac", "interposer_um"),
+                                          ("bump_frac", "bump_um")])
+    def test_retired_key_names_its_replacement(self, tmp_path, old, new):
+        path = _config_file(tmp_path, lambda r: r["stack"].update({old: 0.4}))
+        with pytest.raises(ConfigError, match=rf"stack\.{old}.*stack\.{new}"):
+            config_loader_module.load_config(path)
+
+    @pytest.mark.parametrize("section, key", [
+        ("grid", "dz"), ("stack", "die_um"), ("boundary_conditions", "top_bc"),
+        ("boundary_conditions", "h_convective"), ("power", "die_power_w"),
+    ])
+    def test_missing_key_is_named_not_defaulted(self, tmp_path, section, key):
+        path = _config_file(tmp_path, lambda r: r[section].pop(key))
+        with pytest.raises(ConfigError, match=rf"{section}\.{key}"):
+            config_loader_module.load_config(path)
+
+    def test_missing_section_is_named(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r.pop("power"))
+        with pytest.raises(ConfigError, match="power"):
+            config_loader_module.load_config(path)
+
+    @pytest.mark.parametrize("section, key, value", [
+        ("grid", "nx", 40.5), ("grid", "nx", "40"), ("grid", "dx", None),
+        ("solver", "steady_state", 1), ("boundary_conditions", "top_bc", 3),
+    ])
+    def test_wrong_type_is_named(self, tmp_path, section, key, value):
+        path = _config_file(tmp_path, lambda r: r[section].update({key: value}))
+        with pytest.raises(ConfigError, match=rf"{section}\.{key}"):
+            config_loader_module.load_config(path)
+
+    def test_malformed_json_raises_instead_of_defaulting(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text("{ not json", encoding="utf-8")
+        with pytest.raises(ConfigError, match="JSON"):
+            config_loader_module.load_config(str(path))
+
+    def test_absent_default_file_raises_instead_of_defaulting(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config_loader_module, "DEFAULT_CONFIG_PATH",
+                            str(tmp_path / "absent.json"))
+        with pytest.raises(ConfigError, match="absent.json"):
+            config_loader_module.load_config()
+
+    def test_json_round_trip_is_exact(self, tmp_path):
+        first = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        path = tmp_path / "round_trip.json"
+        path.write_text(json.dumps(first.as_dict()), encoding="utf-8")
+        assert config_loader_module.load_config(str(path)).as_dict() == first.as_dict()
+
+
+class TestStackMustFitTheMesh:
+    """Phase 1B: the authored stack must fill nz*dz exactly, in whole cells.
+    A mesh that cannot hold it is refused -- never squeezed or clamped."""
+
+    def test_default_stack_resolves_to_whole_cells_on_the_dz_ladder(self):
+        s = StackSection()
+        assert s.layer_cells(12, 20e-6) == (5, 2, 5)
+        assert s.layer_cells(24, 10e-6) == (10, 4, 10)
+        assert s.layer_cells(48, 5e-6) == (20, 8, 20)
+
+    def test_z_extent_mismatch_is_refused(self):
+        config = make_pipeline_config(nx=10, ny=10, nz=12, dz=20e-6,
+                                      interposer_um=100.0, bump_um=40.0, die_um=100.0)
+        config.grid.nz = 24          # a 480 um mesh under a 240 um stack
+        with pytest.raises(ConfigError, match=r"nz\*dz"):
+            config.validate()
+
+    def test_layer_that_is_not_whole_cells_is_refused(self):
+        # 16 cells x 15 um = 240 um: the total matches, but 100 um is 6.67 cells.
+        with pytest.raises(ConfigError, match="interposer"):
+            StackSection().layer_cells(16, 15e-6)
+
+    def test_the_old_clamp_case_is_refused_not_squeezed(self):
+        """The case the clamp hid: the 240 um stack on a 120 um mesh was built
+        as 100/10/10 um -- composite -75%, die -90% -- with no error."""
+        with pytest.raises(ConfigError):
+            StackSection().resolve_layer_boundaries(12, 10e-6)
+
+    def test_optimizer_refuses_a_stack_its_mesh_cannot_hold(self):
+        # The optimizer resolves its stack through StackSection and already
+        # converts ConfigError to OptimizerError, so it now refuses as well.
+        with pytest.raises(OptimizerError, match="Stack layer resolution failed"):
+            ChipletPlacementOptimizer(nx=20, ny=20, nz=12, dx=25e-6, dy=25e-6, dz=10e-6,
+                                      catalog=SMALL_CATALOG, placement_pitch_um=25.0)
+
+    def test_preflight_recommendation_holds_the_stack(self):
+        """preflight_optimizer_fit() recommended --dz-um 40 at --nz 12: a
+        480 um mesh under the 240 um stack. Its advice must itself be valid."""
+        import re as _re
+        config = make_pipeline_config(nx=40, ny=40, nz=12, dx=25e-6, dy=25e-6, dz=20e-6,
+                                      interposer_um=100.0, bump_um=40.0, die_um=100.0)
+        message = main_module.preflight_optimizer_fit(config)
+        nz = int(_re.search(r"--nz (\d+)", message).group(1))
+        dz_um = float(_re.search(r"--dz-um ([\d.]+)", message).group(1))
+        assert StackSection().layer_cells(nz, dz_um * 1e-6) == (5, 2, 5)
+
+
+class TestShippedConfig:
+    """Phase 1C/1D: configs/config.json loads under the strict rules, fills
+    its mesh with the authored stack in whole cells, matches the catalog's
+    20 x 20 mm die, and sinks through the die backside."""
+
+    def test_loads_and_satisfies_every_invariant(self):
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        g, s = config.grid, config.stack
+        assert abs(g.nz * g.dz - s.total_um * 1e-6) / (g.nz * g.dz) < 1e-9
+        assert s.layer_cells(g.nz, g.dz) == (5, 2, 5)
+        assert g.nx * g.dx == pytest.approx(20e-3, rel=1e-12)
+        assert g.ny * g.dy == pytest.approx(20e-3, rel=1e-12)
+        assert main_module.preflight_optimizer_fit(config) is None
+        assert g.nx * g.ny * g.nz <= thermal_solver_module.DIRECT_SOLVE_MAX_UNKNOWNS
+
+    def test_sink_is_the_die_backside(self):
+        bc = config_loader_module.load_config(str(SHIPPED_CONFIG)).boundary_conditions
+        assert (bc.bottom_bc, bc.top_bc) == ("neumann", "robin")
+        flags, _, _ = main_module.build_config_from_flags(
+            main_module.build_cli_parser().parse_args([]))
+        assert (flags.boundary_conditions.bottom_bc,
+                flags.boundary_conditions.top_bc) == ("neumann", "robin")
+
+
+class TestStage1Stage2Power:
+    """Phase 1E: Stage 2 either models the same chip as Stage 1, and says how,
+    or refuses. It never runs two different chips under one invocation."""
+
+    @staticmethod
+    def _config(watts):
+        return make_pipeline_config(nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6, dz=20e-6,
+                                    die_power_w=watts, h_convective=1000.0)
+
+    def test_rescaling_makes_one_chip_and_says_so(self):
+        catalog, note = main_module.stage2_catalog(self._config(12.0), scale_power_to_stage1=True)
+        assert sum(c.power_w for c in catalog) == pytest.approx(12.0, rel=1e-12)
+        assert "36.00 W -> 12.00 W" in note
+
+    def test_mismatch_without_rescaling_is_refused(self):
+        with pytest.raises(main_module.PipelineError, match="different chips"):
+            main_module.stage2_catalog(self._config(12.0), scale_power_to_stage1=False)
+
+    def test_matching_power_is_used_as_authored(self):
+        catalog, _ = main_module.stage2_catalog(self._config(36.0), scale_power_to_stage1=False)
+        assert catalog == optimizer_module.DEFAULT_CHIPLET_CATALOG
+
+    def test_cli_refuses_before_any_solve(self, tmp_path, capsys):
+        rc = main_module.main(["--optimize", "--no-scale-catalog-power", "--no-browser",
+                               "--output-dir", str(tmp_path)])
+        assert rc == main_module.EXIT_PREFLIGHT_FAILED
+        assert "different chips" in capsys.readouterr().err
+        assert not list(tmp_path.iterdir())     # nothing solved, nothing written
+
+
+class TestStartupBanner:
+    """Phase 1F with 1B: before any solve the run states the authored and
+    realized stack in physical units, with cell counts."""
+
+    def test_banner_lists_authored_realized_and_cells(self, capsys):
+        import re as _re
+        config = make_pipeline_config(nx=40, ny=40, nz=12, dx=500e-6, dy=500e-6, dz=20e-6,
+                                      interposer_um=100.0, bump_um=40.0, die_um=100.0,
+                                      die_power_w=12.0, h_convective=1000.0)
+        main_module.print_startup_banner(config, source="test")
+        out = capsys.readouterr().out
+        assert _re.search(r"interposer\s+100\.000 um -> 100\.000 um\s+\(5 cells\)", out)
+        assert _re.search(r"composite\s+40\.000 um ->\s+40\.000 um\s+\(2 cells\)", out)
+        assert _re.search(r"die\s+100\.000 um -> 100\.000 um\s+\(5 cells\)", out)
+        assert "240.000 um = nz*dz = 12 x 20.000 um" in out
+        assert "20.000 x 20.000 mm" in out
+        assert "VERIFIED, NOT VALIDATED" in out
+
+    def test_banner_prints_before_the_solve(self, tmp_path, capsys):
+        rc = main_module.main(["--no-browser", "--output-dir", str(tmp_path)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert out.index("(authored -> realized)") < out.index("Steady-state solve")
 
 
 if __name__ == "__main__":

@@ -109,6 +109,7 @@ from src.optimizer import (
 )
 from src.exhaustive import ExhaustivePlacementSearch, ExhaustiveSearchError
 from src.validation_status import (
+    STATUS as VALIDATION_STATUS,
     html_block as validation_html_block, text_block as validation_text_block,
 )
 
@@ -609,12 +610,16 @@ def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATA
         max(c.width_um for c in catalog),
         max(c.depth_um for c in catalog),
     )
-    # Choose the largest square lateral grid whose unknown count leaves room
-    # for a usable stack depth, then derive the pitch from the die size.
-    rec_nz = 12
+    # Keep the caller's z-discretization: it already holds the authored
+    # stack exactly (validate() refuses any that does not). This used to
+    # hardcode --nz 12 --dz-um 40, a 480 um mesh under the 240 um stack --
+    # advice that the stack check now rejects. Then choose the largest square
+    # lateral grid that stays on the direct path at that depth, and derive
+    # the pitch from the die size.
+    rec_nz = config.grid.nz
+    rec_dz_um = config.grid.dz * 1e6
     rec_n = int(_math.sqrt(DIRECT_SOLVE_MAX_UNKNOWNS / rec_nz))
     rec_pitch_um = _math.ceil(needed_side_um / rec_n / 10.0) * 10.0
-    rec_dz_um = 40.0
 
     lines = ["Stage 2 cannot run with this configuration."]
     if too_big or not fits_by_area:
@@ -639,7 +644,7 @@ def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATA
         "",
         "  A configuration satisfying both constraints:",
         f"    python main.py --optimize --nx {rec_n} --ny {rec_n} --nz {rec_nz} "
-        f"--dx-um {rec_pitch_um:.0f} --dy-um {rec_pitch_um:.0f} --dz-um {rec_dz_um:.0f}",
+        f"--dx-um {rec_pitch_um:.0f} --dy-um {rec_pitch_um:.0f} --dz-um {rec_dz_um:g}",
         f"    ({rec_n}x{rec_n} at {rec_pitch_um:.0f} um = "
         f"{rec_n * rec_pitch_um / 1000.0:.1f} x {rec_n * rec_pitch_um / 1000.0:.1f} mm die, "
         f"{rec_n * rec_n * rec_nz:,} unknowns)",
@@ -679,8 +684,11 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
     # fraction authoring made the composite layer's realized thickness a
     # rounding artifact of nz, swinging -16.7%..+25.0% and moving the peak
     # temperature with it.
-    z_interposer_end, z_bump_end = config.stack.resolve_layer_boundaries(nz, config.grid.dz)
-    realized = config.stack.realized_thicknesses_um(nz, config.grid.dz)
+    try:
+        z_interposer_end, z_bump_end = config.stack.resolve_layer_boundaries(nz, config.grid.dz)
+        realized = config.stack.realized_thicknesses_um(nz, config.grid.dz)
+    except ConfigError as exc:
+        raise PipelineError(f"The mesh cannot hold the authored stack: {exc}") from exc
 
     try:
         gb.assign_layer(slice(0, z_interposer_end), STACK_MATERIALS[0])
@@ -696,10 +704,11 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
     except GridBuilderError as exc:
         raise PipelineError(f"Chiplet stack assembly failed: {exc}") from exc
 
-    # Print REALIZED thicknesses next to the authored ones. A refinement study
-    # is only meaningful if the geometry is identical at every level, so any
-    # discretization-induced geometry change must be visible in the log rather
-    # than hidden inside the result.
+    # Realized thicknesses next to the authored ones. They are equal by
+    # construction -- StackSection.layer_cells() refuses any mesh where they
+    # would differ -- and are printed so that is visible rather than assumed.
+    # (A warning loop for a rounded or clamped layer used to follow; the
+    # stack check makes that case unreachable, so it is gone.)
     print(
         f"[main] Stack assembled: interposer z[0:{z_interposer_end}], "
         f"bump+underfill z[{z_interposer_end}:{z_bump_end}], "
@@ -712,15 +721,6 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
         f"composite {config.stack.bump_um:.1f} -> {realized['bump_um']:.1f}um, "
         f"die {config.stack.die_um:.1f} -> {realized['die_um']:.1f}um"
     )
-    for label, authored, got in (
-        ("interposer", config.stack.interposer_um, realized["interposer_um"]),
-        ("composite", config.stack.bump_um, realized["bump_um"]),
-        ("die", config.stack.die_um, realized["die_um"]),
-    ):
-        if abs(got - authored) > 1e-9:
-            print(f"[main] WARNING: {label} layer discretized to {got:.1f}um, "
-                  f"{100.0*(got-authored)/authored:+.1f}% off the authored {authored:.1f}um. "
-                  f"Choose dz so {authored:.1f}um is a whole number of cells.")
     return gb
 
 
@@ -815,6 +815,102 @@ def print_stage1_results(config: PipelineConfig, report: dict) -> None:
     print("=" * 60)
 
 
+def stage2_catalog(config: PipelineConfig, scale_power_to_stage1: bool = True):
+    """(catalog, note): the chiplet catalog Stage 2 will place, and one line
+    saying how it was obtained. Stage 1 and Stage 2 must model ONE chip:
+
+      - totals already equal: the catalog as authored;
+      - rescaling allowed: every block scaled by one common factor to the
+        Stage 1 die power (ratios preserved), and the note says so;
+      - rescaling refused and the totals differ: PipelineError.
+
+    The last case used to print a NOTE and run anyway -- a 36 W catalog under
+    a 12 W Stage 1, two different chips in one invocation whose results
+    cannot be compared. Shared by the startup banner, the pre-solve check in
+    main() and run_stage2_optimizer(), so all three apply the same rule.
+    """
+    catalog = DEFAULT_CHIPLET_CATALOG
+    authored_w = sum(c.power_w for c in catalog)
+    target_w = config.power.die_power_w
+    if math.isclose(authored_w, target_w, rel_tol=1e-12, abs_tol=1e-12):
+        return catalog, (f"Catalog used as authored: {authored_w:.2f} W, equal to the "
+                         f"Stage 1 die power.")
+    if scale_power_to_stage1:
+        return (scale_catalog_to_total_power(catalog, target_w),
+                f"Catalog rescaled {authored_w:.2f} W -> {target_w:.2f} W to match the "
+                f"Stage 1 die power (ratios preserved).")
+    raise PipelineError(
+        f"The Stage 2 catalog totals {authored_w:.2f} W but the Stage 1 die power is "
+        f"{target_w:.2f} W, and --no-scale-catalog-power forbids rescaling: these describe "
+        f"different chips. Set --die-power-w {authored_w:g} to run the catalog as authored, "
+        f"or drop --no-scale-catalog-power to scale it to {target_w:g} W.")
+
+
+def print_startup_banner(config: PipelineConfig, source: str,
+                         duration_s: Optional[float] = None,
+                         total_steps: Optional[int] = None,
+                         optimize: bool = False,
+                         scale_power_to_stage1: bool = True,
+                         from_file: bool = False) -> None:
+    """Everything a result depends on, printed BEFORE any solve: where the
+    configuration came from, the physical domain and its cells, the authored
+    and realized stack with cell counts, the boundary conditions, the
+    cooling regime, the power each stage uses, and the validation status.
+
+    Units: SI inside the model (m, W, K, W/mK, W/m^2K). Micrometres,
+    millimetres and degC appear only here and in the prompts.
+    """
+    g, s, bcs = config.grid, config.stack, config.boundary_conditions
+    cells = s.layer_cells(g.nz, g.dz)       # validate() has already enforced this
+    dz_um = g.dz * 1e6
+    n = g.nx * g.ny * g.nz
+    backend = "direct LU" if n <= DIRECT_SOLVE_MAX_UNKNOWNS else "conjugate gradients"
+
+    print("=" * 60)
+    print("RISC3D-AI :: 3D IC Thermal Simulation Pipeline")
+    print("=" * 60)
+    print(f"Config source: {source}")
+    print("Units: SI in the model (m, W, K); um, mm and degC appear only in this banner.")
+    print(f"Domain: {g.nx * g.dx * 1e3:.3f} x {g.ny * g.dy * 1e3:.3f} mm x "
+          f"{g.nz * dz_um:.3f} um = {g.nx} x {g.ny} x {g.nz} cells of "
+          f"{g.dx * 1e6:.3f} x {g.dy * 1e6:.3f} x {dz_um:.3f} um")
+    print(f"Unknowns: N = {n:,} ({backend}; direct limit {DIRECT_SOLVE_MAX_UNKNOWNS:,})")
+    print("Stack (authored -> realized), bottom to top:")
+    for name, t_um, k in zip(("interposer", "composite", "die"),
+                             (s.interposer_um, s.bump_um, s.die_um), cells):
+        print(f"  {name:<10}  {t_um:7.3f} um -> {k * dz_um:7.3f} um  ({k} cells)")
+    print(f"  {'total':<10}  {s.total_um:7.3f} um = nz*dz = {g.nz} x {dz_um:.3f} um")
+    print(f"Ambient: {bcs.t_ambient_c:.1f}C | h_convective: {bcs.h_convective:.1f} W/m^2K | "
+          f"Die power: {config.power.die_power_w:.2f}W")
+    sink_face = "bottom" if bcs.bottom_bc != "neumann" else "top"
+    sink_kind = bcs.bottom_bc if sink_face == "bottom" else bcs.top_bc
+    face_desc = "die backside" if sink_face == "top" else "interposer underside"
+    print(f"Sink: {sink_face} face ({face_desc}), {sink_kind}; all other faces adiabatic")
+    print_regime_header(config)
+    if optimize:
+        try:
+            _, power_note = stage2_catalog(config, scale_power_to_stage1)
+            print(f"Stage 2 power: {power_note}")
+        except PipelineError as exc:
+            print(f"Stage 2 power: REFUSED -- {exc}")
+    if duration_s is not None:
+        print(f"Mode: steady state + transient {duration_s * 1e3:.4f} ms")
+    elif total_steps is not None:
+        print(f"Mode: steady state + transient ({total_steps:,} explicit steps)")
+    else:
+        print("Mode: steady state only (pass --transient <ms> to add a time series)")
+    print(f"Status: {VALIDATION_STATUS.upper()} (limitations are listed with the results)")
+    if from_file:
+        # Accepted and validated, but nothing in this pipeline reads them.
+        # Said here so a file's steady_state=false or method="crank_nicolson"
+        # cannot look as if it took effect.
+        print("Read from the file but not used by this pipeline: solver.method, "
+              "solver.steady_state, solver.total_time_s, solver.dt, solver.record_steps, "
+              "solver.max_steps, visualization.use_pyvista. The steady state is always "
+              "solved; a transient runs only with --transient.")
+    print("=" * 60)
+
+
 def run_stage2_optimizer(
     config: PipelineConfig,
     open_browser: bool,
@@ -840,22 +936,10 @@ def run_stage2_optimizer(
     print("STAGE 2 :: AUTOMATED CHIPLET PLACEMENT OPTIMIZATION")
     print("=" * 60)
 
-    # Stage 1 asked the user for a die power. Stage 2 used to ignore it and
-    # run DEFAULT_CHIPLET_CATALOG's 36.0 W regardless -- a 3x mismatch at the
-    # 12 W default, which is two different chips in one invocation with
-    # energy-balance floors 60 K apart. Whatever is chosen here, the per-block
-    # wattage actually used is printed.
-    catalog = DEFAULT_CHIPLET_CATALOG
-    catalog_total = sum(c.power_w for c in catalog)
-    stage1_power = config.power.die_power_w
-    if scale_power_to_stage1 and abs(catalog_total - stage1_power) > 1e-9:
-        catalog = scale_catalog_to_total_power(catalog, stage1_power)
-        print(f"[main] Catalog rescaled {catalog_total:.1f} W -> {stage1_power:.1f} W to match "
-              f"the Stage 1 die power (ratios preserved).")
-    elif abs(catalog_total - stage1_power) > 1e-9:
-        print(f"[main] NOTE: catalog totals {catalog_total:.1f} W but Stage 1 was given "
-              f"{stage1_power:.1f} W. Running the catalog as authored -- these are two "
-              f"different chips, and the Stage 1 and Stage 2 numbers are not comparable.")
+    # One chip in both stages, or a refusal -- see stage2_catalog(). The
+    # per-block wattage actually used is printed below either way.
+    catalog, power_note = stage2_catalog(config, scale_power_to_stage1)
+    print(f"[main] {power_note}")
 
     used_total = sum(c.power_w for c in catalog)
     print(f"[main] Catalog: {len(catalog)} chiplets totalling {used_total:.2f} W")
@@ -1195,27 +1279,13 @@ def main(argv=None) -> int:
         print("\n[main] Input cancelled. Exiting.")
         return 1
 
-    print("=" * 60)
-    print("RISC3D-AI :: 3D IC Thermal Simulation Pipeline")
-    print("=" * 60)
-    print(f"Grid: {config.grid.nx}x{config.grid.ny}x{config.grid.nz} voxels "
-          f"({config.grid.dx*1e6:.1f}x{config.grid.dy*1e6:.1f}x{config.grid.dz*1e6:.1f} um)")
-    print(f"Ambient: {config.boundary_conditions.t_ambient_c:.1f}C | "
-          f"h_convective: {config.boundary_conditions.h_convective:.1f} W/m^2K | "
-          f"Die power: {config.power.die_power_w:.2f}W")
-    bcs = config.boundary_conditions
-    sink_face = "bottom" if bcs.bottom_bc != "neumann" else "top"
-    sink_kind = bcs.bottom_bc if sink_face == "bottom" else bcs.top_bc
-    face_desc = "die backside" if sink_face == "top" else "interposer underside"
-    print(f"Sink: {sink_face} face ({face_desc}), {sink_kind}; all other faces adiabatic")
-    print_regime_header(config)
-    if duration_s is not None:
-        print(f"Mode: steady state + transient {duration_s*1e3:.4f} ms")
-    elif total_steps is not None:
-        print(f"Mode: steady state + transient ({total_steps:,} explicit steps)")
-    else:
-        print("Mode: steady state only (pass --transient <ms> to add a time series)")
-    print("=" * 60)
+    source = (f"config file {args.config}" if args.config is not None
+              else "interactive prompts" if interactive else "command-line flags")
+    print_startup_banner(
+        config, source, duration_s=duration_s, total_steps=total_steps,
+        optimize=args.optimize, scale_power_to_stage1=not args.no_scale_catalog_power,
+        from_file=args.config is not None,
+    )
 
     if args.optimize_iterations < 1:
         print(f"\n[FATAL] --optimize-iterations must be >= 1, got {args.optimize_iterations}",
@@ -1230,6 +1300,13 @@ def main(argv=None) -> int:
     # worth running for them.
     if args.optimize:
         preflight_error = preflight_optimizer_fit(config)
+        if preflight_error is None:
+            # Stage 1 and Stage 2 must describe one chip. Checked here, before
+            # any solve, so a refusal costs nothing.
+            try:
+                stage2_catalog(config, not args.no_scale_catalog_power)
+            except PipelineError as exc:
+                preflight_error = str(exc)
         if preflight_error is not None:
             print(f"\n[FATAL] {preflight_error}", file=sys.stderr)
             return EXIT_PREFLIGHT_FAILED
