@@ -59,6 +59,8 @@ import pytest
 from src.config_loader import (
     PipelineConfig,
     ConfigError,
+    ChipletEntry,
+    InitialPlacementSection,
     GridSection,
     BoundaryConditionsSection,
     StackSection,
@@ -75,6 +77,8 @@ from src.optimizer import ChipletPlacementOptimizer, ChipletSpec, OptimizerError
 import src.exhaustive as exhaustive_module
 import src.composite_materials as composite_module
 import src.config_loader as config_loader_module
+import src.experiment as experiment_module
+import src.experiment_report as report_module
 import src.validation_status as validation_module
 import main as main_module
 
@@ -1903,7 +1907,9 @@ class TestCoolingPresets:
         rc = main_module.main(["--config", str(tmp_path / "unused.json"),
                                "--preset", "cowos-coldplate"])
         assert rc == 1
-        assert "--preset applies to flag-driven runs" in capsys.readouterr().err
+        # The refusal is now generic over every flag that changes what is
+        # simulated, not just --preset (see CONFIG_FILE_CONFLICTS).
+        assert "--preset cannot be combined with --config" in capsys.readouterr().err
 
     @pytest.mark.parametrize("preset, flux_fp, flux_sink, r_conv, floor", [
         # Hand values: footprint 20x20 cells x 500 um = 100 mm^2 = 1 cm^2;
@@ -2459,6 +2465,42 @@ class TestPeakLocationIsTheCellCentre:
         assert "(i + 0.5 / DATA.stride) * DATA.dx_um" in html
 
 
+class TestLegacyReportArithmetic:
+    """Productization audit: two presentation defects in the protected
+    optimizer's report layer, each proven by a failing test before any fix.
+    Neither touches a number the optimizer computes -- only what it prints."""
+
+    def test_scale_note_does_not_mix_chiplet_area_with_die_average(self, tmp_path):
+        """The note read 'carrying 12.0 W across 192.0 mm^2 of chiplets -- 48%
+        fill at an average 3.0 W/cm^2'. 3.0 is the DIE average (12 W / 4 cm^2);
+        set beside 192 mm^2 it reads as 12 W / 1.92 cm^2, which is 6.25."""
+        import html as _html
+        import re as _re
+        opt = ChipletPlacementOptimizer(nx=20, ny=20, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+                                        h_convective=1000.0, placement_pitch_um=5000.0, seed=0)
+        result = exhaustive_module.ExhaustivePlacementSearch(opt, placement_pitch_um=5000.0) \
+            .search(verbose=False).to_optimization_result(opt)
+        path = optimizer_module.render_optimization_report(result, output_dir=str(tmp_path),
+                                                           method="exhaustive")
+        text = _html.unescape(_re.sub(r"<[^>]+>", " ", pathlib.Path(path).read_text(encoding="utf-8")))
+        text = _re.sub(r"\s+", " ", text)
+        # The default catalog: 36 W over 192 mm^2 of chiplets, on a 400 mm^2 die.
+        assert "18.75 W/cm² over the chiplets" in text
+        assert "9.00 W/cm² averaged over the die" in text
+
+    def test_improvement_percent_is_of_the_rise_above_ambient(self):
+        """improvement_pct called its denominator `rise_initial` but divided by
+        the initial peak in degC: a percentage of a Celsius reading, which
+        changes with the temperature scale. The rise above ambient does not."""
+        r = optimizer_module.OptimizationResult(
+            best_layout=(), best_cost=70.0, best_peak_temperature_c=70.0,
+            best_temperature_field_k=np.zeros(1), best_cost_history=[], current_cost_history=[],
+            initial_layout=(), initial_peak_temperature_c=85.0, iterations=0, accepted_moves=0,
+            rejected_moves=0, overlap_candidates=0, seed=0, t_ambient_c=25.0)
+        assert r.improvement_c == pytest.approx(15.0)
+        assert r.improvement_pct == pytest.approx(25.0)      # 15 K of a 60 K rise
+
+
 class TestRemainingLimitations:
     def test_remaining_limitations_name_the_missing_benchmark(self):
         sentence = ("Validation step 5 requires the dac143 FFT benchmark source, which is "
@@ -2466,6 +2508,375 @@ class TestRemainingLimitations:
         assert "Remaining limitations:" in validation_module.text_block()
         assert sentence in validation_module.text_block()
         assert sentence in validation_module.html_block()
+
+
+# ---------------------------------------------------------------------------
+# The placement experiment: catalog, initial placement, power map, before/after
+# ---------------------------------------------------------------------------
+
+def make_experiment_config(*, nx=20, ny=20, nz=12, dx=1000e-6, dy=1000e-6, dz=20e-6,
+                           h_convective=1000.0, pitch_um=4000.0, chiplets=None,
+                           origins=None):
+    """A small placement experiment: an explicit catalog and an explicit
+    initial placement, on a 20 x 20 mm package with a 240 um stack."""
+    chiplets = chiplets if chiplets is not None else (
+        ChipletEntry(id="a", name="A", width_um=4000.0, height_um=4000.0, power_w=6.0),
+        ChipletEntry(id="b", name="B", width_um=6000.0, height_um=4000.0, power_w=4.0),
+    )
+    origins = origins if origins is not None else {"a": (0.0, 0.0), "b": (8000.0, 0.0)}
+    config = make_pipeline_config(
+        nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, h_convective=h_convective,
+        die_power_w=sum(c.power_w for c in chiplets),
+        interposer_um=100.0, bump_um=40.0, die_um=100.0)
+    config.chiplets = tuple(chiplets)
+    config.initial_placement = InitialPlacementSection(pitch_um=pitch_um,
+                                                       origins_um=dict(origins))
+    config.validate()
+    return config
+
+
+def make_experiment(**kwargs):
+    return experiment_module.Experiment(make_experiment_config(**kwargs), source="test")
+
+
+@pytest.fixture(scope="module")
+def optimized_experiment():
+    """One small experiment, solved and optimized once, shared by the tests
+    that only read its results."""
+    exp = make_experiment()
+    exp.solve_initial()
+    exp.optimize(method="exhaustive", verbose=False)
+    return exp
+
+
+class TestChipletConfig:
+    """The catalog and the initial placement are configuration, validated as
+    strictly as everything else in the file."""
+
+    def test_canonical_config_is_an_experiment(self):
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        assert [c.id for c in config.chiplets] == ["cpu0", "gpu0", "hbm0", "npu0"]
+        assert config.initial_placement.pitch_um == 2000.0
+        assert sum(c.power_w for c in config.chiplets) == pytest.approx(
+            config.power.die_power_w, rel=1e-9)
+
+    def test_unknown_key_in_a_chiplet_is_named(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r["chiplets"][0].update(colour="red"))
+        with pytest.raises(ConfigError, match=r"chiplets\[0\]\.colour"):
+            config_loader_module.load_config(path)
+
+    def test_missing_chiplet_field_is_named(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r["chiplets"][1].pop("power_w"))
+        with pytest.raises(ConfigError, match=r"chiplets\[1\]\.power_w"):
+            config_loader_module.load_config(path)
+
+    def test_catalog_without_a_placement_is_refused(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r.pop("initial_placement"))
+        with pytest.raises(ConfigError, match="initial_placement"):
+            config_loader_module.load_config(path)
+
+    def test_duplicate_ids_are_refused(self, tmp_path):
+        def duplicate(raw):
+            raw["chiplets"][1]["id"] = raw["chiplets"][0]["id"]
+        path = _config_file(tmp_path, duplicate)
+        with pytest.raises(ConfigError, match="duplicate chiplet id"):
+            config_loader_module.load_config(path)
+
+    def test_origin_for_an_unknown_chiplet_is_refused(self, tmp_path):
+        path = _config_file(
+            tmp_path, lambda r: r["initial_placement"]["origins_um"].update(ghost=[0, 0]))
+        with pytest.raises(ConfigError, match="unknown chiplet"):
+            config_loader_module.load_config(path)
+
+    def test_die_power_must_equal_the_chiplet_total(self, tmp_path):
+        path = _config_file(tmp_path, lambda r: r["power"].update(die_power_w=99.0))
+        with pytest.raises(ConfigError, match="die_power_w"):
+            config_loader_module.load_config(path)
+
+    def test_round_trip_keeps_the_experiment_sections(self, tmp_path):
+        first = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        path = tmp_path / "round_trip.json"
+        path.write_text(json.dumps(first.as_dict()), encoding="utf-8")
+        assert config_loader_module.load_config(str(path)).as_dict() == first.as_dict()
+
+
+class TestPlacementValidation:
+    """Every physical constraint on a placement, each reported by name."""
+
+    def test_canonical_placement_is_valid(self):
+        exp = experiment_module.Experiment(
+            config_loader_module.load_config(str(SHIPPED_CONFIG)))
+        assert exp.violations == []
+
+    def test_overlap_is_named(self):
+        exp = make_experiment(pitch_um=2000.0,
+                              origins={"a": (0.0, 0.0), "b": (2000.0, 0.0)})
+        assert any("a and b overlap" in v for v in exp.violations), exp.violations
+
+    def test_leaving_the_package_is_named(self):
+        exp = make_experiment(origins={"a": (0.0, 0.0), "b": (16000.0, 0.0)})
+        assert any("leaves the" in v and v.startswith("b:") for v in exp.violations)
+
+    def test_off_lattice_origin_is_named(self):
+        exp = make_experiment(origins={"a": (0.0, 0.0), "b": (9000.0, 0.0)})
+        assert any("placement lattice" in v and v.startswith("b:") for v in exp.violations)
+
+    def test_footprint_that_is_not_whole_cells_is_named(self):
+        odd = (ChipletEntry(id="a", name="A", width_um=4500.0, height_um=4000.0, power_w=6.0),)
+        exp = make_experiment(chiplets=odd, origins={"a": (0.0, 0.0)})
+        assert any("whole number" in v and v.startswith("a:") for v in exp.violations)
+
+    def test_main_refuses_an_invalid_placement_before_solving(self, tmp_path, capsys):
+        path = _config_file(tmp_path, lambda r: r["initial_placement"]["origins_um"]
+                            .update(cpu0=[0.0, 0.0]))     # straight on top of hbm0
+        out_dir = tmp_path / "out"
+        rc = main_module.main(["--config", path, "--no-browser", "--output-dir", str(out_dir)])
+        assert rc == main_module.EXIT_PREFLIGHT_FAILED
+        assert "overlap" in capsys.readouterr().err
+        assert not out_dir.exists() or not list(out_dir.iterdir())
+
+
+class TestExperimentPowerMap:
+    """Chiplet geometry and power become a cell-level source, and only there."""
+
+    def test_each_chiplet_gets_exactly_its_power(self):
+        exp = make_experiment()
+        power = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                  exp.initial_placement)
+        deposited = dict(power.per_chiplet_w)
+        for c in exp.catalog:
+            assert deposited[c.id] == pytest.approx(c.power_w, rel=1e-12)
+        assert power.deposited_w == pytest.approx(power.specified_w, rel=1e-12)
+
+    def test_power_lives_only_in_the_footprints_and_the_die_layer(self):
+        exp = make_experiment()
+        power = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                  exp.initial_placement)
+        q = np.asarray(power.q_w_m3)
+        z0, z1 = exp.package.die_z
+        assert not np.any(q[:, :, :z0]), "power below the die layer"
+        assert not np.any(q[:, :, z1:]), "power above the die layer"
+        covered = np.zeros(q.shape[:2], dtype=bool)
+        for _cid, i0, j0, nvx, nvy in power.blocks:
+            covered[i0:i0 + nvx, j0:j0 + nvy] = True
+        assert not np.any(q[~covered, :]), "power outside every chiplet footprint"
+        assert np.all(q[covered, z0:z1] > 0.0)
+
+    def test_moving_a_chiplet_moves_its_power(self):
+        exp = make_experiment()
+        here = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                 exp.initial_placement)
+        moved_placement = experiment_module.Placement(
+            pitch_m=exp.initial_placement.pitch_m,
+            origins_m=(("a", 12000e-6, 12000e-6), ("b", 8000e-6, 0.0)))
+        there = experiment_module.build_power_map(exp.package, exp.catalog, moved_placement)
+        assert not np.array_equal(np.asarray(here.q_w_m3), np.asarray(there.q_w_m3))
+        assert there.deposited_w == pytest.approx(here.deposited_w, rel=1e-12)
+        # 'a' left its old cells and arrived in the new ones.
+        assert np.asarray(there.q_w_m3)[0:4, 0:4, :].sum() == 0.0
+        assert np.asarray(there.q_w_m3)[12:16, 12:16, :].sum() > 0.0
+
+    def test_matches_the_optimizers_own_power_map(self):
+        """Two independent implementations of one physical statement: this
+        module's power map and the protected optimizer's must agree exactly
+        for the same layout, or a before/after comparison is meaningless."""
+        exp = make_experiment()
+        optimizer = ChipletPlacementOptimizer(
+            nx=exp.package.nx, ny=exp.package.ny, nz=exp.package.nz,
+            dx=exp.package.dx, dy=exp.package.dy, dz=exp.package.dz,
+            catalog=tuple(c.to_spec() for c in exp.catalog),
+            h_convective=exp.package.h_convective, t_ambient_c=exp.package.t_ambient_c,
+            placement_pitch_um=exp.initial_placement.pitch_m * 1e6, seed=0)
+        optimizer._apply_layout_to_q_map(exp.layout_of(exp.initial_placement))
+        mine = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                 exp.initial_placement)
+        assert np.array_equal(np.asarray(optimizer.solver.q_map), np.asarray(mine.q_w_m3))
+
+
+class TestExperimentBaseline:
+    """The initial placement is solved by the real solver and checked."""
+
+    def test_initial_solve_conserves_energy_independently(self):
+        exp = make_experiment()
+        initial = exp.solve_initial()
+        total_w = sum(c.power_w for c in exp.catalog)
+        assert initial.power.deposited_w == pytest.approx(total_w, rel=1e-12)
+        # Computed in the product layer from h and the field, sharing no code
+        # with the solver's own energy check.
+        assert initial.sink_heat_w == pytest.approx(total_w, rel=1e-9)
+        assert initial.residual < thermal_solver_module.STEADY_RESIDUAL_TOL
+        assert initial.energy_imbalance_k < thermal_solver_module.STEADY_ENERGY_BALANCE_TOL_K
+
+    def test_peak_is_above_the_convective_floor(self):
+        exp = make_experiment()
+        initial = exp.solve_initial()
+        sanity = exp.sanity(initial)
+        assert sanity["floor_ratio"] > 1.0
+        assert sanity["measured_rise_k"] > sanity["floor_rise_k"]
+
+    def test_zero_power_sits_at_ambient(self):
+        cold = (ChipletEntry(id="a", name="A", width_um=4000.0, height_um=4000.0, power_w=0.0),)
+        exp = make_experiment(chiplets=cold, origins={"a": (0.0, 0.0)})
+        initial = exp.solve_initial()
+        # 1 uK: the residue of a linear solve whose right-hand side is zero
+        # everywhere but the boundary, not a physical rise.
+        assert initial.peak_c == pytest.approx(exp.package.t_ambient_c, abs=1e-6)
+
+
+class TestExperimentOptimization:
+    """The optimizer starts from the given placement, changes only positions,
+    and its winner is re-solved before anyone sees it."""
+
+    def test_optimized_placement_is_valid_and_on_the_lattice(self, optimized_experiment):
+        exp = optimized_experiment
+        assert experiment_module.validate_placement(
+            exp.package, exp.catalog, exp.optimized.placement) == []
+
+    def test_optimizer_changes_only_positions(self, optimized_experiment):
+        exp = optimized_experiment
+        assert dict(exp.optimized.power.per_chiplet_w) == pytest.approx(
+            dict(exp.initial.power.per_chiplet_w))
+        assert exp.optimized.power.specified_w == exp.initial.power.specified_w
+
+    def test_optimized_is_at_least_as_cool_as_the_initial(self, optimized_experiment):
+        """The initial placement is on the lattice, so it is inside the search
+        space: an exhaustive search cannot return anything worse."""
+        exp = optimized_experiment
+        assert exp.optimized.peak_c <= exp.initial.peak_c + 1e-9
+
+    def test_reported_optimum_is_a_real_re_solve(self, optimized_experiment):
+        record = optimized_experiment.optimization
+        assert record.resolve_delta_k <= experiment_module.RESOLVE_TOL_K
+        assert record.resolve_field_delta_k <= experiment_module.RESOLVE_TOL_K
+        assert optimized_experiment.optimized.residual < thermal_solver_module.STEADY_RESIDUAL_TOL
+
+    def test_initial_result_is_untouched_by_optimization(self):
+        exp = make_experiment()
+        initial = exp.solve_initial()
+        before_field = np.array(initial.field_k, copy=True)
+        before_peak, before_origins = initial.peak_c, initial.placement.origins_m
+        exp.optimize(method="exhaustive", verbose=False)
+        assert exp.initial is initial
+        assert initial.peak_c == before_peak
+        assert initial.placement.origins_m == before_origins
+        assert np.array_equal(np.asarray(initial.field_k), before_field)
+        assert not np.asarray(initial.field_k).flags.writeable
+
+    def test_exhaustive_is_reproducible(self):
+        first, second = make_experiment(), make_experiment()
+        for exp in (first, second):
+            exp.solve_initial()
+            exp.optimize(method="exhaustive", verbose=False)
+        assert first.optimized.placement.origins_m == second.optimized.placement.origins_m
+        assert first.optimized.peak_c == second.optimized.peak_c
+        assert first.optimization.deterministic is True
+
+    def test_annealing_starts_from_the_given_initial_placement(self):
+        exp = make_experiment()
+        initial = exp.solve_initial()
+        exp.optimize(method="anneal", iterations=4, seed=1, verbose=False)
+        record = exp.optimization
+        assert record.method == "anneal" and record.seed == 1
+        assert len(record.history_c) == 4
+        assert record.deterministic is False
+        assert exp.optimized.peak_c <= initial.peak_c + 1e-9
+
+    def test_an_optimizer_that_disagrees_with_the_solver_is_refused(self, monkeypatch):
+        """If the search reports a peak the real solver does not reproduce,
+        the experiment fails rather than quietly publishing either number."""
+        import dataclasses as _dc
+        exp = make_experiment()
+        exp.solve_initial()
+        real_search = exhaustive_module.ExhaustivePlacementSearch.search
+
+        def lying_search(self, verbose=True):
+            result = real_search(self, verbose=verbose)
+            return _dc.replace(result,
+                               best_peak_temperature_c=result.best_peak_temperature_c - 5.0)
+
+        monkeypatch.setattr(exhaustive_module.ExhaustivePlacementSearch, "search",
+                            lying_search)
+        with pytest.raises(experiment_module.ExperimentError, match="does not confirm"):
+            exp.optimize(method="exhaustive", verbose=False)
+
+
+class TestExperimentReport:
+    """The report answers the product questions, from the stored results."""
+
+    SECTIONS = ("1. Experiment summary", "2. Package geometry", "3. Chiplet catalog",
+                "4. Initial placement", "5. Initial thermal result",
+                "6. Optimization objective", "7. Constraints", "8. Optimization history",
+                "9. Optimized placement", "10. Before / after temperature comparison",
+                "11. Temperature difference map", "12. Verification", "13. Limitations")
+
+    @staticmethod
+    def _text(exp, tmp_path):
+        import html as _htmllib
+        path = report_module.render_experiment_report(exp, output_dir=str(tmp_path))
+        return _htmllib.unescape(pathlib.Path(path).read_text(encoding="utf-8"))
+
+    def test_report_has_every_section_in_order(self, optimized_experiment, tmp_path):
+        text = self._text(optimized_experiment, tmp_path)
+        positions = [text.index(section) for section in self.SECTIONS]
+        assert positions == sorted(positions)
+
+    def test_report_quotes_the_stored_results(self, optimized_experiment, tmp_path):
+        exp = optimized_experiment
+        text = self._text(exp, tmp_path)
+        assert f"{exp.initial.peak_c:.4f}" in text
+        assert f"{exp.optimized.peak_c:.4f}" in text
+        for chiplet in exp.catalog:
+            assert chiplet.id in text
+
+    def test_report_states_both_densities_and_they_are_right(self, optimized_experiment,
+                                                             tmp_path):
+        exp = optimized_experiment
+        sanity = exp.sanity(exp.initial)
+        assert sanity["flux_over_chiplets_w_cm2"] == pytest.approx(
+            sanity["total_power_w"] / (sanity["chiplet_area_mm2"] * 1e-2))
+        assert sanity["flux_over_package_w_cm2"] == pytest.approx(
+            sanity["total_power_w"] / (sanity["package_area_mm2"] * 1e-2))
+        text = self._text(exp, tmp_path)
+        assert f"{sanity['flux_over_chiplets_w_cm2']:.2f} W/cm²" in text
+        assert f"{sanity['flux_over_package_w_cm2']:.2f} W/cm²" in text
+
+    def test_report_never_claims_the_model_is_validated(self, optimized_experiment,
+                                                        tmp_path):
+        import re as _re
+        text = self._text(optimized_experiment, tmp_path).lower()
+        for match in _re.finditer("validated", text):
+            context = text[max(0, match.start() - 12):match.end()]
+            assert "not validated" in context, context
+
+    def test_report_labels_the_method_that_actually_ran(self, optimized_experiment,
+                                                        tmp_path):
+        text = self._text(optimized_experiment, tmp_path)
+        assert "exhaustive" in text
+        assert "anneal" not in text.lower().replace("annealing report", "")
+
+
+class TestConfigFileIsTheSingleSource:
+    """Flags that change what is simulated are refused beside --config rather
+    than ignored: --h-convective 5000 --die-power-w 99 used to change nothing
+    and say nothing."""
+
+    def test_physics_flag_beside_config_is_refused(self, tmp_path, capsys):
+        out_dir = tmp_path / "out"
+        rc = main_module.main(["--config", str(SHIPPED_CONFIG), "--h-convective", "5000",
+                               "--no-browser", "--output-dir", str(out_dir)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "--h-convective" in err and "--config" in err
+        assert not out_dir.exists() or not list(out_dir.iterdir())
+
+    def test_output_dir_override_is_reported_and_used(self, tmp_path, capsys):
+        rc = main_module.main(["--config", str(SHIPPED_CONFIG), "--no-browser",
+                               "--output-dir", str(tmp_path)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert f"Output directory: {tmp_path}" in out
+        assert (tmp_path / "thermal_3d.html").exists()
+        assert (tmp_path / "experiment_report.html").exists()
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import MISSING, dataclass, asdict, field, fields
 from typing import Any, Dict, Optional, Tuple
@@ -251,6 +252,31 @@ class VisualizationSection:
     use_pyvista: bool = True
 
 
+@dataclass(frozen=True)
+class ChipletEntry:
+    """One catalog entry: WHAT a chiplet is. Physical extents in micrometres,
+    like optimizer.ChipletSpec -- never voxels, which would make the geometry
+    a function of how finely the solver meshes the domain."""
+    id: str
+    name: str
+    width_um: float
+    height_um: float
+    power_w: float
+
+
+@dataclass
+class InitialPlacementSection:
+    """WHERE each chiplet starts: lower-left origins in micrometres, by
+    chiplet id, on a lattice of pitch_um.
+
+    Separate from the catalog on purpose. A catalog says what exists; a
+    placement says where it sits. Optimization is then expressible as a move
+    from one placement to another, and the starting point is an input the
+    user controls rather than whatever the optimizer happened to seed."""
+    pitch_um: float
+    origins_um: Dict[str, Tuple[float, float]]
+
+
 @dataclass
 class CaseSection:
     """What a configuration file is FOR, stated in the file so a run can say
@@ -271,6 +297,12 @@ class PipelineConfig:
     solver: SolverSection
     visualization: VisualizationSection
     case: CaseSection = field(default_factory=CaseSection)
+    # Optional. A configuration that defines a catalog and an initial
+    # placement is a placement EXPERIMENT: the initial placement is solved as
+    # the baseline and the optimizer starts from it. Without them a run uses
+    # the legacy single uniform power footprint.
+    chiplets: Tuple[ChipletEntry, ...] = ()
+    initial_placement: Optional[InitialPlacementSection] = None
 
     # ------------------------------------------------------------------
     def validate(self) -> None:
@@ -341,6 +373,57 @@ class PipelineConfig:
         if not self.case.name.strip():
             raise ConfigError("case.name must be a non-empty string.")
 
+        self._validate_experiment()
+
+    def _validate_experiment(self) -> None:
+        """The chiplet catalog and its initial placement, checked for internal
+        consistency: unique ids, positive extents, an origin for every chiplet
+        and no origin for anything else, and a die power equal to the sum of
+        the chiplet powers.
+
+        Geometry -- inside the package, no overlap, on the lattice -- is
+        checked by src.experiment.validate_placement(), which knows the mesh
+        this configuration resolves to.
+        """
+        if not self.chiplets and self.initial_placement is None:
+            return
+        if not self.chiplets or self.initial_placement is None:
+            raise ConfigError(
+                "chiplets and initial_placement must be given together: a catalog says "
+                "WHAT the chiplets are and a placement says WHERE they start")
+        ids = [c.id for c in self.chiplets]
+        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicates:
+            raise ConfigError(f"duplicate chiplet id(s): {', '.join(duplicates)}")
+        for n, c in enumerate(self.chiplets):
+            if not c.id.strip():
+                raise ConfigError(f"chiplets[{n}].id must be a non-empty string")
+            if c.width_um <= 0 or c.height_um <= 0:
+                raise ConfigError(
+                    f"chiplets[{n}] ('{c.id}'): width_um and height_um must be > 0, got "
+                    f"{c.width_um} x {c.height_um}")
+            if c.power_w < 0:
+                raise ConfigError(f"chiplets[{n}] ('{c.id}'): power_w must be >= 0, "
+                                  f"got {c.power_w}")
+        placement = self.initial_placement
+        if placement.pitch_um <= 0:
+            raise ConfigError(f"initial_placement.pitch_um must be > 0, "
+                              f"got {placement.pitch_um}")
+        missing = sorted(set(ids) - set(placement.origins_um))
+        if missing:
+            raise ConfigError("initial_placement.origins_um has no origin for chiplet(s) "
+                              + ", ".join(missing))
+        unknown = sorted(set(placement.origins_um) - set(ids))
+        if unknown:
+            raise ConfigError("initial_placement.origins_um names unknown chiplet(s) "
+                              + ", ".join(unknown))
+        total_w = sum(c.power_w for c in self.chiplets)
+        if not math.isclose(total_w, self.power.die_power_w, rel_tol=1e-9, abs_tol=1e-12):
+            raise ConfigError(
+                f"power.die_power_w is {self.power.die_power_w} W but the chiplets total "
+                f"{total_w} W. With chiplets defined the die power IS their sum; state the "
+                f"same number in both places so that one run is one experiment")
+
     # ------------------------------------------------------------------
     def to_grid_builder_dict(self) -> Dict[str, Any]:
         """Converts to the nested dict schema GridBuilder(config=...) expects."""
@@ -370,7 +453,7 @@ class PipelineConfig:
         return self.to_grid_builder_dict()
 
     def as_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "case": asdict(self.case),
             "grid": asdict(self.grid),
             "boundary_conditions": asdict(self.boundary_conditions),
@@ -379,6 +462,17 @@ class PipelineConfig:
             "solver": asdict(self.solver),
             "visualization": asdict(self.visualization),
         }
+        # Optional sections are written only when this configuration has them,
+        # so a legacy file still round-trips to exactly its own keys.
+        if self.chiplets:
+            out["chiplets"] = [asdict(c) for c in self.chiplets]
+        if self.initial_placement is not None:
+            out["initial_placement"] = {
+                "pitch_um": self.initial_placement.pitch_um,
+                "origins_um": {cid: [x, y] for cid, (x, y)
+                               in self.initial_placement.origins_um.items()},
+            }
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +491,10 @@ RETIRED_KEYS: Dict[str, Dict[str, Tuple[str, str]]] = {
 }
 
 # The file's sections, in order, and the dataclass each one builds.
+# Sections a file MAY carry. Present together they make the run a placement
+# experiment; absent, the run uses the legacy uniform power footprint.
+OPTIONAL_SECTIONS: Tuple[str, ...] = ("chiplets", "initial_placement")
+
 SECTIONS: Tuple[Tuple[str, type], ...] = (
     ("case", CaseSection),
     ("grid", GridSection),
@@ -485,6 +583,57 @@ def _build_section(dataclass_type, raw: Any, section_name: str):
                              for k in schema})
 
 
+def _build_experiment_sections(raw: Dict[str, Any], where: str):
+    """Builds the optional (chiplets, initial_placement) pair under the same
+    fail-closed rules as every other section."""
+    has_catalog, has_placement = "chiplets" in raw, "initial_placement" in raw
+    if not has_catalog and not has_placement:
+        return (), None
+    if has_catalog != has_placement:
+        present, absent = (("chiplets", "initial_placement") if has_catalog
+                           else ("initial_placement", "chiplets"))
+        raise ConfigError(
+            f"'{present}' is present in '{where}' but '{absent}' is not: a catalog says "
+            f"WHAT the chiplets are and a placement says WHERE they start, and an "
+            f"experiment needs both")
+
+    items = raw["chiplets"]
+    if not isinstance(items, list) or not items:
+        raise ConfigError(f"'chiplets' in '{where}' must be a non-empty JSON list")
+    catalog = tuple(_build_section(ChipletEntry, item, f"chiplets[{n}]")
+                    for n, item in enumerate(items))
+
+    placement_raw = raw["initial_placement"]
+    if not isinstance(placement_raw, dict):
+        raise ConfigError(f"'initial_placement' in '{where}' must be a JSON object")
+    valid = {"pitch_um", "origins_um"}
+    unknown = sorted(set(placement_raw) - valid)
+    if unknown:
+        raise ConfigError(
+            "unknown key(s) " + ", ".join("initial_placement." + k for k in unknown)
+            + "; valid keys are " + ", ".join(sorted(valid)))
+    missing = sorted(valid - set(placement_raw))
+    if missing:
+        raise ConfigError("missing required key(s) "
+                          + ", ".join("initial_placement." + k for k in missing))
+    pitch_um = _check_type("initial_placement", "pitch_um", placement_raw["pitch_um"], 0.0)
+
+    origins_raw = placement_raw["origins_um"]
+    if not isinstance(origins_raw, dict) or not origins_raw:
+        raise ConfigError("initial_placement.origins_um must be a non-empty JSON object "
+                          "mapping chiplet id to [x_um, y_um]")
+    origins: Dict[str, Tuple[float, float]] = {}
+    for cid, value in origins_raw.items():
+        ok = (isinstance(value, (list, tuple)) and len(value) == 2
+              and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                      for v in value))
+        if not ok:
+            raise ConfigError(f"initial_placement.origins_um.{cid} must be [x_um, y_um] "
+                              f"numbers, got {value!r}")
+        origins[cid] = (float(value[0]), float(value[1]))
+    return catalog, InitialPlacementSection(pitch_um=float(pitch_um), origins_um=origins)
+
+
 def load_config(path: Optional[str] = None) -> PipelineConfig:
     """
     Loads and validates the full pipeline configuration from `path`, or from
@@ -511,7 +660,7 @@ def load_config(path: Optional[str] = None) -> PipelineConfig:
                           f"got {type(raw).__name__}")
 
     names = [name for name, _ in SECTIONS]
-    unknown = sorted(set(raw) - set(names))
+    unknown = sorted(set(raw) - set(names) - set(OPTIONAL_SECTIONS))
     if unknown:
         raise ConfigError(f"unknown config section(s) {', '.join(unknown)} in "
                           f"'{resolved_path}'; valid sections are {', '.join(names)}")
@@ -520,8 +669,10 @@ def load_config(path: Optional[str] = None) -> PipelineConfig:
         raise ConfigError(f"missing required config section(s) {', '.join(missing)} in "
                           f"'{resolved_path}'")
 
-    config = PipelineConfig(**{name: _build_section(cls, raw[name], name)
-                               for name, cls in SECTIONS})
+    chiplets, initial_placement = _build_experiment_sections(raw, resolved_path)
+    config = PipelineConfig(
+        **{name: _build_section(cls, raw[name], name) for name, cls in SECTIONS},
+        chiplets=chiplets, initial_placement=initial_placement)
     config.validate()
     logger.info("Loaded pipeline configuration from %s", resolved_path)
     return config

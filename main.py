@@ -112,6 +112,11 @@ from src.validation_status import (
     STATUS as VALIDATION_STATUS,
     html_block as validation_html_block, text_block as validation_text_block,
 )
+from src.experiment import (
+    CONSTRAINTS as EXPERIMENT_CONSTRAINTS, Experiment, ExperimentError,
+    STACK_MATERIALS, build_stack,
+)
+from src.experiment_report import render_experiment_report
 
 
 # A transient shorter than this many time constants cannot support a
@@ -166,10 +171,9 @@ COOLING_PRESETS = {
 }
 DEFAULT_COOLING_PRESET = "passive-lowpower"
 
-# Materials of the stack build_chiplet_stack() assembles, bottom to top.
-# Shared with the spreading-length calculation so the two cannot drift apart
-# when a material's properties change.
-STACK_MATERIALS = ("silicon", "bump_underfill_composite", "silicon")
+# STACK_MATERIALS now lives in src/experiment.py, which assembles the same
+# three regions for the experiment path. Imported above, so the legacy stack
+# built here and the experiment stack built there cannot drift apart.
 
 
 def _k_inplane(material: str) -> float:
@@ -211,8 +215,13 @@ def regime_label(config: PipelineConfig) -> str:
 def regime_summary(config: PipelineConfig) -> dict:
     """The numbers that fix the cooling regime, all known before any solve."""
     g, bcs = config.grid, config.boundary_conditions
-    x_sl, y_sl = active_footprint_slices(config)
-    footprint_m2 = (x_sl.stop - x_sl.start) * g.dx * (y_sl.stop - y_sl.start) * g.dy
+    if config.chiplets:
+        # Chiplet mode: the active area is the chiplets' own footprints, which
+        # is what actually carries the power, not the legacy centred rectangle.
+        footprint_m2 = sum(c.width_um * c.height_um for c in config.chiplets) * 1e-12
+    else:
+        x_sl, y_sl = active_footprint_slices(config)
+        footprint_m2 = (x_sl.stop - x_sl.start) * g.dx * (y_sl.stop - y_sl.start) * g.dy
     sink_m2 = g.nx * g.dx * g.ny * g.dy
     p = config.power.die_power_w
     h = bcs.h_convective
@@ -225,6 +234,8 @@ def regime_summary(config: PipelineConfig) -> dict:
     sheet_w_per_k = sum(_k_inplane(m) * t for m, t in zip(STACK_MATERIALS, thicknesses_m))
     return {
         "label": regime_label(config),
+        "footprint_label": ("the chiplet footprints" if config.chiplets
+                            else "the active footprint"),
         "footprint_mm2": footprint_m2 * 1e6,
         "sink_mm2": sink_m2 * 1e6,
         "flux_footprint_w_cm2": p / (footprint_m2 * 1e4) if footprint_m2 > 0 else float("nan"),
@@ -244,7 +255,7 @@ def print_regime_header(config: PipelineConfig) -> dict:
     r = regime_summary(config)
     tag = "preset" if r["label"] != "custom" else "not a preset; compare with care"
     print(f"Cooling regime: {r['label']} ({tag})")
-    print(f"Heat flux: {r['flux_footprint_w_cm2']:.2f} W/cm^2 over the active footprint "
+    print(f"Heat flux: {r['flux_footprint_w_cm2']:.2f} W/cm^2 over {r['footprint_label']} "
           f"({r['footprint_mm2']:.1f} mm^2) | {r['flux_sink_w_cm2']:.2f} W/cm^2 over the "
           f"sink face ({r['sink_mm2']:.1f} mm^2)")
     if r["r_conv_k_per_w"] > 0:
@@ -550,6 +561,23 @@ def build_config_from_flags(args: argparse.Namespace):
 
 EXIT_PREFLIGHT_FAILED = 2
 
+# Flags that change WHAT is simulated. With --config the file is the single
+# source of truth, so one of these beside it is refused rather than ignored --
+# which is what used to happen: --h-convective 5000 --die-power-w 99 changed
+# nothing and said nothing.
+CONFIG_FILE_CONFLICTS = frozenset({
+    "--preset", "--nx", "--ny", "--nz", "--dx-um", "--dy-um", "--dz-um",
+    "--t-ambient-c", "--h-convective", "--die-power-w", "--safety-factor",
+    "--no-scale-catalog-power",
+})
+
+
+def _explicit_flags(argv_list) -> frozenset:
+    """The long options actually typed, so a flag that contradicts --config
+    can be refused instead of silently dropped."""
+    return frozenset(token.split("=", 1)[0] for token in argv_list
+                     if isinstance(token, str) and token.startswith("--"))
+
 
 def preflight_optimizer_fit(config: PipelineConfig, catalog=DEFAULT_CHIPLET_CATALOG):
     """
@@ -673,8 +701,8 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
     config.boundary_conditions.bottom_bc / top_bc, not from this function.
     """
     try:
-        gb = GridBuilder(config=config.to_dict())
-    except GridBuilderError as exc:
+        gb = build_stack(config)          # materials and boundary tags, no power
+    except (GridBuilderError, ConfigError) as exc:
         raise PipelineError(f"GridBuilder construction failed: {exc}") from exc
 
     nz = config.grid.nz
@@ -691,11 +719,6 @@ def build_chiplet_stack(config: PipelineConfig) -> GridBuilder:
         raise PipelineError(f"The mesh cannot hold the authored stack: {exc}") from exc
 
     try:
-        gb.assign_layer(slice(0, z_interposer_end), STACK_MATERIALS[0])
-        gb.assign_layer(slice(z_interposer_end, z_bump_end), STACK_MATERIALS[1])
-        gb.assign_layer(slice(z_bump_end, nz), STACK_MATERIALS[2])
-        gb.tag_boundaries()
-
         x_slice, y_slice = active_footprint_slices(config)
         z_slice = slice(z_bump_end, nz)
 
@@ -782,9 +805,11 @@ def print_stage1_results(config: PipelineConfig, report: dict) -> None:
     print("  STEADY STATE (t -> infinity, direct solve)")
     print(f"    Peak temperature:     {steady_peak:.2f} °C")
     print(f"    Peak location (i,j,k):{report['peak_location_ijk']}")
-    print(f"    Peak location (um):   "
+    print(f"    Peak cell centre (um):"
           f"({report['peak_location_um'][0]:.1f}, {report['peak_location_um'][1]:.1f}, "
           f"{report['peak_location_um'][2]:.1f})")
+    print(f"    Location resolution:  one cell, {config.grid.dx * 1e6:.1f} x "
+          f"{config.grid.dy * 1e6:.1f} x {config.grid.dz * 1e6:.1f} um")
     print(f"    Voxels > {threshold:.1f}°C:      {report['hotspot_count']}")
     p_w = config.power.die_power_w
     if p_w > 0:
@@ -857,7 +882,9 @@ def print_startup_banner(config: PipelineConfig, source: str,
                          total_steps: Optional[int] = None,
                          optimize: bool = False,
                          scale_power_to_stage1: bool = True,
-                         from_file: bool = False) -> None:
+                         from_file: bool = False,
+                         experiment: Optional[Experiment] = None,
+                         output_dir_note: str = "") -> None:
     """Everything a result depends on, printed BEFORE any solve: where the
     configuration came from, the physical domain and its cells, the authored
     and realized stack with cell counts, the boundary conditions, the
@@ -882,6 +909,8 @@ def print_startup_banner(config: PipelineConfig, source: str,
         print(f"STRESS CASE: EXPECTED to exceed the "
               f"{config.visualization.hotspot_threshold_c:.1f} C threshold -- an EXCEEDS "
               f"verdict is the intended result, not a regression.")
+    if output_dir_note:
+        print(output_dir_note)
     print("Units: SI in the model (m, W, K); um, mm and degC appear only in this banner.")
     print(f"Domain: {g.nx * g.dx * 1e3:.3f} x {g.ny * g.dy * 1e3:.3f} mm x "
           f"{g.nz * dz_um:.3f} um = {g.nx} x {g.ny} x {g.nz} cells of "
@@ -894,16 +923,53 @@ def print_startup_banner(config: PipelineConfig, source: str,
     print(f"  {'total':<10}  {s.total_um:7.3f} um = nz*dz = {g.nz} x {dz_um:.3f} um")
     # The die is DERIVED from the mesh (nx*dx by ny*dy), never stored, so it
     # cannot drift from it.
-    catalog = DEFAULT_CHIPLET_CATALOG
     die_w_mm, die_h_mm = g.nx * g.dx * 1e3, g.ny * g.dy * 1e3
-    catalog_mm2 = sum(c.area_mm2 for c in catalog)
-    largest = max(catalog, key=lambda c: c.area_um2)
-    fits = preflight_optimizer_fit(config, catalog) is None
+    if config.chiplets:
+        print(f"Power model:    {len(config.chiplets)} chiplets from the file; each "
+              f"chiplet's power over its own footprint, through the die layer "
+              f"z[{cells[0] + cells[1]}:{g.nz}]")
+        catalog_mm2 = sum(c.width_um * c.height_um for c in config.chiplets) * 1e-6
+        blocks = len(config.chiplets)
+        largest = max(config.chiplets, key=lambda c: c.width_um * c.height_um)
+        largest_mm = (largest.width_um / 1e3, largest.height_um / 1e3)
+        fits = experiment is not None and not experiment.violations
+    else:
+        print(f"Power model:    one uniform footprint over the central "
+              f"{config.power.die_footprint_frac:.0%} of the die; no chiplets defined, so "
+              f"Stage 2 (if run) starts from the optimizer's own shelf-packed seed rather "
+              f"than a placement you chose")
+        catalog = DEFAULT_CHIPLET_CATALOG
+        catalog_mm2 = sum(c.area_mm2 for c in catalog)
+        blocks = len(catalog)
+        largest = max(catalog, key=lambda c: c.area_um2)
+        largest_mm = (largest.width_um / 1e3, largest.depth_um / 1e3)
+        fits = preflight_optimizer_fit(config, catalog) is None
     print(f"Die:            {die_w_mm:.3f} x {die_h_mm:.3f} mm")
-    print(f"Catalog:        {catalog_mm2:.2f} mm² across {len(catalog)} blocks "
+    print(f"Catalog:        {catalog_mm2:.2f} mm² across {blocks} blocks "
           f"({100.0 * catalog_mm2 / (die_w_mm * die_h_mm):.1f}% fill)")
     print(f"Catalog fits:   {'yes' if fits else 'no'} (largest block "
-          f"{largest.width_um / 1e3:.3f} x {largest.depth_um / 1e3:.3f} mm)")
+          f"{largest_mm[0]:.3f} x {largest_mm[1]:.3f} mm)")
+    if config.chiplets:
+        print(f"  {'chiplet':<8}{'name':<18}{'size mm':>14}{'power W':>10}"
+              f"{'origin mm':>16}{'W/cm^2':>10}")
+        for c in config.chiplets:
+            x_um, y_um = config.initial_placement.origins_um[c.id]
+            size = f"{c.width_um / 1e3:.2f} x {c.height_um / 1e3:.2f}"
+            origin = f"({x_um / 1e3:.2f}, {y_um / 1e3:.2f})"
+            density = c.power_w / (c.width_um * c.height_um * 1e-8)
+            print(f"  {c.id:<8}{c.name:<18}{size:>14}{c.power_w:10.3f}"
+                  f"{origin:>16}{density:10.2f}")
+        print(f"Placement lattice: {config.initial_placement.pitch_um:.0f} um")
+        if experiment is None:
+            print("Initial placement: not validated")
+        elif experiment.violations:
+            print(f"Initial placement: INVALID -- {len(experiment.violations)} violation(s)")
+            for violation in experiment.violations:
+                print(f"  - {violation}")
+        else:
+            print(f"Initial placement: valid; {len(EXPERIMENT_CONSTRAINTS)} constraints "
+                  f"checked (inside the package, no overlap, on the lattice, whole cells, "
+                  f"fixed footprints and powers)")
     print(f"Ambient: {bcs.t_ambient_c:.1f}C | h_convective: {bcs.h_convective:.1f} W/m^2K | "
           f"Die power: {config.power.die_power_w:.2f}W")
     sink_face = "bottom" if bcs.bottom_bc != "neumann" else "top"
@@ -1017,6 +1083,132 @@ def run_stage2_optimizer(
 
     _open_in_browser(report_path, open_browser, "the optimization report")
     return {"result": result, "exhaustive": exhaustive_result, "report_path": report_path}
+
+
+def print_experiment_comparison(experiment: Experiment) -> None:
+    """The before/after block: what the optimizer was asked, what it moved,
+    and how the real solver's re-solve compares with what it reported."""
+    record = experiment.optimization
+    initial, optimized = experiment.initial, experiment.optimized
+    improvement = experiment.improvement()
+    print("\n" + "=" * 60)
+    print("BEFORE / AFTER :: PLACEMENT OPTIMIZATION")
+    print("=" * 60)
+    print(f"  Objective:              {record.objective}")
+    reproducible = "deterministic" if record.deterministic else f"seed {record.seed}"
+    print(f"  Method:                 {record.method} on a {record.pitch_m * 1e6:.0f} um "
+          f"lattice ({reproducible})")
+    total = f" of {record.candidates_total:,}" if record.candidates_total else ""
+    print(f"  Candidates evaluated:   {record.candidates_evaluated:,}{total} "
+          f"({record.rejected_or_pruned:,} rejected or pruned)")
+    if record.superposition_error_k is not None:
+        print(f"  Superposition check:    {record.superposition_error_k:.2e} K against a "
+              f"direct solve")
+    print(f"  Optimizer runtime:      {record.runtime_s:.2f} s")
+    print(f"  Initial peak:           {initial.peak_c:.4f} degC (rise {initial.rise_k:.4f} K)")
+    print(f"  Optimized peak:         {optimized.peak_c:.4f} degC "
+          f"(rise {optimized.rise_k:.4f} K)")
+    print(f"  Improvement:            {improvement['delta_peak_k']:.4f} K cooler "
+          f"({improvement['pct_of_initial_rise']:.1f}% of the initial rise; "
+          f"{improvement['pct_of_initial_excess']:.1f}% of the part above the P/(hA) floor)")
+    print(f"  Re-solve check:         optimizer reported {record.optimizer_peak_c:.4f} degC, "
+          f"the real solver returns {optimized.peak_c:.4f} degC (delta "
+          f"{record.resolve_delta_k:.1e} K, field {record.resolve_field_delta_k:.1e} K)")
+    print("  Moves:")
+    print(f"    {'id':<8}{'initial mm':>16}{'optimized mm':>16}{'moved mm':>10}"
+          f"   peak before -> after")
+    for row in experiment.moves():
+        start = f"({row.x0_m * 1e3:.1f}, {row.y0_m * 1e3:.1f})"
+        end = f"({row.x1_m * 1e3:.1f}, {row.y1_m * 1e3:.1f})"
+        print(f"    {row.id:<8}{start:>16}{end:>16}{row.distance_m * 1e3:10.2f}"
+              f"   {row.peak0_c:6.2f} -> {row.peak1_c:6.2f} degC")
+    print("=" * 60)
+
+
+def run_experiment_pipeline(experiment: Experiment, *, open_browser: bool,
+                            optimize: bool, method: str, iterations: int,
+                            seed: int) -> dict:
+    """The product workflow: a validated initial placement, its baseline
+    solve, an optional optimization from it, a real re-solve of the winner,
+    and the before/after report."""
+    timing = TimingReport()
+    config = experiment.config
+
+    initial = experiment.solve_initial()
+    timing.grid_build_s = experiment.build_s
+    timing.solver_init_s = experiment.solver_init_s
+    timing.steady_state_s = initial.solve_s
+    tau_s = experiment.solver.estimate_time_constant()
+    print(f"[main] Package thermal time constant tau = {tau_s * 1e3:.2f} ms "
+          f"(C/G from the actual grid).")
+    print(f"[main] Initial placement solved: peak {initial.peak_c:.2f} °C "
+          f"(equilibrium, t -> infinity) in {initial.solve_s:.4f}s")
+    print(f"[main] Power deposited: {initial.power.deposited_w:.6f} W over "
+          f"{initial.power.powered_cells:,} cells; heat leaving the sink face "
+          f"{initial.sink_heat_w:.6f} W")
+
+    t0 = time.perf_counter()
+    try:
+        viz = ThermalVisualizer(
+            temperature_k=np.asarray(initial.field_k), dx=config.grid.dx,
+            dy=config.grid.dy, dz=config.grid.dz,
+            output_dir=config.visualization.output_dir)
+        initial_html = viz.render_interactive_webgl(
+            filename="thermal_3d.html",
+            title="RISC3D-AI :: Initial Placement, Steady State",
+            banner_html=('<div class="banner"><b>Initial placement</b>, steady state '
+                         '(t &rarr; &infin;). This is the baseline the optimization is '
+                         'measured against.</div>'
+                         f'<div class="banner">{validation_html_block()}</div>'))
+        hotspots = viz.get_hotspot_report(
+            threshold_c=config.visualization.hotspot_threshold_c)
+    except VisualizationError as exc:
+        raise PipelineError(f"WebGL visualization export failed: {exc}") from exc
+    _open_in_browser(initial_html, open_browser, "the 3D thermal view")
+    timing.visualization_s = time.perf_counter() - t0
+
+    print_stage1_results(config, {
+        "html_path": initial_html,
+        "hotspot_count": hotspots.count,
+        "peak_temperature_c": initial.peak_c,
+        "peak_location_um": tuple(v * 1e6 for v in initial.peak_center_m),
+        "peak_location_ijk": initial.peak_ijk,
+        "transient_peak_temperature_c": None,
+        "transient_duration_s": None,
+        "transient_html_path": None,
+        "tau_s": tau_s,
+        "converged_fraction": 0.0,
+    })
+
+    optimized_html = None
+    if optimize:
+        t0 = time.perf_counter()
+        experiment.optimize(method=method, iterations=iterations, seed=seed, verbose=True)
+        timing.optimize_s = time.perf_counter() - t0
+        print_experiment_comparison(experiment)
+        t0 = time.perf_counter()
+        try:
+            optimized_viz = ThermalVisualizer(
+                temperature_k=np.asarray(experiment.optimized.field_k),
+                dx=config.grid.dx, dy=config.grid.dy, dz=config.grid.dz,
+                output_dir=config.visualization.output_dir)
+            optimized_html = optimized_viz.render_interactive_webgl(
+                filename="thermal_3d_optimized.html",
+                title="RISC3D-AI :: Optimized Placement, Steady State",
+                banner_html=('<div class="banner"><b>Optimized placement</b>, steady state, '
+                             're-solved by the real solver after the search.</div>'
+                             f'<div class="banner">{validation_html_block()}</div>'))
+        except VisualizationError as exc:
+            raise PipelineError(f"WebGL visualization export failed: {exc}") from exc
+        _open_in_browser(optimized_html, open_browser, "the optimized 3D view")
+        timing.visualization_s += time.perf_counter() - t0
+
+    report_path = render_experiment_report(
+        experiment, output_dir=config.visualization.output_dir,
+        links={"initial_3d": initial_html, "optimized_3d": optimized_html})
+    print(f"  Experiment report:     {report_path}")
+    _open_in_browser(report_path, open_browser, "the experiment report")
+    return {"timing": timing, "experiment": experiment, "report_path": report_path}
 
 
 def run_pipeline(
@@ -1278,13 +1470,28 @@ def main(argv=None) -> int:
     # non-interactive by definition and must never block on a prompt.
     interactive = False
 
+    given_flags = _explicit_flags(sys.argv[1:] if argv is None else argv)
+    output_dir_note = ""
+
     try:
         if args.config is not None:
-            if args.preset is not None:
+            clashing = sorted(given_flags & CONFIG_FILE_CONFLICTS)
+            if clashing:
                 raise ConfigError(
-                    "--preset applies to flag-driven runs; a --config file sets its own "
-                    "die power and h_convective. Pass one or the other.")
+                    f"{', '.join(clashing)} cannot be combined with --config: the file is "
+                    f"the single source of truth for what is simulated, and a flag beside "
+                    f"it was previously ignored in silence. Edit the file, or drop --config.")
             config = load_config(args.config)
+            if config.chiplets and "--placement-pitch-um" in given_flags:
+                raise ConfigError(
+                    "--placement-pitch-um cannot be combined with a config file that "
+                    "defines initial_placement.pitch_um: the file already states the "
+                    "lattice the initial placement sits on.")
+            if "--output-dir" in given_flags:
+                output_dir_note = (
+                    f"Output directory: {args.output_dir} (from --output-dir, overriding "
+                    f"the file's '{config.visualization.output_dir}')")
+                config.visualization.output_dir = args.output_dir
             total_steps = args.total_steps
             duration_s = args.transient * 1e-3 if args.transient is not None else None
         elif argv is None and len(sys.argv) == 1:
@@ -1305,10 +1512,22 @@ def main(argv=None) -> int:
 
     source = (f"config file {args.config}" if args.config is not None
               else "interactive prompts" if interactive else "command-line flags")
+    # A configuration with chiplets is a placement EXPERIMENT. Built before
+    # the banner so the banner can show the initial placement and whether it
+    # is valid, and so an invalid one is refused before anything is solved.
+    experiment = None
+    if config.chiplets:
+        try:
+            experiment = Experiment(config, source=source)
+        except (ExperimentError, ConfigError) as exc:
+            print(f"\n[FATAL] {exc}", file=sys.stderr)
+            return EXIT_PREFLIGHT_FAILED
+
     print_startup_banner(
         config, source, duration_s=duration_s, total_steps=total_steps,
         optimize=args.optimize, scale_power_to_stage1=not args.no_scale_catalog_power,
-        from_file=args.config is not None,
+        from_file=args.config is not None, experiment=experiment,
+        output_dir_note=output_dir_note,
     )
 
     if args.optimize_iterations < 1:
@@ -1322,7 +1541,20 @@ def main(argv=None) -> int:
     # genuine runtime failure. The interactive prompt path is not pre-checked
     # here -- that user has not asked for Stage 2 yet, and Stage 1 is still
     # worth running for them.
-    if args.optimize:
+    if experiment is not None and experiment.violations:
+        print("\n[FATAL] The initial placement is not physically valid, so nothing was "
+              "solved:", file=sys.stderr)
+        for violation in experiment.violations:
+            print(f"  - {violation}", file=sys.stderr)
+        return EXIT_PREFLIGHT_FAILED
+
+    if experiment is not None and (duration_s is not None or total_steps is not None):
+        print("\n[FATAL] --transient / --total-steps are not supported for a placement "
+              "experiment: a before/after comparison is a steady-state result. Run a "
+              "transient from a configuration without chiplets.", file=sys.stderr)
+        return 1
+
+    if args.optimize and experiment is None:
         preflight_error = preflight_optimizer_fit(config)
         if preflight_error is None:
             # Stage 1 and Stage 2 must describe one chip. Checked here, before
@@ -1336,18 +1568,24 @@ def main(argv=None) -> int:
             return EXIT_PREFLIGHT_FAILED
 
     try:
-        outcome = run_pipeline(
-            config, total_steps, duration_s,
-            open_browser=not args.no_browser,
-            run_optimizer=args.optimize,
-            prompt_for_optimizer=interactive,
-            optimize_iterations=args.optimize_iterations,
-            optimize_seed=args.optimize_seed,
-            optimize_method=args.optimize_method,
-            placement_pitch_um=args.placement_pitch_um,
-            scale_power_to_stage1=not args.no_scale_catalog_power,
-        )
-    except PipelineError as exc:
+        if experiment is not None:
+            outcome = run_experiment_pipeline(
+                experiment, open_browser=not args.no_browser, optimize=args.optimize,
+                method=args.optimize_method, iterations=args.optimize_iterations,
+                seed=args.optimize_seed)
+        else:
+            outcome = run_pipeline(
+                config, total_steps, duration_s,
+                open_browser=not args.no_browser,
+                run_optimizer=args.optimize,
+                prompt_for_optimizer=interactive,
+                optimize_iterations=args.optimize_iterations,
+                optimize_seed=args.optimize_seed,
+                optimize_method=args.optimize_method,
+                placement_pitch_um=args.placement_pitch_um,
+                scale_power_to_stage1=not args.no_scale_catalog_power,
+            )
+    except (PipelineError, ExperimentError) as exc:
         print(f"\n[FATAL] Pipeline aborted: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 - final safety net, always exit cleanly

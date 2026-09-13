@@ -371,7 +371,14 @@ class OptimizationResult:
 
     @property
     def improvement_pct(self) -> float:
-        rise_initial = self.initial_peak_temperature_c
+        """Improvement as a percentage of the initial RISE ABOVE AMBIENT.
+
+        This divided by the initial peak in degrees Celsius, which the local
+        name `rise_initial` already claimed it was not. A percentage of a
+        Celsius reading changes when the same physics is reported in another
+        temperature scale; a percentage of the rise above ambient does not.
+        """
+        rise_initial = self.initial_peak_temperature_c - self.t_ambient_c
         if abs(rise_initial) < 1e-12:
             return 0.0
         return 100.0 * self.improvement_c / rise_initial
@@ -1524,11 +1531,19 @@ def render_optimization_report(
     # ambient should sit near P/(h*A). Stated explicitly so the reported peak
     # is always checked against physics rather than merely displayed.
     predicted_rise = result.predicted_convective_rise_k
+    # Two areas, two densities, each named. The note used to read "carrying
+    # 12.0 W across 192.0 mm^2 of chiplets -- 48% fill at an average
+    # 3.0 W/cm^2", where 3.0 is the DIE average: beside 192 mm^2 it reads as
+    # 12 W / 1.92 cm^2, which is 6.25 W/cm^2.
+    chiplet_area_cm2 = result.catalog_area_mm2 * 1e-2
+    density_over_chiplets = (result.total_power_w / chiplet_area_cm2
+                             if chiplet_area_cm2 > 0 else float("nan"))
     scale_note = (
         f"The die is {nx*dx*1e3:.2f} &times; {ny*dy*1e3:.2f} mm "
-        f"({result.die_area_mm2:.1f} mm&sup2;) carrying {result.total_power_w:.1f} W across "
-        f"{result.catalog_area_mm2:.1f} mm&sup2; of chiplets &mdash; {result.fill_factor_pct:.0f}% "
-        f"fill at an average {density:,.1f} W/cm&sup2;. "
+        f"({result.die_area_mm2:.1f} mm&sup2;) carrying {result.total_power_w:.1f} W. Chiplets "
+        f"cover {result.catalog_area_mm2:.1f} mm&sup2; ({result.fill_factor_pct:.0f}% fill), so "
+        f"the areal power density is {density_over_chiplets:,.2f} W/cm&sup2; over the chiplets "
+        f"and {density:,.2f} W/cm&sup2; averaged over the die. "
         f"Sanity-check the headline number against the convective floor: with "
         f"R<sub>conv</sub> &asymp; 1/(h&middot;A), the peak rise above ambient should land near "
         f"P/(h&middot;A) &asymp; {predicted_rise:,.1f} K at h = {result.h_convective:,.0f} "

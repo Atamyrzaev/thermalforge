@@ -1,8 +1,23 @@
 {
   "case": {
     "name": "passive-lowpower",
-    "purpose": "the default operating point -- the passive-lowpower preset (12 W, h = 1000 W/m^2K) on the 20 x 20 mm reference package",
+    "purpose": "the default operating point -- the passive-lowpower preset (12 W, h = 1000 W/m^2K) on the 20 x 20 mm reference package, with the four-block catalog at an explicit initial placement",
     "expect_threshold_exceeded": false
+  },
+  "chiplets": [
+    {"id": "cpu0", "name": "CPU_Core",        "width_um": 4000.0,  "height_um": 4000.0,  "power_w": 3.333333333333333},
+    {"id": "gpu0", "name": "GPU_Core",        "width_um": 6000.0,  "height_um": 5000.0,  "power_w": 4.666666666666666},
+    {"id": "hbm0", "name": "HBM_Memory",      "width_um": 11000.0, "height_um": 11000.0, "power_w": 1.3333333333333333},
+    {"id": "npu0", "name": "NPU_Accelerator", "width_um": 5000.0,  "height_um": 5000.0,  "power_w": 2.6666666666666665}
+  ],
+  "initial_placement": {
+    "pitch_um": 2000.0,
+    "origins_um": {
+      "hbm0": [0.0, 0.0],
+      "gpu0": [12000.0, 0.0],
+      "npu0": [0.0, 12000.0],
+      "cpu0": [6000.0, 12000.0]
+    }
   },
   "grid": {
     "nx": 40,
