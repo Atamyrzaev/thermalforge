@@ -114,6 +114,10 @@ select:focus, input:focus { outline: 2px solid rgba(79,140,255,.45); outline-off
 .c-temp { font-family: var(--mono); font-size: 13px; }
 .add-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .editor-buttons { display: flex; gap: 8px; margin-top: 4px; }
+.map-row { display: flex; gap: 10px; align-items: flex-start; }
+.map-preview { width: 64px; height: 64px; border-radius: 6px; border: 1px solid var(--line-2); image-rendering: pixelated; flex: 0 0 auto; }
+.map-actions { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.map-actions .muted { font-size: 11px; line-height: 1.3; }
 
 /* ---------- stage ---------- */
 .stage { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }

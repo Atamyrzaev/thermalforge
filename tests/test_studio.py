@@ -188,6 +188,141 @@ class TestLauncher:
         assert run_studio._is_in_use("127.0.0.1", free) is False
 
 
+class TestImportedPowerMap:
+    """The four presets are guesses about what is inside a chiplet. A design
+    team has the real numbers, and this is the path they arrive by: a grid of
+    relative weights that the mesh resamples and the chiplet's own power
+    scales."""
+
+    PKG = dict(size_mm=20.0, h_w_m2k=2500.0)
+
+    @staticmethod
+    def grid(cols, rows, weights):
+        return {"cols": cols, "rows": rows, "weights": [float(w) for w in weights]}
+
+    def chiplet(self, grid=None, **overrides):
+        item = {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8,
+                "x_mm": 7, "y_mm": 7}
+        item.update(overrides)
+        if grid is not None:
+            item["power_grid"] = grid
+        return item
+
+    def test_the_map_lands_where_the_file_draws_it(self, cache):
+        """Row 0 of the file is the TOP of the chiplet. Getting this backwards
+        would move every hotspot to the wrong end of the die, so it is checked
+        against the solved field rather than trusted."""
+        pkg = spec(**self.PKG)
+        top_left = self.grid(2, 2, [1.0, 0.0, 0.0, 0.0])
+        out = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(top_left)], pkg))
+        # The chiplet spans x 7..12, y 7..12: top-left means low x, high y.
+        assert out["peak"]["x_mm"] < 9.5 and out["peak"]["y_mm"] > 9.5
+
+        bottom_right = self.grid(2, 2, [0.0, 0.0, 0.0, 1.0])
+        out = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(bottom_right)], pkg))
+        assert out["peak"]["x_mm"] > 9.5 and out["peak"]["y_mm"] < 9.5
+
+    def test_the_file_sets_the_shape_and_the_chiplet_sets_the_watts(self, cache):
+        """Weights are relative: the same map scaled by a thousand is the same
+        heat, because the chiplet's power is what is shared out."""
+        pkg = spec(**self.PKG)
+        small = self.grid(4, 4, [0.1] * 15 + [0.9])
+        large = self.grid(4, 4, [100.0] * 15 + [900.0])
+        a = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(small)], pkg))
+        b = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(large)], pkg))
+        assert a["peak"]["t_c"] == pytest.approx(b["peak"]["t_c"], abs=1e-9)
+        assert a["verification"]["sink_heat_w"] == pytest.approx(8.0, rel=1e-9)
+
+    def test_a_concentrated_map_runs_hotter_than_the_presets(self, cache):
+        pkg = spec(**self.PKG)
+        uniform = E.solve(cache, pkg, E.parse_chiplets([self.chiplet()], pkg))
+        mac = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(power_pattern="mac_array")], pkg))
+        corner = self.grid(4, 4, [10.0] + [0.2] * 15)
+        imported = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(corner)], pkg))
+        assert (uniform["peak"]["t_c"] < mac["peak"]["t_c"] < imported["peak"]["t_c"])
+        row = imported["chiplets"][0]
+        assert row["power_pattern"] == "imported"
+        assert row["hottest_density_w_cm2"] > 4 * row["density_w_cm2"]
+
+    def test_a_map_finer_than_the_mesh_still_conserves_power(self, cache):
+        """A 64 x 64 map on a 5 mm chiplet is 10 tiles per mesh cell. The mesh
+        samples it rather than averaging it, and the chiplet's watts still all
+        arrive."""
+        pkg = spec(**self.PKG)
+        weights = [float((r * 64 + c) % 7) for r in range(64) for c in range(64)]
+        out = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(self.grid(64, 64, weights))], pkg))
+        v = out["verification"]
+        assert v["deposited_w"] == pytest.approx(8.0, rel=1e-9)
+        assert v["sink_heat_w"] == pytest.approx(8.0, rel=1e-9)
+
+    def test_rotating_the_chiplet_turns_the_map_with_it(self):
+        from src.experiment import PowerGrid
+        grid = PowerGrid(cols=2, rows=2, weights=(1.0, 0.0, 0.0, 0.0))    # top-left
+        turned = grid.rotated()
+        assert turned.weights == (0.0, 0.0, 1.0, 0.0)                     # now bottom-left
+        assert turned.rotated().rotated().rotated() == grid               # four turns is identity
+
+    @pytest.mark.parametrize("grid, message", [
+        ({"cols": 2, "rows": 2, "weights": [1.0, 2.0]}, "needs 4 weights"),
+        ({"cols": 0, "rows": 2, "weights": []}, "whole number"),
+        ({"cols": 2, "rows": 2, "weights": [1.0, -1.0, 0.0, 0.0]}, "negative"),
+        ({"cols": 2, "rows": 2, "weights": [0.0, 0.0, 0.0, 0.0]}, "empty"),
+        ({"cols": 300, "rows": 2, "weights": [1.0]}, "whole number"),
+        ("a map", "must be an object"),
+    ])
+    def test_an_unusable_map_is_refused_with_a_reason(self, grid, message):
+        pkg = spec()
+        with pytest.raises(E.StudioError, match=message):
+            E.parse_chiplets([self.chiplet(grid)], pkg)
+
+    def test_an_imported_map_survives_the_round_trip_to_the_ui(self, cache):
+        """The placement the app draws carries the map, so a reopened design
+        and a report describe the same heat source that was solved."""
+        pkg = spec(**self.PKG)
+        grid = self.grid(3, 3, [0, 0, 0, 0, 9, 0, 0, 0, 0])
+        out = E.solve(cache, pkg, E.parse_chiplets([self.chiplet(grid)], pkg))
+        assert out["chiplets"][0]["power_pattern"] == "imported"
+        again = E.parse_chiplets([self.chiplet(grid)], pkg)[0].as_dict()
+        assert again["power_grid"]["weights"] == grid["weights"]
+
+    def test_what_the_engine_reports_can_be_sent_straight_back(self, cache):
+        """The app echoes the engine's own description on the next request --
+        power_pattern comes back as "imported". Refusing it would silently
+        drop the map and solve the chiplet as if it were uniform, which is
+        exactly the bug this pins."""
+        pkg = spec(**self.PKG)
+        item = self.chiplet(self.grid(2, 2, [4.0, 0.0, 0.0, 0.0]))
+        first = E.solve(cache, pkg, E.parse_chiplets([item], pkg))
+        reported = first["chiplets"][0]["power_pattern"]
+        assert reported == "imported"
+        echoed = dict(item, power_pattern=reported)
+        second = E.solve(cache, pkg, E.parse_chiplets([echoed], pkg))
+        assert second["peak"]["t_c"] == pytest.approx(first["peak"]["t_c"], abs=1e-12)
+
+    def test_an_echoed_pattern_with_nothing_to_describe_is_just_uniform(self):
+        """"imported" with no map is a chiplet whose map was cleared."""
+        pkg = spec()
+        item = self.chiplet(power_pattern="imported")
+        assert E.parse_chiplets([item], pkg)[0].power_pattern == "uniform"
+
+    def test_the_optimizer_keeps_maps_apart_and_still_proves_its_answer(self, cache):
+        """Two chiplets of one size with different maps are different heat
+        sources, so they cannot share a single-chiplet solve."""
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0, pitch_mm=4.0)
+        left = self.chiplet(self.grid(2, 2, [4.0, 0.0, 0.0, 0.0]),
+                            id="a", name="A", w_mm=4, h_mm=4, x_mm=0, y_mm=0)
+        right = self.chiplet(self.grid(2, 2, [0.0, 0.0, 0.0, 4.0]),
+                             id="b", name="B", w_mm=4, h_mm=4, x_mm=12, y_mm=12, power_w=6)
+        chiplets = E.parse_chiplets([left, right], pkg)
+        model, _ = cache.get(pkg)
+        positions = [np.array([(0, 0), (20, 20)]), np.array([(0, 0), (20, 20)])]
+        with model.lock:
+            fields = E.unit_fields(model, chiplets, positions, [(8, 8), (8, 8)])
+        assert not np.allclose(fields[0] / 8.0, fields[1] / 6.0), "two maps shared one solve"
+        out = E.optimize(cache, pkg, chiplets)
+        assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
+
+
 class TestCoolingPath:
     """Heat does not leave a real package through a film coefficient on bare
     silicon: it crosses a TIM into a lid or a cold plate, SPREADS sideways in

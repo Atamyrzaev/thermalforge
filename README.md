@@ -43,7 +43,10 @@ a code change.
 - **Models what is inside a chiplet.** A part is not a uniform heater: an NPU's MAC
   array, a GPU's engines and a CPU's core complex carry most of the power over part
   of the die. On an 8 W, 5 × 5 mm NPU, assuming uniform power under-reports the
-  junction by **13.2 K**.
+  junction by **13.2 K**. Four built-in patterns cover the common shapes, and
+  **Import map…** reads a design team's own numbers from a CSV — either a matrix of
+  tile values or a table of regions (see `examples/`). Values are relative, so watts,
+  milliwatts, percentages or activity counts all work.
 - **Returns layouts that can be built.** A minimum chiplet-to-chiplet clearance
   (default 100 µm, for underfill flow and bump dispense tolerance) constrains the
   search, so the proven optimum is the coolest *manufacturable* layout — including
@@ -84,7 +87,8 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `packaging/` | The standalone build: `build.py` and the PyInstaller spec |
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
 | `validation/` | Measured verification artifacts, versioned as evidence |
-| `tests/` | 280 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `examples/` | Power maps to import: one matrix form, one region table |
+| `tests/` | 295 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 

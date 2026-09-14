@@ -94,6 +94,15 @@
         <label>Height<span class="input-unit"><input id="ed-h" type="number"><em>mm</em></span></label>
         <label>Power<span class="input-unit"><input id="ed-p" type="number" step="0.1" min="0"><em>W</em></span></label>
         <label class="span2">Power inside the chiplet<select id="ed-pattern"></select></label>
+        <div class="span2 map-row">
+          <canvas id="ed-map" width="64" height="64" class="map-preview hidden" title="The imported power map, drawn as it will be solved"></canvas>
+          <div class="map-actions">
+            <button id="ed-import" class="btn btn-small">Import map…</button>
+            <button id="ed-map-clear" class="btn btn-small hidden">Use a pattern</button>
+            <div class="muted" id="ed-map-note"></div>
+          </div>
+        </div>
+        <input type="file" id="file-map" accept=".csv,.txt,.tsv,text/csv,text/plain" hidden>
         <div class="span2 muted" id="ed-density"></div>
         <label>Position<span id="ed-pos" class="readout"></span></label>
         <div class="span2 editor-buttons">
@@ -256,7 +265,8 @@
         the expensive matrix factorization is computed once per package and reused.</li>
       <li><b>Chiplets are not uniform heaters.</b> An NPU's MAC array, a GPU's engines and a CPU's core
         complex carry most of the power over part of the die, and the junction follows the hot region.
-        Pick what is inside each part in the editor: on an 8&nbsp;W NPU, assuming uniform power
+        Pick what is inside each part in the editor &mdash; or <b>import the real numbers</b> from a CSV,
+        either a matrix of tile values or a table of regions. On an 8&nbsp;W NPU, assuming uniform power
         under-reports the junction by 13&nbsp;K.</li>
       <li><b>Only buildable layouts.</b> Chiplets must clear each other by the assembly keep-out
         (100&nbsp;µm by default) so underfill can flow and the bump dispense has room, so the optimizer

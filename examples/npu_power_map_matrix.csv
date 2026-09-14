@@ -1,0 +1,15 @@
+# RISC3D power map -- matrix form.
+# One number per tile, laid out like the chip: this first row is the TOP edge
+# of the chiplet. Values are relative, so watts, milliwatts, percentages or
+# activity counts all work -- the chiplet's own power is what gets shared out.
+#
+# An 8 x 8 map of a 5 x 5 mm NPU: a MAC array over the middle-left, a narrow
+# accumulator column beside it, and cool SRAM banks along the top and right.
+0.20, 0.20, 0.18, 0.18, 0.15, 0.15, 0.12, 0.12
+0.22, 0.30, 0.28, 0.26, 0.20, 0.16, 0.12, 0.12
+0.40, 1.90, 2.10, 2.05, 1.20, 0.30, 0.14, 0.12
+0.45, 2.20, 3.40, 3.30, 1.60, 0.34, 0.15, 0.13
+0.45, 2.30, 3.50, 3.35, 1.65, 0.34, 0.15, 0.13
+0.40, 1.95, 2.15, 2.10, 1.25, 0.30, 0.14, 0.12
+0.22, 0.32, 0.30, 0.28, 0.22, 0.18, 0.13, 0.12
+0.20, 0.20, 0.18, 0.18, 0.16, 0.15, 0.12, 0.12

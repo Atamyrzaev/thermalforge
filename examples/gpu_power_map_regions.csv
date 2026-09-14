@@ -1,0 +1,13 @@
+# RISC3D power map -- region form.
+# One row per block, measured in millimetres from the chiplet's lower-left
+# corner. Overlapping regions add. The header names the columns, so column
+# order does not matter and extra columns are ignored.
+#
+# A 6 x 5 mm GPU: two shader engines, a shared L2 slice between them, and the
+# display/IO strip along the bottom edge.
+block,x_mm,y_mm,w_mm,h_mm,power_w
+shader_engine_0,0.4,1.6,2.0,2.8,4.6
+shader_engine_1,3.6,1.6,2.0,2.8,4.6
+l2_slice,2.6,2.0,0.8,2.0,1.4
+command_processor,2.5,4.2,1.0,0.6,0.5
+display_io,0.3,0.2,5.4,0.8,1.1

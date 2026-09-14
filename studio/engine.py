@@ -50,8 +50,8 @@ from src.config_loader import (
     SolverSection, StackSection, VisualizationSection,
 )
 from src.experiment import (
-    ChipletDef, Placement, PowerBlock, block_cells, build_stack, package_from_config,
-    power_z_range, solve_placement, uniform_share, validate_placement,
+    ChipletDef, Placement, PowerBlock, PowerGrid, block_cells, build_stack, grid_weights,
+    package_from_config, power_z_range, solve_placement, uniform_share, validate_placement,
 )
 from src.surrogate import spreading_length_m
 from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
@@ -99,6 +99,11 @@ POWER_PATTERNS: Dict[str, Tuple[Tuple[float, float, float, float, float], ...]] 
                    (0.08, 0.55, 0.37, 0.37, 0.17), (0.55, 0.55, 0.37, 0.37, 0.17)),
 }
 MAX_BLOCKS = 8
+# An imported map is a grid of relative weights, one per tile. The cap is
+# generous -- a 64 x 64 map is 4,096 tiles, far finer than any mesh the app
+# builds -- but not unbounded, since the file comes from outside.
+MAX_GRID_TILES = 8192
+MAX_GRID_SIDE = 256
 
 # THE COOLING PATH ABOVE THE DIE.
 # Real hardware does not put a film coefficient on bare silicon: heat crosses
@@ -332,12 +337,17 @@ class ChipletIn:
     y_mm: float
     power_pattern: str = "uniform"
     blocks: Tuple[PowerBlock, ...] = ()
+    power_grid: Optional[PowerGrid] = None
 
     def as_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "w_mm": self.w_mm, "h_mm": self.h_mm,
-                "power_w": self.power_w, "x_mm": self.x_mm, "y_mm": self.y_mm,
-                "power_pattern": self.power_pattern,
-                "blocks": [[b.x_frac, b.y_frac, b.w_frac, b.h_frac, b.share] for b in self.blocks]}
+        out = {"id": self.id, "name": self.name, "w_mm": self.w_mm, "h_mm": self.h_mm,
+               "power_w": self.power_w, "x_mm": self.x_mm, "y_mm": self.y_mm,
+               "power_pattern": self.power_pattern,
+               "blocks": [[b.x_frac, b.y_frac, b.w_frac, b.h_frac, b.share] for b in self.blocks]}
+        if self.power_grid is not None:
+            out["power_grid"] = {"cols": self.power_grid.cols, "rows": self.power_grid.rows,
+                                 "weights": list(self.power_grid.weights)}
+        return out
 
     @property
     def hottest_block_density_w_cm2(self) -> float:
@@ -346,12 +356,52 @@ class ChipletIn:
         area_cm2 = self.w_mm * self.h_mm / 100.0
         if area_cm2 <= 0:
             return 0.0
-        best = uniform_share(self.blocks) / 1.0 if self.blocks else 1.0
+        average = self.power_w / area_cm2
+        if self.power_grid is not None:
+            tiles = self.power_grid.cols * self.power_grid.rows
+            total = sum(self.power_grid.weights)
+            if total <= 0 or tiles == 0:
+                return average
+            # Weight of the busiest tile relative to an even share of them.
+            return average * max(self.power_grid.weights) / total * tiles
+        best = uniform_share(self.blocks) if self.blocks else 1.0
         for b in self.blocks:
             area_frac = b.w_frac * b.h_frac
             if area_frac > 0:
                 best = max(best, b.share / area_frac)
-        return self.power_w / area_cm2 * best
+        return average * best
+
+
+def _parse_power_grid(item: dict, where: str) -> Optional[PowerGrid]:
+    """An imported power map: {cols, rows, weights}, relative and row-major
+    with the first row at the chiplet's top edge."""
+    raw = item.get("power_grid")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise StudioError(f"{where}: power_grid must be an object with cols, rows and weights")
+    cols, rows = raw.get("cols"), raw.get("rows")
+    for label, value in (("cols", cols), ("rows", rows)):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= MAX_GRID_SIDE:
+            raise StudioError(f"{where}: power_grid {label} must be a whole number, "
+                              f"1 to {MAX_GRID_SIDE}")
+    if cols * rows > MAX_GRID_TILES:
+        raise StudioError(f"{where}: a power map may have at most {MAX_GRID_TILES} tiles")
+    weights = raw.get("weights")
+    if not isinstance(weights, list) or len(weights) != cols * rows:
+        raise StudioError(f"{where}: power_grid needs {cols * rows} weights "
+                          f"({cols} x {rows}), got {len(weights) if isinstance(weights, list) else 'none'}")
+    values = []
+    for n, value in enumerate(weights, start=1):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise StudioError(f"{where}: power_grid value {n} is not a number")
+        if value < 0:
+            raise StudioError(f"{where}: power_grid value {n} is negative; "
+                              f"a region cannot consume less than no power")
+        values.append(float(value))
+    if sum(values) <= 0:
+        raise StudioError(f"{where}: the power map is empty -- every tile is zero")
+    return PowerGrid(cols=cols, rows=rows, weights=tuple(values))
 
 
 def _parse_blocks(item: dict, where: str) -> Tuple[str, Tuple[PowerBlock, ...]]:
@@ -361,12 +411,19 @@ def _parse_blocks(item: dict, where: str) -> Tuple[str, Tuple[PowerBlock, ...]]:
     the presets cannot express.
     """
     pattern = item.get("power_pattern", "uniform")
-    if not isinstance(pattern, str) or pattern not in POWER_PATTERNS:
+    # "custom" and "imported" are what the engine ITSELF reports for a chiplet
+    # whose map came from blocks or a file, and the app sends that back on the
+    # next request. Refusing them would break the round trip: the blocks or
+    # the grid in the same object are what actually define the heat.
+    if not isinstance(pattern, str) or (pattern not in POWER_PATTERNS
+                                        and pattern not in ("custom", "imported")):
         raise StudioError(f"{where}: power_pattern must be one of "
                           f"{', '.join(sorted(POWER_PATTERNS))}")
+    if pattern in ("custom", "imported") and item.get("blocks") is None and item.get("power_grid") is None:
+        pattern = "uniform"        # nothing to describe; it is a plain chiplet
     raw_blocks = item.get("blocks")
     if raw_blocks is None:
-        return pattern, tuple(PowerBlock(*values) for values in POWER_PATTERNS[pattern])
+        return pattern, tuple(PowerBlock(*values) for values in POWER_PATTERNS.get(pattern, ()))
     if not isinstance(raw_blocks, list):
         raise StudioError(f"{where}: blocks must be a list")
     if len(raw_blocks) > MAX_BLOCKS:
@@ -414,6 +471,9 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
         seen.add(cid)
         name = str(item.get("name") or cid)[:40]
         pattern, blocks = _parse_blocks(item, name)
+        power_grid = _parse_power_grid(item, name)
+        if power_grid is not None:
+            pattern, blocks = "imported", ()      # a measured map replaces the presets
         chiplet = ChipletIn(
             id=cid, name=name,
             w_mm=_number(item, "w_mm", cell, spec.size_mm, name),
@@ -421,7 +481,7 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
             power_w=_number(item, "power_w", 0.0, 2000.0, name),
             x_mm=_number(item, "x_mm", 0.0, spec.size_mm, name),
             y_mm=_number(item, "y_mm", 0.0, spec.size_mm, name),
-            power_pattern=pattern, blocks=blocks,
+            power_pattern=pattern, blocks=blocks, power_grid=power_grid,
         )
         for label, value in (("width", chiplet.w_mm), ("height", chiplet.h_mm),
                              ("x", chiplet.x_mm), ("y", chiplet.y_mm)):
@@ -434,7 +494,7 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
 def _catalog(chiplets) -> Tuple[ChipletDef, ...]:
     return tuple(ChipletDef(id=c.id, name=c.name, width_um=c.w_mm * 1e3,
                             height_um=c.h_mm * 1e3, power_w=c.power_w,
-                            blocks=c.blocks) for c in chiplets)
+                            blocks=c.blocks, power_grid=c.power_grid) for c in chiplets)
 
 
 def _placement(chiplets, pitch_mm: float) -> Placement:
@@ -785,10 +845,11 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
     for index, (chiplet, (wc, hc), pos) in enumerate(zip(chiplets, sizes, positions)):
         _check_cancel(cancel)
         cells = block_cells(wc, hc, chiplet.blocks)
+        grid = chiplet.power_grid
         # Chiplets share solves only when their internal map matches too: a
         # MAC array in the middle is a different heat source from a uniform
-        # block of the same size.
-        key = (wc, hc, cells)
+        # block of the same size, and an imported map is its own thing.
+        key = (wc, hc, cells, None if grid is None else (grid.cols, grid.rows, grid.weights))
         if key in per_watt:
             fields.append(per_watt[key] * chiplet.power_w)
             if on_chiplet is not None:
@@ -797,13 +858,18 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
         nk = z1 - z0
         rest = uniform_share(chiplet.blocks)
         q = rest / (wc * hc * nk * pkg.cell_volume_m3)
+        footprint = (grid_weights(wc, hc, grid)[:, :, None] / (nk * pkg.cell_volume_m3)
+                     if grid is not None else None)
         rhs = np.zeros((n_cells, len(pos)), dtype=np.float64, order="F")
         for col, (x, y) in enumerate(pos):
             block[:] = 0.0
-            block[x:x + wc, y:y + hc, z0:z1] = q
-            for bi, bj, bw, bh, share in cells:
-                block[x + bi:x + bi + bw, y + bj:y + bj + bh, z0:z1] += (
-                    share / (bw * bh * nk * pkg.cell_volume_m3))
+            if footprint is not None:
+                block[x:x + wc, y:y + hc, z0:z1] = footprint
+            else:
+                block[x:x + wc, y:y + hc, z0:z1] = q
+                for bi, bj, bw, bh, share in cells:
+                    block[x + bi:x + bi + bw, y + bj:y + bj + bh, z0:z1] += (
+                        share / (bw * bh * nk * pkg.cell_volume_m3))
             rhs[:, col] = block.reshape(n_cells)
         # S theta = q: the rise above ambient; the boundary forcing cancels.
         full = model.factor.rise_for_power(rhs)
@@ -1064,7 +1130,11 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
         incumbent_value, incumbent_choice = value, start_choice
 
     signatures = [(sizes[i], chiplets[i].power_w,
-                   block_cells(*sizes[i], chiplets[i].blocks)) for i in range(len(chiplets))]
+                   block_cells(*sizes[i], chiplets[i].blocks),
+                   None if chiplets[i].power_grid is None
+                   else (chiplets[i].power_grid.cols, chiplets[i].power_grid.rows,
+                         chiplets[i].power_grid.weights))
+                  for i in range(len(chiplets))]
 
     t0 = time.perf_counter()
 

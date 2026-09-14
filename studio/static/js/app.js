@@ -1,10 +1,11 @@
 // RISC3D Studio :: application.
 
 import { decodeField, getJSON, postJSON } from "./api.js";
-import { drawColorbar } from "./colormap.js";
+import { drawColorbar, tempColor } from "./colormap.js";
 import { FloorplanView, escapeHtml } from "./floorplan.js";
 import { columnMax, drawPackageMap, formatW, setupCanvas } from "./mapdraw.js";
 import { History, openDesign, saveDesign } from "./design.js";
+import { drawPowerMap, readPowerMapFile } from "./powermap.js";
 import { downloadReport } from "./report.js";
 import { Viewer3D } from "./viewer3d.js";
 
@@ -27,6 +28,7 @@ const PATTERN_LABELS = {
   two_engines: "Two engines — 35 % of the power each",
   quad_cores: "Four cores — 17 % of the power each",
   custom: "Custom blocks (from the file)",
+  imported: "Imported map (from a file)",
 };
 
 const state = {
@@ -116,16 +118,18 @@ function packageRequest() {
 }
 
 function chipletRequest(list = state.chiplets) {
-  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm, power_pattern, blocks }) => ({
+  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm, power_pattern, blocks, power_grid }) => ({
     id, name, w_mm, h_mm, power_w, x_mm, y_mm,
     power_pattern: power_pattern || "uniform",
     ...(blocks && blocks.length ? { blocks } : {}),
+    ...(power_grid ? { power_grid } : {}),
   }));
 }
 
 // The blocks a chiplet actually carries: its own (a file may define them) or
 // the served pattern's.
 function blocksOf(c) {
+  if (c.power_grid) return [];          // an imported map is drawn by the heat, not by outlines
   if (c.blocks && c.blocks.length) return c.blocks;
   return state.patterns[c.power_pattern || "uniform"] || [];
 }
@@ -414,6 +418,30 @@ function renderChipletList() {
   if (selected) selected.scrollIntoView({ block: "nearest" });
 }
 
+// The imported map, turned 90 degrees with its chiplet.
+function rotateGrid({ cols, rows, weights }) {
+  const turned = [];
+  for (let c = cols - 1; c >= 0; c--) {
+    for (let r = 0; r < rows; r++) turned.push(weights[r * cols + c]);
+  }
+  return { cols: rows, rows: cols, weights: turned };
+}
+
+function renderMapPreview(c) {
+  const canvas = $("ed-map"), clear = $("ed-map-clear"), note = $("ed-map-note");
+  const grid = c && c.power_grid;
+  canvas.classList.toggle("hidden", !grid);
+  clear.classList.toggle("hidden", !grid);
+  $("ed-pattern").disabled = !!grid;
+  if (!grid) {
+    note.textContent = "Have the real numbers? Import a power map from a CSV.";
+    return;
+  }
+  drawPowerMap(canvas, grid, (t) => tempColor(t, 0, 1));
+  note.textContent = `${grid.cols} × ${grid.rows} tiles${c.map_source ? ` from ${c.map_source}` : ""}`
+    + " · the top of the picture is the top of the chiplet";
+}
+
 function renderPatternOptions() {
   const names = Object.keys(state.patterns);
   $("ed-pattern").innerHTML = names
@@ -427,6 +455,12 @@ function hottestDensity(c) {
   const blocks = blocksOf(c);
   const area_cm2 = c.w_mm * c.h_mm / 100;
   if (!area_cm2) return 0;
+  if (c.power_grid) {
+    const { cols, rows, weights } = c.power_grid;
+    const total = weights.reduce((a, b) => a + b, 0);
+    if (total <= 0) return c.power_w / area_cm2;
+    return c.power_w / area_cm2 * (Math.max(...weights) / total) * cols * rows;
+  }
   let factor = 1;
   if (blocks.length) {
     const rest = 1 - blocks.reduce((sum, b) => sum + b[4], 0);
@@ -457,6 +491,7 @@ function renderEditor() {
     $("ed-pattern").appendChild(option);
   }
   $("ed-pattern").value = pattern;
+  renderMapPreview(c);
   const average = c.power_w / (c.w_mm * c.h_mm / 100);
   const hottest = hottestDensity(c);
   $("ed-density").textContent = hottest > average * 1.01
@@ -501,9 +536,11 @@ function rotateSelected() {
   if (!c) return;
   record();
   [c.w_mm, c.h_mm] = [c.h_mm, c.w_mm];
+  // A point (u, v) of the old footprint lands at (1 - v, u) of the new one.
   if (c.blocks && c.blocks.length) {
-    c.blocks = c.blocks.map(([x, y, w, h, share]) => [y, x, h, w, share]);
+    c.blocks = c.blocks.map(([x, y, w, h, share]) => [1 - y - h, x, h, w, share]);
   }
+  if (c.power_grid) c.power_grid = rotateGrid(c.power_grid);
   fitInside(c);
   renderChipletList();
   requestSolve();
@@ -1108,12 +1145,67 @@ function wire() {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
     if (c && $("ed-name").value.trim()) { record(); c.name = $("ed-name").value.trim(); renderChipletList(); renderFloorplan(); }
   });
+  $("ed-import").addEventListener("click", async () => {
+    const c = state.chiplets.find((q) => q.id === state.selectedId);
+    if (!c) { toast("Select a chiplet first."); return; }
+    let imported;
+    try {
+      imported = await readPowerMapFile($("file-map"), c);
+    } catch (err) {
+      toast(err.message);
+      return;
+    }
+    if (!imported) return;
+    record();
+    c.power_grid = imported.grid;
+    c.power_pattern = "imported";
+    c.map_source = imported.filename;
+    delete c.blocks;
+    renderChipletList();
+    renderFloorplan();
+    requestSolve();
+    const tiles = `${imported.grid.cols} × ${imported.grid.rows} tiles`;
+    const shape = imported.form === "table" ? `${imported.regions} regions → ${tiles}` : tiles;
+    toast(`Imported ${shape} from ${imported.filename}.`, "info");
+    // If the file was in watts, its total is probably the chiplet's power.
+    const total = imported.total;
+    if (total > 0 && Math.abs(total - c.power_w) > 0.01 * Math.max(total, c.power_w)) {
+      const yes = await ask({
+        title: "Set the chiplet's power to the file's total?",
+        body: `The map adds up to ${total.toFixed(2)}, and ${escapeHtml(c.name)} is set to `
+          + `${c.power_w.toFixed(2)} W. If the file is in watts, match them. If it is in `
+          + `percentages or activity counts, keep the power you have — the map's shape is `
+          + `used either way.`,
+        ok: `Set ${total.toFixed(2)} W`,
+        cancel: "Keep " + c.power_w.toFixed(2) + " W",
+      });
+      if (yes === true) {
+        record();
+        c.power_w = Math.max(0, Math.min(2000, total));
+        renderChipletList();
+        requestSolve();
+      }
+    }
+  });
+  $("ed-map-clear").addEventListener("click", () => {
+    const c = state.chiplets.find((q) => q.id === state.selectedId);
+    if (!c || !c.power_grid) return;
+    record();
+    delete c.power_grid;
+    delete c.map_source;
+    c.power_pattern = "uniform";
+    renderChipletList();
+    renderFloorplan();
+    requestSolve();
+  });
   $("ed-pattern").addEventListener("change", () => {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
     if (!c) return;
     record();
     c.power_pattern = $("ed-pattern").value;
     delete c.blocks;                 // a named pattern replaces custom blocks
+    delete c.power_grid;
+    delete c.map_source;
     renderChipletList();
     renderFloorplan();
     requestSolve();

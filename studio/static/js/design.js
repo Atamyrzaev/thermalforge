@@ -67,6 +67,7 @@ export function serializeDesign(pkg, chiplets, title) {
       power_w: c.power_w, x_mm: c.x_mm, y_mm: c.y_mm, color: c.color,
       power_pattern: c.power_pattern || "uniform",
       ...(c.blocks && c.blocks.length ? { blocks: c.blocks } : {}),
+      ...(c.power_grid ? { power_grid: c.power_grid, map_source: c.map_source || "" } : {}),
     })),
   };
 }
@@ -117,6 +118,28 @@ function parseBlocks(raw, where) {
     }
     return [x, y, w, h, share];
   });
+}
+
+// An imported power map: relative weights, row-major, first row at the top.
+function parseGrid(raw, where) {
+  if (!raw || typeof raw !== "object") throw new Error(`${where}: power_grid must be an object`);
+  const { cols, rows, weights } = raw;
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1
+      || cols > 256 || rows > 256) {
+    throw new Error(`${where}: power_grid cols and rows must be whole numbers, 1 to 256`);
+  }
+  if (!Array.isArray(weights) || weights.length !== cols * rows) {
+    throw new Error(`${where}: power_grid needs ${cols * rows} weights (${cols} × ${rows})`);
+  }
+  let total = 0;
+  for (const value of weights) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new Error(`${where}: power_grid values must be numbers, none of them negative`);
+    }
+    total += value;
+  }
+  if (total <= 0) throw new Error(`${where}: every tile of the power map is zero`);
+  return { cols, rows, weights };
 }
 
 function number(source, key, lo, hi, where) {
@@ -171,6 +194,9 @@ export function parseDesign(text) {
       color: typeof c.color === "string" && COLOUR.test(c.color) ? c.color : "#8aa0b8",
       power_pattern: typeof c.power_pattern === "string" ? c.power_pattern.slice(0, 30) : "uniform",
       ...(c.blocks === undefined ? {} : { blocks: parseBlocks(c.blocks, where) }),
+      ...(c.power_grid === undefined || c.power_grid === null
+        ? {} : { power_grid: parseGrid(c.power_grid, where),
+                 map_source: typeof c.map_source === "string" ? c.map_source.slice(0, 80) : "" }),
     };
   });
   const title = typeof raw.title === "string" ? raw.title.slice(0, 80) : "Opened design";

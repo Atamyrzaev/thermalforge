@@ -102,9 +102,41 @@ class PowerBlock:
     h_frac: float
     share: float
 
-    def transposed(self) -> "PowerBlock":
-        """The block as it sits after the chiplet is rotated 90 degrees."""
-        return PowerBlock(self.y_frac, self.x_frac, self.h_frac, self.w_frac, self.share)
+    def rotated(self) -> "PowerBlock":
+        """The block as it sits after the chiplet is rotated 90 degrees.
+
+        A point (u, v) of the old footprint lands at (1 - v, u) of the new
+        one, so the block's corners swap axes and its x runs backwards.
+        """
+        return PowerBlock(1.0 - self.y_frac - self.h_frac, self.x_frac,
+                          self.h_frac, self.w_frac, self.share)
+
+
+@dataclass(frozen=True)
+class PowerGrid:
+    """A measured power map across a chiplet: a grid of relative weights.
+
+    This is what a design team actually has -- a per-block or per-tile power
+    table exported from their own tools -- rather than the tidy rectangles of
+    PowerBlock. The weights are RELATIVE: they are normalized over the mesh
+    cells the chiplet covers, so the chiplet's total power is whatever the
+    catalog says it is, however the file was scaled (W, mW, percentages, or
+    activity counts).
+
+    Row order is the one a spreadsheet shows: `weights[0]` is the TOP row of
+    the chiplet, the high-y edge. The app draws the map it imported so a file
+    that is upside down is visible immediately rather than believed.
+    """
+    cols: int
+    rows: int
+    weights: Tuple[float, ...]          # row-major, len == cols * rows
+
+    def rotated(self) -> "PowerGrid":
+        """The map as it sits after the chiplet is rotated 90 degrees."""
+        grid = [self.weights[r * self.cols:(r + 1) * self.cols] for r in range(self.rows)]
+        turned = [tuple(row[c] for row in grid) for c in range(self.cols - 1, -1, -1)]
+        return PowerGrid(cols=self.rows, rows=self.cols,
+                         weights=tuple(v for row in turned for v in row))
 
 
 @dataclass(frozen=True)
@@ -122,6 +154,7 @@ class ChipletDef:
     height_um: float
     power_w: float
     blocks: Tuple[PowerBlock, ...] = ()      # internal hotspots; empty means uniform
+    power_grid: Optional["PowerGrid"] = None  # an imported map; wins over blocks
 
     @property
     def width_m(self) -> float:
@@ -410,6 +443,43 @@ class PowerMap:
         return int(np.count_nonzero(self.q_w_m3))
 
 
+def grid_weights(nvx: int, nvy: int, grid: PowerGrid) -> np.ndarray:
+    """The imported map resampled onto the mesh cells, normalized to sum 1.
+
+    Each mesh cell takes the value of the map cell its CENTRE falls in --
+    nearest-tile sampling, not interpolation, because a power map is a
+    statement about regions rather than a smooth field, and averaging
+    neighbouring tiles would cool the hotspot the file exists to describe.
+    Normalizing over the mesh cells afterwards is what makes the chiplet's
+    total power exact whatever the mesh does to the map.
+    """
+    if grid.cols <= 0 or grid.rows <= 0:
+        raise ExperimentError("a power grid needs at least one column and one row")
+    if len(grid.weights) != grid.cols * grid.rows:
+        raise ExperimentError(
+            f"power grid says {grid.cols} x {grid.rows} but carries {len(grid.weights)} values")
+    values = np.asarray(grid.weights, dtype=np.float64).reshape(grid.rows, grid.cols)
+    if np.any(values < 0.0):
+        raise ExperimentError("a power grid cannot contain negative power")
+    total = float(values.sum())
+    if total <= 0.0:
+        raise ExperimentError("a power grid must carry some power")
+
+    i = np.arange(nvx)
+    j = np.arange(nvy)
+    col = np.clip(((i + 0.5) / nvx * grid.cols).astype(int), 0, grid.cols - 1)
+    # Mesh j counts up from the chiplet's bottom edge; the map's first row is
+    # its top edge, so the row index runs the other way.
+    row = np.clip(((1.0 - (j + 0.5) / nvy) * grid.rows).astype(int), 0, grid.rows - 1)
+    cells = values[np.ix_(row, col)].T          # (nvx, nvy)
+    cells_sum = float(cells.sum())
+    if cells_sum <= 0.0:
+        raise ExperimentError(
+            "every mesh cell landed on an empty tile of the power grid; the map is "
+            "finer than the mesh can resolve")
+    return cells / cells_sum
+
+
 def block_cells(nvx: int, nvy: int, blocks: Tuple[PowerBlock, ...]
                 ) -> Tuple[Tuple[int, int, int, int, float], ...]:
     """Internal blocks as whole cells: (i, j, cells_x, cells_y, share).
@@ -459,6 +529,13 @@ def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
             raise ExperimentError(
                 f"'{c.id}' does not fit in the mesh at cell ({i0}, {j0}) with extent "
                 f"{nvx} x {nvy}; call validate_placement() first")
+        if c.power_grid is not None:
+            # An imported map replaces the block description entirely.
+            weights = grid_weights(nvx, nvy, c.power_grid)
+            q[i0:i0 + nvx, j0:j0 + nvy, z0:z1] += (
+                c.power_w * weights[:, :, None] / (nk * package.cell_volume_m3))
+            blocks.append((c.id, i0, j0, nvx, nvy))
+            continue
         # The part of the power that is spread over the whole footprint...
         rest = uniform_share(c.blocks)
         if rest < -1e-9:
