@@ -285,8 +285,9 @@ function renderKpis() {
   const m = res.metrics;
   $("kpi-peak").textContent = res.peak.t_c.toFixed(1);
   const hottest = state.chiplets.find((c) => c.id === res.hottest_chiplet);
+  const band = m.mesh ? ` · ±${m.mesh.band_k.toFixed(2)} K from the mesh` : "";
   $("kpi-peak-sub").textContent =
-    `${hottest ? `inside ${hottest.name}, ` : ""}${res.peak.layer} · x ${res.peak.x_mm.toFixed(2)}, y ${res.peak.y_mm.toFixed(2)} mm`;
+    `${hottest ? `inside ${hottest.name}, ` : ""}${res.peak.layer} · x ${res.peak.x_mm.toFixed(2)}, y ${res.peak.y_mm.toFixed(2)} mm${band}`;
   $("kpi-rise").textContent = `${m.rise_k.toFixed(1)} K`;
   $("kpi-rja").textContent = m.rja_k_per_w != null ? `${m.rja_k_per_w.toFixed(2)} K/W` : "–";
   $("kpi-power").textContent = `${formatW(m.total_power_w)} W`;
@@ -324,6 +325,11 @@ function renderChecks() {
     [m.floor_ratio == null || m.floor_ratio >= 1, "Physically bounded",
       `rise ${m.rise_k.toFixed(1)} K is above the cooling floor P/(hA) = ${m.floor_rise_k.toFixed(1)} K`],
   ];
+  if (m.mesh) {
+    items.push([true, "Mesh error bar",
+      `±${m.mesh.band_k.toFixed(2)} K (${m.mesh.band_pct_of_rise.toFixed(1)} % of the rise) at `
+      + `${m.mesh.cell_mm} mm cells, from a 2/1/0.5 mm convergence study`]);
+  }
   box.innerHTML = items.map(([ok, title, detail]) =>
     `<li><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "✗"}</span><span>${title}<small>${detail}</small></span></li>`).join("")
     + `<li><span class="muted">·</span><span>Full 3-D model<small>${v.unknowns.toLocaleString()} cells · ${res.grid.nx} × ${res.grid.ny} × ${res.grid.nz} · solved in ${res.solve_ms.toFixed(0)} ms</small></span></li>`;

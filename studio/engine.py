@@ -35,7 +35,9 @@ import logging
 import math
 import threading
 import time
+import json
 from collections import OrderedDict
+from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -57,6 +59,11 @@ from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
 for _logger in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder",
                 "RISC3D-AI.ConfigLoader", "RISC3D-AI.Optimizer", "RISC3D-AI.Exhaustive"):
     logging.getLogger(_logger).setLevel(logging.WARNING)
+
+# Mesh sensitivity, measured by tools/mesh_convergence.py and read from its
+# output. Absent that file the app simply reports no band rather than an
+# invented one.
+MESH_STUDY_PATH = Path(__file__).resolve().parent.parent / "validation" / "mesh_convergence.json"
 
 NZ = 12
 DZ_M = 20e-6
@@ -312,6 +319,53 @@ class ModelCache:
 # One placement
 # ---------------------------------------------------------------------------
 
+def _load_mesh_study() -> Optional[dict]:
+    try:
+        return json.loads(MESH_STUDY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+_MESH_STUDY = _load_mesh_study()
+
+
+def mesh_band(cell_mm: float, rise_k: float, h_w_m2k: float,
+              study: Optional[dict] = None) -> Optional[dict]:
+    """How much the peak still moves with the mesh, in kelvin.
+
+    Taken from a three-mesh convergence study on a reference package (2, 1
+    and 0.5 mm cells) and scaled to THIS design's rise above ambient. It is a
+    discretization band, not a validation bound: it says how much of the
+    answer is the mesh, and says nothing about whether the model matches
+    hardware. Returns None when no study has been run.
+    """
+    study = _MESH_STUDY if study is None else study
+    if not study or rise_k <= 0:
+        return None
+    cases = study.get("cases") or {}
+    # The band depends on how hard the package is being cooled: under a cold
+    # plate the gradients are steeper and the mesh matters more.
+    name = "coldplate" if h_w_m2k >= 10000.0 and "coldplate" in cases else "passive"
+    case = cases.get(name)
+    if not case:
+        return None
+    table = case.get("band_pct_of_rise_by_cell_mm") or {}
+    key = f"{cell_mm:g}"
+    if key not in table:
+        # Fall back to the coarsest measured mesh, which bands no tighter.
+        key = max(table, key=lambda k: float(k)) if table else None
+    if key is None:
+        return None
+    pct = float(table[key])
+    return {
+        "band_k": pct / 100.0 * rise_k,
+        "band_pct_of_rise": pct,
+        "cell_mm": float(key),
+        "measured_on": name,
+        "observed_order": case.get("order_p"),
+    }
+
+
 def result_payload(model: ThermalModel, chiplets, result) -> dict:
     """Everything the UI shows for one solved placement."""
     spec, pkg = model.spec, model.package
@@ -354,6 +408,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
             "flux_package_w_cm2": total_w / (area_mm2 / 100.0),
             "flux_chiplets_w_cm2": total_w / (chip_mm2 / 100.0) if chip_mm2 > 0 else None,
             "lambda_mm": model.lambda_mm, "h_w_m2k": spec.h_w_m2k,
+            "mesh": mesh_band(spec.cell_mm, rise_k, spec.h_w_m2k),
         },
         "verification": {
             "residual": float(result.residual),

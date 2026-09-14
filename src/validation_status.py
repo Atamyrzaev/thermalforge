@@ -35,17 +35,22 @@ LIMITATIONS: Tuple[Tuple[str, str], ...] = (
     ("Uniform-silicon blocks",
      "each die and chiplet is homogeneous silicon, with no BEOL, device layer "
      "or interposer TSVs"),
-    ("Volumetric power",
-     "power fills the whole die thickness instead of entering at the active plane"),
-    ("Flip-chip orientation, partly fixed",
-     "the sink has been on the die backside since validation step 1, but the "
-     "active plane is still not placed at the bumped face (see volumetric power)"),
-    ("Unconverged mesh",
-     "no grid-convergence (GCI) study at the default mesh yet, so the "
-     "discretization error is unquantified"),
-    ("No independent benchmark",
-     "Validation step 5 requires the dac143 FFT benchmark source, which is not present. "
-     "Status remains VERIFIED, NOT VALIDATED"),
+    ("Device layer one cell thick",
+     "power now enters at the active plane against the bumps, as a flip-chip die "
+     "generates it, but the source is one mesh cell (20 um) thick rather than the "
+     "sub-micron real device layer; halving that thickness moves the peak by "
+     "+0.002 K passive and +0.06 K under a cold plate"),
+    ("Mesh error quantified, not removed",
+     "a 2/1/0.5 mm convergence study (tools/mesh_convergence.py) puts the band at "
+     "0.83 % of the rise passive and 2.24 % under a cold plate at 0.5 mm cells; the "
+     "observed order is about 1, so coarser meshes are materially worse and the app "
+     "prints the band beside every peak"),
+    ("No measured benchmark",
+     "closed-form verification passes -- a uniformly heated slab to second order with "
+     "the predicted coefficient, and a rectangular flux channel to within 3 % "
+     "(tests/test_benchmarks.py) -- but no result has been compared with MEASURED "
+     "hardware. Validation step 5 requires the dac143 FFT benchmark source, which is "
+     "not present. Status remains VERIFIED, NOT VALIDATED"),
 )
 
 MATERIALS_NOTE = ("conductivities from Rao et al. 2023, doi:10.2298/TSCI220805061R; "

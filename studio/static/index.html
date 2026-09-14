@@ -246,9 +246,16 @@
         only add heat. The winner is the provably coolest layout on that grid, and it is solved again from
         scratch before you see it.</li>
     </ol>
+    <p class="muted"><b>How we know it is right.</b> Every solve checks its own residual and energy balance.
+      The optimizer is checked against an independent brute force. The solver reproduces two closed-form
+      solutions &mdash; a uniformly heated slab, to second order with the coefficient the discretization
+      predicts, and a rectangular flux channel to within 3&nbsp;%. A 2&nbsp;/&nbsp;1&nbsp;/&nbsp;0.5&nbsp;mm
+      convergence study sets the &plusmn; printed beside every peak, so you can see how much of the answer is
+      still the mesh.</p>
     <p class="muted">Scope: steady state; cooling represented by an effective heat-transfer coefficient on the
-      die backside; uniform power inside each chiplet. The solver is verified numerically; the model has not
-      yet been validated against measurements of real hardware.</p>
+      die backside; power entering at the active plane of each die but spread over one 20&nbsp;µm cell; uniform
+      power inside each chiplet. All of that is <b>verification</b> &mdash; the model has not yet been compared
+      with measurements of real hardware.</p>
     <button class="btn btn-primary" id="btn-help-close">Got it</button>
   </div>
 </div>
@@ -268,7 +275,7 @@
 <div id="toast" class="toast hidden"></div>
 
 <footer class="footer">
-  Steady-state 3-D heat conduction, finite-volume solver, every number solved and checked (residual and energy balance) · placement optimum is exact over the chosen grid · model verified, not yet validated against measurements
+  Steady-state 3-D heat conduction, finite-volume solver, every number solved and checked (residual and energy balance) · peaks carry a measured mesh error bar · placement optimum is exact over the chosen grid · model verified, not yet validated against measurements
 </footer>
 
 <script type="module" src="/js/app.js"></script>

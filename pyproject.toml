@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "risc3d-ai"
+version = "0.3.0"
+description = "Thermal co-optimization for 3D-IC chiplet packages: a verified steady-state solver and a provably optimal placement search"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",     # Stage 1 / Stage 2 report figures only; the Studio app needs none
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+risc3d-studio = "run_studio:main"
+
+[tool.setuptools]
+packages = ["src", "studio"]
+py-modules = ["run_studio", "main"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+studio = ["static/*", "static/css/*", "static/js/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

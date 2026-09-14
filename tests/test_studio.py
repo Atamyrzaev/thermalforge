@@ -130,6 +130,52 @@ class TestEngineSolve:
             E.parse_chiplets([], pkg)
 
 
+class TestMeshErrorBar:
+    """The band is measured (tools/mesh_convergence.py), scaled to the design
+    in hand, and absent rather than invented when no study has been run."""
+
+    STUDY = {
+        "cases": {
+            "passive": {"order_p": 1.05, "band_pct_of_rise_by_cell_mm": {"0.5": 0.83, "1": 2.0, "2": 5.0}},
+            "coldplate": {"order_p": 0.74, "band_pct_of_rise_by_cell_mm": {"0.5": 2.24, "1": 4.0, "2": 9.0}},
+        }
+    }
+
+    def test_band_scales_with_the_rise_it_qualifies(self):
+        small = E.mesh_band(0.5, 10.0, 1000.0, self.STUDY)
+        large = E.mesh_band(0.5, 100.0, 1000.0, self.STUDY)
+        assert small["band_k"] == pytest.approx(0.083)
+        assert large["band_k"] == pytest.approx(0.83)
+        assert small["band_pct_of_rise"] == large["band_pct_of_rise"] == 0.83
+
+    def test_harder_cooling_uses_the_case_measured_for_it(self):
+        assert E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)["measured_on"] == "passive"
+        assert E.mesh_band(0.5, 50.0, 25000.0, self.STUDY)["measured_on"] == "coldplate"
+
+    def test_a_coarser_mesh_never_claims_a_tighter_band(self):
+        fine = E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)["band_k"]
+        coarse = E.mesh_band(2.0, 50.0, 1000.0, self.STUDY)["band_k"]
+        assert coarse > fine
+        # An unmeasured cell size falls back to the coarsest measured one
+        # rather than silently reporting the finest.
+        unknown = E.mesh_band(4.0, 50.0, 1000.0, self.STUDY)
+        assert unknown["cell_mm"] == 2.0
+
+    def test_no_study_means_no_band_not_a_guess(self):
+        assert E.mesh_band(0.5, 50.0, 1000.0, {}) is None
+        assert E.mesh_band(0.5, 0.0, 1000.0, self.STUDY) is None
+
+    def test_the_committed_study_is_readable_and_reaches_the_payload(self, cache):
+        pkg = spec()
+        chiplets = E.parse_chiplets([chip("a", 3, 3, 5.0, 0, 0)], pkg)
+        out = E.solve(cache, pkg, chiplets)
+        band = out["metrics"]["mesh"]
+        if band is None:
+            pytest.skip("no mesh study committed; run tools/mesh_convergence.py")
+        assert 0 < band["band_k"] < out["metrics"]["rise_k"]
+        assert band["cell_mm"] in (0.5, 1.0, 2.0)
+
+
 class TestExactOptimizer:
     def test_matches_independent_brute_force(self, cache):
         pkg = spec()
