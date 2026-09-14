@@ -7,3 +7,7 @@ outputs/
 viz_smoke_test/
 configs_smoke_test/
 delivery/
+
+# Packaged builds -- rebuilt by packaging/build.py, not source.
+build/
+dist/

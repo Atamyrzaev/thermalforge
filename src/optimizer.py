@@ -142,10 +142,29 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-import matplotlib
-matplotlib.use("Agg")  # headless-safe; must precede pyplot import
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+# matplotlib is imported WHEN A FIGURE IS DRAWN, not at import time. Only the
+# Stage 2 HTML report draws figures; the Studio app and the solver never do,
+# and a packaged build of the app should not have to carry a plotting library
+# it never calls. _pyplot() is the single place that pays for it.
+_PLT = None
+_RECTANGLE = None
+
+
+def _pyplot():
+    """matplotlib.pyplot, imported on first use and configured headless."""
+    global _PLT, _RECTANGLE
+    if _PLT is None:
+        import matplotlib
+        matplotlib.use("Agg")  # headless-safe; must precede pyplot import
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        _PLT, _RECTANGLE = plt, Rectangle
+    return _PLT
+
+
+def _rectangle(*args, **kwargs):
+    _pyplot()
+    return _RECTANGLE(*args, **kwargs)
 
 from src.config_loader import StackSection, ConfigError
 from src.validation_status import html_block as validation_html_block
@@ -1350,7 +1369,7 @@ def _fig_to_base64_png(fig, dpi: int = 110) -> str:
         buf.seek(0)
         return base64.b64encode(buf.read()).decode("ascii")
     finally:
-        plt.close(fig)
+        _pyplot().close(fig)
         buf.close()
 
 
@@ -1366,7 +1385,7 @@ def _style_axes(ax) -> None:
 
 
 def _render_convergence_figure(result: OptimizationResult) -> str:
-    fig, ax = plt.subplots(figsize=(9.5, 3.6), facecolor="#0a0a0f")
+    fig, ax = _pyplot().subplots(figsize=(9.5, 3.6), facecolor="#0a0a0f")
     iters = np.arange(1, len(result.best_cost_history) + 1)
 
     current = np.array(result.current_cost_history, dtype=float)
@@ -1398,7 +1417,7 @@ def _render_convergence_figure(result: OptimizationResult) -> str:
 def _render_placement_figure(result: OptimizationResult) -> str:
     """Two-panel figure: the optimized placement map, and the die-top
     temperature field. Both panels carry explicit x- and y-axis titles."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.6), facecolor="#0a0a0f")
+    fig, (ax1, ax2) = _pyplot().subplots(1, 2, figsize=(10.5, 4.6), facecolor="#0a0a0f")
     nx, ny, _nz = result.grid_shape
     dx, dy, _dz = result.voxel_size_m
     # Axes are drawn in physical millimetres, not voxel indices -- the layout
@@ -1412,7 +1431,7 @@ def _render_placement_figure(result: OptimizationResult) -> str:
         color = palette[i % len(palette)]
         x_mm, y_mm = x0 * dx * 1e3, y0 * dy * 1e3
         w_mm, h_mm = nvx * dx * 1e3, nvy * dy * 1e3
-        ax1.add_patch(Rectangle((x_mm, y_mm), w_mm, h_mm,
+        ax1.add_patch(_rectangle((x_mm, y_mm), w_mm, h_mm,
                                 facecolor=color, alpha=0.42, edgecolor=color, lw=1.8))
         ax1.text(x_mm + w_mm / 2.0, y_mm + h_mm / 2.0,
                  f"{spec.name}\n{spec.power_w:.0f} W\n{spec.power_density_w_cm2:.0f} W/cm²",

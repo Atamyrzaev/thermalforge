@@ -13,6 +13,27 @@ Windows, double-clicking `run_studio.bat` does the same. Nothing is downloaded a
 no network is used: the whole app is stdlib Python plus NumPy/SciPy, with vanilla
 JavaScript in the browser.
 
+### On a machine with no Python
+
+```bash
+python packaging/build.py --check
+```
+
+builds `dist/RISC3D Studio/` — about 125 MB holding Python, NumPy, SciPy, the
+solver, the UI and the measured validation artifacts. Copy that folder anywhere and
+double-click **RISC3D Studio.exe**. `--check` then starts the built app and makes it
+solve a scenario over HTTP, because a build that imports cleanly can still be missing
+a file it only reads at runtime.
+
+First launch takes about 8 seconds while Windows reads 125 MB of fresh files; after
+that it is about 1 second. The console window is the server — closing it stops the
+app — and starting a second copy just opens the one already running. Requires
+PyInstaller (`pip install pyinstaller`).
+
+The executable is **unsigned**, so the first launch on a fresh machine shows
+"Windows protected your PC": *More info → Run anyway*. Signing it is a purchase, not
+a code change.
+
 ## What it does
 
 - **Solves the package in 3-D.** Finite-volume steady-state conduction through the
@@ -60,9 +81,10 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `studio/` | The app: `engine.py` (physics + exact optimizer), `server.py` (stdlib HTTP API), `static/` (the UI) |
 | `src/` | The core: `thermal_solver.py`, `grid_builder.py`, `composite_materials.py`, `experiment.py`, `exhaustive.py`, `optimizer.py`, `surrogate.py` |
 | `main.py` | Command-line pipeline (Stage 1 single die, Stage 2 placement) |
+| `packaging/` | The standalone build: `build.py` and the PyInstaller spec |
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
 | `validation/` | Measured verification artifacts, versioned as evidence |
-| `tests/` | 270 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 280 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 

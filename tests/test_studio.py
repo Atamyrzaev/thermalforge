@@ -15,6 +15,7 @@ import base64
 import itertools
 import json
 import math
+import pathlib
 import threading
 import time
 import urllib.error
@@ -132,6 +133,59 @@ class TestEngineSolve:
             E.parse_chiplets([chip("a", 2.3, 2, 1, 0, 0)], pkg)
         with pytest.raises(E.StudioError, match="at least one"):
             E.parse_chiplets([], pkg)
+
+
+class TestLauncher:
+    """The entry point every packaged build runs. Nothing else imports it, so
+    without this a typo in it survives a green test suite and only shows up
+    when the exe is double-clicked."""
+
+    def test_the_launcher_parses_and_exposes_main(self):
+        import ast
+        import inspect
+        import run_studio
+        source = pathlib.Path(run_studio.__file__).read_text(encoding="utf-8")
+        ast.parse(source)                      # a syntax error here breaks the build only
+        assert callable(run_studio.main)
+        assert "argv" in inspect.signature(run_studio.main).parameters
+
+    def test_it_refuses_a_port_it_cannot_have_instead_of_crashing(self, base_url):
+        """The port in use is the one the fixture's server is already on."""
+        import run_studio
+        port = int(base_url.rsplit(":", 1)[1])
+        assert run_studio.main(["--port", str(port), "--no-browser"]) == 1
+
+
+class TestLauncher:
+    """The entry point every packaged build runs. Nothing else imports it, so
+    without this a typo in it survives a green test suite and shows up only
+    when someone double-clicks the app."""
+
+    def test_the_launcher_parses_and_exposes_main(self):
+        import ast
+        import inspect
+        import pathlib
+        import run_studio
+        ast.parse(pathlib.Path(run_studio.__file__).read_text(encoding="utf-8"))
+        assert callable(run_studio.main)
+        assert "argv" in inspect.signature(run_studio.main).parameters
+
+    def test_a_second_copy_joins_the_first_instead_of_fighting_for_the_port(self, base_url):
+        """Windows lets a second process bind a port the first one holds, and
+        requests then land on whichever socket wins. Double-clicking twice at
+        a trade show must open the running app, not a confused second one."""
+        import run_studio
+        host, port = base_url.rsplit(":", 1)
+        assert run_studio._is_in_use("127.0.0.1", int(port)) is True
+        assert run_studio.main(["--port", port, "--no-browser"]) == 0
+
+    def test_a_free_port_is_not_mistaken_for_a_running_app(self):
+        import socket
+        import run_studio
+        with socket.socket() as probe:          # bind, read the port, release it
+            probe.bind(("127.0.0.1", 0))
+            free = probe.getsockname()[1]
+        assert run_studio._is_in_use("127.0.0.1", free) is False
 
 
 class TestCoolingPath:
