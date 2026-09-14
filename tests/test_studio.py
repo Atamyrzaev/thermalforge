@@ -352,15 +352,29 @@ def base_url():
 
 class TestHttpApi:
     @staticmethod
-    def request(url, body=None):
+    def request(url, body=None, attempts=3):
+        """One request, with a retry for a dropped connection ONLY.
+
+        A refused connection or a reset socket is the local TCP stack, not
+        the server's answer -- retrying it keeps the suite from failing for a
+        reason that has nothing to do with the code. An HTTP status, however,
+        IS the answer and is returned on the first try, never retried: a 404
+        that the test expects must stay a 404.
+        """
         data = None if body is None else json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"},
-                                     method="POST" if body is not None else "GET")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                return resp.status, resp.headers.get("Content-Type", ""), resp.read()
-        except urllib.error.HTTPError as err:
-            return err.code, err.headers.get("Content-Type", ""), err.read()
+        for attempt in range(attempts):
+            req = urllib.request.Request(url, data=data,
+                                         headers={"Content-Type": "application/json"},
+                                         method="POST" if body is not None else "GET")
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+            except urllib.error.HTTPError as err:
+                return err.code, err.headers.get("Content-Type", ""), err.read()
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.2)
 
     def test_app_and_assets_are_served(self, base_url):
         for path, kind in [("/", "text/html"), ("/css/app.css", "text/css")]:
