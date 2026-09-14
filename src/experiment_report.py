@@ -207,6 +207,28 @@ def fig_stack(package: Package) -> str:
     return _to_base64(fig)
 
 
+def fig_surrogate(exp: Experiment) -> Optional[str]:
+    """Predicted against solved peak rise on the held-out layouts: how well
+    the screening model ranks, shown rather than asserted."""
+    screening = getattr(exp, "surrogate", None)
+    if screening is None or not screening.accuracy.true_rise_k:
+        return None
+    truth = np.array(screening.accuracy.true_rise_k)
+    predicted = np.array(screening.accuracy.predicted_rise_k)
+    span = [min(truth.min(), predicted.min()), max(truth.max(), predicted.max())]
+    fig, ax = plt.subplots(figsize=(5.4, 5.0))
+    ax.plot(span, span, color="#888888", linestyle=":", linewidth=1.2, label="exact")
+    ax.scatter(truth, predicted, s=28, color=OPTIMIZED_COLOUR, alpha=0.85,
+               label="held-out layouts")
+    ax.set_xlabel("solved peak rise (K)")
+    ax.set_ylabel("surrogate prediction (K)")
+    ax.set_title(f"Screening accuracy: MAE {screening.accuracy.mae_k:.2f} K, "
+                 f"rank correlation {screening.accuracy.rank_correlation:.3f}", fontsize=10)
+    ax.grid(alpha=0.3, linewidth=0.5)
+    ax.legend(fontsize=8)
+    return _to_base64(fig)
+
+
 def fig_history(exp: Experiment) -> Optional[str]:
     """Best-so-far peak against proposal, for a search that has a trajectory."""
     record = exp.optimization
@@ -484,6 +506,38 @@ def render_experiment_report(exp: Experiment, output_dir: str = "outputs",
                  if record.deterministic else f"stochastic, seed {record.seed}"),
             ], numeric_from=99),
         ]
+        screening = getattr(exp, "surrogate", None)
+        if screening is not None:
+            body += [
+                _table(["Screening surrogate", "Value"], [
+                    ("What it is", "a least-squares fit over five physical features per "
+                                   "chiplet (floor, local 1-D rise, rise spread over "
+                                   "lambda, neighbour coupling, wall images). Not a "
+                                   "neural network and not a solver."),
+                    ("What it did", "ranked candidates so the best few could be solved; "
+                                    "every temperature reported here came from the real "
+                                    "solver"),
+                    ("Calibration", f"{screening.calibration_layouts} real solves "
+                                    f"({screening.calibration_s:.2f} s)"),
+                    ("Held-out error", f"MAE {screening.accuracy.mae_k:.3f} K, worst "
+                                       f"{screening.accuracy.max_error_k:.3f} K, over "
+                                       f"{screening.accuracy.layouts} layouts"),
+                    ("Ranking quality", f"rank correlation "
+                                        f"{screening.accuracy.rank_correlation:.3f}; "
+                                        f"top-10 recall "
+                                        f"{screening.accuracy.top10_recall:.0%}"),
+                    ("Screened", f"{screening.candidates_screened:,} layouts in "
+                                 f"{screening.screening_s:.2f} s "
+                                 f"({screening.screening_us_per_candidate:.2f} us each)"),
+                    ("Solved for real", f"top {screening.top_k_solved} in "
+                                        f"{screening.solve_s:.2f} s"),
+                    ("lambda", f"{screening.model.lambda_m * 1e3:.2f} mm"),
+                ], numeric_from=99),
+            ]
+            accuracy_figure = fig_surrogate(exp)
+            if accuracy_figure:
+                body.append(_figure(accuracy_figure,
+                                    "Screening accuracy on layouts the fit never saw."))
         history = fig_history(exp)
         if history:
             body.append(_figure(history, "Best-so-far peak against proposal."))

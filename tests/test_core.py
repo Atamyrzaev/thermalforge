@@ -79,6 +79,7 @@ import src.composite_materials as composite_module
 import src.config_loader as config_loader_module
 import src.experiment as experiment_module
 import src.experiment_report as report_module
+import src.surrogate as surrogate_module
 import src.validation_status as validation_module
 import main as main_module
 
@@ -2877,6 +2878,155 @@ class TestConfigFileIsTheSingleSource:
         assert f"Output directory: {tmp_path}" in out
         assert (tmp_path / "thermal_3d.html").exists()
         assert (tmp_path / "experiment_report.html").exists()
+
+
+# ---------------------------------------------------------------------------
+# MVP: the screening surrogate
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def surrogate_experiment():
+    """The same small experiment as optimized_experiment, optimized by the
+    screening surrogate instead of the exact search."""
+    exp = make_experiment()
+    exp.solve_initial()
+    exp.optimize(method="surrogate", verbose=False, surrogate_top_k=5, surrogate_samples=12)
+    return exp
+
+
+class TestSurrogateFeatures:
+    """The features are the physics the model is allowed to use; they are
+    checked against a loop written from the formulas, not against themselves."""
+
+    def test_features_match_a_scalar_reference(self):
+        exp = make_experiment()
+        package, catalog = exp.package, exp.catalog
+        lam = surrogate_module.spreading_length_m(package)
+        xs, ys = np.array([[0.0, 8e-3]]), np.array([[0.0, 12e-3]])
+        features = surrogate_module.layout_features(package, catalog, lam, xs, ys)[0]
+        h = package.h_convective
+        total_w = sum(c.power_w for c in catalog)
+        for i, ci in enumerate(catalog):
+            spread_i = ci.power_w / (h * (ci.width_m + 2 * lam) * (ci.height_m + 2 * lam))
+            neighbours = 0.0
+            for j, cj in enumerate(catalog):
+                if i == j:
+                    continue
+                gx = max(xs[0, j] - (xs[0, i] + ci.width_m), xs[0, i] - (xs[0, j] + cj.width_m), 0.0)
+                gy = max(ys[0, j] - (ys[0, i] + ci.height_m), ys[0, i] - (ys[0, j] + cj.height_m), 0.0)
+                spread_j = cj.power_w / (h * (cj.width_m + 2 * lam) * (cj.height_m + 2 * lam))
+                neighbours += spread_j * float(np.exp(-np.hypot(gx, gy) / lam))
+            walls = sum(float(np.exp(-2.0 * s / lam)) for s in (
+                xs[0, i], package.lx_m - xs[0, i] - ci.width_m,
+                ys[0, i], package.ly_m - ys[0, i] - ci.height_m))
+            expected = [total_w / (h * package.sink_area_m2), ci.power_w / (h * ci.area_m2),
+                        spread_i, neighbours, spread_i * walls]
+            assert list(features[i]) == pytest.approx(expected, rel=1e-12)
+
+    def test_spreading_length_is_the_banner_value(self):
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        package = experiment_module.package_from_config(config)
+        assert surrogate_module.spreading_length_m(package) * 1e3 == pytest.approx(
+            main_module.regime_summary(config)["lambda_mm"], rel=1e-12)
+
+
+class TestSurrogateScreening:
+    """The surrogate ranks; the real solver decides. Pinned from both sides:
+    what the search reports is a real solve, and a deliberately bad surrogate
+    costs quality but never correctness."""
+
+    def test_enumeration_matches_the_exact_search(self, optimized_experiment):
+        exp = optimized_experiment
+        xs, _ys, total, complete = surrogate_module.enumerate_buildable(
+            exp.package, exp.catalog, exp.initial_placement.pitch_m)
+        assert complete
+        assert xs.shape[0] == exp.optimization.candidates_evaluated
+        assert total == exp.optimization.candidates_total
+
+    def test_winner_is_valid_verified_and_never_beats_the_exact_optimum(
+            self, surrogate_experiment, optimized_experiment):
+        exp = surrogate_experiment
+        assert exp.optimization.method == "surrogate"
+        assert experiment_module.validate_placement(
+            exp.package, exp.catalog, exp.optimized.placement) == []
+        assert exp.optimization.resolve_delta_k <= experiment_module.RESOLVE_TOL_K
+        # Screening is not exact: it can match the exhaustive optimum, never
+        # beat it -- and, with the initial placement always shortlisted, it
+        # can never report a placement hotter than its starting point.
+        assert exp.optimized.peak_c >= optimized_experiment.optimized.peak_c - 1e-9
+        assert exp.optimized.peak_c <= exp.initial.peak_c + 1e-9
+
+    def test_every_reported_temperature_is_a_real_solve(self, surrogate_experiment):
+        exp = surrogate_experiment
+        exp.solver.q_map[:] = exp.optimized.power.q_w_m3
+        fresh_c = float(np.max(exp.solver.solve_steady_state(apply_result=False))) - 273.15
+        assert exp.surrogate.best_peak_c == pytest.approx(fresh_c, abs=1e-9)
+        assert exp.optimized.peak_c == pytest.approx(fresh_c, abs=1e-9)
+
+    def test_a_bad_surrogate_costs_accuracy_not_correctness(self, monkeypatch,
+                                                            optimized_experiment):
+        """Invert the ranking on purpose, so the surrogate shortlists the
+        layouts it believes are HOTTEST. The pipeline must still report a
+        real, verified temperature for a valid placement."""
+        good = surrogate_module.SurrogateModel.predict_peak_rise
+        monkeypatch.setattr(surrogate_module.SurrogateModel, "predict_peak_rise",
+                            lambda self, features: -good(self, features))
+        exp = make_experiment()
+        exp.solve_initial()
+        exp.optimize(method="surrogate", verbose=False, surrogate_top_k=3, surrogate_samples=12)
+        assert exp.surrogate.accuracy.rank_correlation < 0.0      # the sabotage took effect
+        assert experiment_module.validate_placement(
+            exp.package, exp.catalog, exp.optimized.placement) == []
+        assert exp.optimization.resolve_delta_k <= experiment_module.RESOLVE_TOL_K
+        assert exp.optimized.peak_c >= optimized_experiment.optimized.peak_c - 1e-9
+        assert exp.optimized.peak_c <= exp.initial.peak_c + 1e-9
+
+    def test_accuracy_is_measured_on_layouts_the_fit_never_saw(self, surrogate_experiment):
+        screening = surrogate_experiment.surrogate
+        accuracy = screening.accuracy
+        assert screening.calibration_layouts == 12
+        assert accuracy.layouts == len(accuracy.true_rise_k) == len(accuracy.predicted_rise_k)
+        assert accuracy.layouts >= 3
+        error = np.abs(np.array(accuracy.predicted_rise_k) - np.array(accuracy.true_rise_k))
+        assert accuracy.mae_k == pytest.approx(float(error.mean()), rel=1e-12)
+        assert accuracy.max_error_k == pytest.approx(float(error.max()), rel=1e-12)
+
+    def test_report_says_it_ranks_and_claims_no_ai(self, surrogate_experiment, tmp_path):
+        import html as _html
+        import re as _re
+        path = report_module.render_experiment_report(surrogate_experiment,
+                                                      output_dir=str(tmp_path))
+        raw = pathlib.Path(path).read_text(encoding="utf-8")
+        raw = _re.sub(r"data:image/png;base64,[A-Za-z0-9+/=]+", "", raw)
+        text = _re.sub(r"\s+", " ", _html.unescape(_re.sub(r"<[^>]+>", " ", raw)))
+        assert "Not a neural network and not a solver" in text
+        assert "every temperature reported here came from the real solver" in text
+        assert "not validated" in text.lower()
+        for claim in ("ai-accelerated", "ai accelerated", "deep learning",
+                      "neural network speedup", "machine learning"):
+            assert claim not in text.lower()
+
+    def test_cli_refuses_surrogate_without_a_catalog(self, tmp_path, capsys):
+        rc = main_module.main(["--optimize", "--optimize-method", "surrogate",
+                               "--no-browser", "--output-dir", str(tmp_path)])
+        assert rc == main_module.EXIT_PREFLIGHT_FAILED
+        assert "--optimize-method surrogate needs a configuration" in capsys.readouterr().err
+
+
+
+class TestExperimentBanner:
+    def test_banner_states_the_configured_catalog_not_a_rescale(self, capsys):
+        """In an experiment the optimizer uses the catalog the config defines,
+        as authored. The banner printed the LEGACY Stage 2 note instead --
+        'Catalog rescaled 36.00 W -> 12.00 W' -- describing a catalog this run
+        never uses."""
+        config = config_loader_module.load_config(str(SHIPPED_CONFIG))
+        experiment = experiment_module.Experiment(config, source="test")
+        main_module.print_startup_banner(config, source="test", optimize=True,
+                                         from_file=True, experiment=experiment)
+        out = capsys.readouterr().out
+        assert "rescaled" not in out
+        assert "4 chiplets totalling 12.00 W, used as authored" in out
 
 
 if __name__ == "__main__":

@@ -594,6 +594,9 @@ class Experiment:
         self.initial: Optional[ThermalResult] = None
         self.optimized: Optional[ThermalResult] = None
         self.optimization: Optional[OptimizationRecord] = None
+        # Set when the screening surrogate ran, so the report can show what it
+        # ranked with and how well it ranked.
+        self.surrogate = None
         self.build_s = 0.0
         self.solver_init_s = 0.0
 
@@ -633,14 +636,15 @@ class Experiment:
                             for c, (x0, y0) in zip(self.catalog, layout)))
 
     def optimize(self, method: str = "exhaustive", iterations: int = 30,
-                 seed: int = 0, verbose: bool = True) -> ThermalResult:
+                 seed: int = 0, verbose: bool = True, surrogate_top_k: int = 25,
+                 surrogate_samples: int = 40) -> ThermalResult:
         if self.initial is None:
             raise ExperimentError(
                 "solve_initial() must run first: the optimizer starts from the initial "
                 "placement and every result is reported against it")
-        if method not in ("exhaustive", "anneal"):
-            raise ExperimentError(f"unknown optimization method {method!r}; "
-                                  f"use 'exhaustive' or 'anneal'")
+        if method not in ("exhaustive", "anneal", "surrogate"):
+            raise ExperimentError(f"unknown optimization method {method!r}; use "
+                                  f"'exhaustive', 'anneal' or 'surrogate'")
 
         pitch_um = self.initial_placement.pitch_m * 1e6
         bcs = self.config.boundary_conditions
@@ -672,6 +676,29 @@ class Experiment:
                          precompute_solves=result.precompute_solves,
                          superposition_error_k=float(result.superposition_error_k),
                          seed=None, deterministic=True, history_c=())
+        elif method == "surrogate":
+            # Imported here rather than at module level: the surrogate is built
+            # on this module, so importing it up top would be circular. It only
+            # RANKS -- the real solver below still decides, and the re-solve
+            # check still has to pass.
+            from src.surrogate import SurrogateError, SurrogateScreeningSearch
+            try:
+                screening = SurrogateScreeningSearch(
+                    self, top_k=surrogate_top_k,
+                    calibration_layouts=surrogate_samples, seed=seed)
+                result = screening.run(verbose=verbose)
+            except SurrogateError as exc:
+                raise ExperimentError(f"surrogate screening failed: {exc}") from exc
+            self.surrogate = result
+            best_layout = result.best_layout
+            optimizer_peak = float(result.best_peak_c)
+            optimizer_field = None          # the shortlist solves are not retained
+            stats = dict(candidates_evaluated=result.top_k_solved,
+                         candidates_total=result.candidates_in_full_space,
+                         rejected_or_pruned=result.candidates_screened - result.top_k_solved,
+                         precompute_solves=result.calibration_layouts,
+                         superposition_error_k=None, seed=seed,
+                         deterministic=False, history_c=())
         else:
             try:
                 result = optimizer.optimize(

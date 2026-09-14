@@ -516,13 +516,23 @@ def build_cli_parser() -> argparse.ArgumentParser:
                          help="Simulated-annealing proposals for Stage 2 (--optimize only).")
     parser.add_argument("--optimize-seed", type=int, default=0,
                          help="Random seed for the Stage 2 annealer (--optimize-method anneal only).")
-    parser.add_argument("--optimize-method", choices=("exhaustive", "anneal"),
+    parser.add_argument("--surrogate-top-k", type=int, default=25,
+                         help="How many of the surrogate's best-ranked layouts are then "
+                              "solved by the REAL solver (--optimize-method surrogate).")
+    parser.add_argument("--surrogate-samples", type=int, default=40,
+                         help="Real solves used to calibrate the screening surrogate "
+                              "(--optimize-method surrogate). Twenty more are solved and "
+                              "held out to measure its error.")
+    parser.add_argument("--optimize-method", choices=("exhaustive", "anneal", "surrogate"),
                          default="exhaustive",
                          help="Stage 2 search strategy. 'exhaustive' evaluates EVERY layout on "
                               "the placement lattice and returns the proven global optimum "
                               "(no randomness, no seed dependence). 'anneal' is the simulated-"
                               "annealing heuristic: faster on very fine lattices, but it samples "
-                              "rather than proves and a different seed gives a different answer.")
+                              "rather than proves and a different seed gives a different answer. "
+                              "'surrogate' ranks every buildable layout with a calibrated linear "
+                              "model that needs no linear solve, then solves the best "
+                              "--surrogate-top-k of them for real; it screens, it never decides.")
     parser.add_argument("--no-scale-catalog-power", action="store_true",
                          help="Do NOT rescale the Stage 2 chiplet catalog to the Stage 1 "
                               "--die-power-w. By default the catalog (36.0 W as authored) is "
@@ -977,7 +987,13 @@ def print_startup_banner(config: PipelineConfig, source: str,
     face_desc = "die backside" if sink_face == "top" else "interposer underside"
     print(f"Sink: {sink_face} face ({face_desc}), {sink_kind}; all other faces adiabatic")
     print_regime_header(config)
-    if optimize:
+    if optimize and experiment is not None:
+        # An experiment optimizes the catalog its config defines, as authored;
+        # the legacy Stage 2 rescaling note describes a different catalog.
+        total_w = sum(c.power_w for c in experiment.catalog)
+        print(f"Optimizer power: the configured catalog, {len(experiment.catalog)} chiplets "
+              f"totalling {total_w:.2f} W, used as authored")
+    elif optimize:
         try:
             _, power_note = stage2_catalog(config, scale_power_to_stage1)
             print(f"Stage 2 power: {power_note}")
@@ -1104,6 +1120,17 @@ def print_experiment_comparison(experiment: Experiment) -> None:
     if record.superposition_error_k is not None:
         print(f"  Superposition check:    {record.superposition_error_k:.2e} K against a "
               f"direct solve")
+    if record.method == "surrogate" and experiment.surrogate is not None:
+        screening = experiment.surrogate
+        print(f"  Surrogate:              linear fit on {screening.calibration_layouts} real "
+              f"solves; held-out MAE {screening.accuracy.mae_k:.2f} K, rank correlation "
+              f"{screening.accuracy.rank_correlation:.3f}")
+        print(f"  Screening:              {screening.candidates_screened:,} layouts ranked in "
+              f"{screening.screening_s:.2f} s "
+              f"({screening.screening_us_per_candidate:.2f} us each); the top "
+              f"{screening.top_k_solved} were solved for real in {screening.solve_s:.2f} s")
+        print(f"                          the surrogate ranked; every temperature above came "
+              f"from the solver")
     print(f"  Optimizer runtime:      {record.runtime_s:.2f} s")
     print(f"  Initial peak:           {initial.peak_c:.4f} degC (rise {initial.rise_k:.4f} K)")
     print(f"  Optimized peak:         {optimized.peak_c:.4f} degC "
@@ -1111,9 +1138,12 @@ def print_experiment_comparison(experiment: Experiment) -> None:
     print(f"  Improvement:            {improvement['delta_peak_k']:.4f} K cooler "
           f"({improvement['pct_of_initial_rise']:.1f}% of the initial rise; "
           f"{improvement['pct_of_initial_excess']:.1f}% of the part above the P/(hA) floor)")
+    field_text = (f"field {record.resolve_field_delta_k:.1e} K"
+                  if np.isfinite(record.resolve_field_delta_k)
+                  else "no optimizer field retained for this method")
     print(f"  Re-solve check:         optimizer reported {record.optimizer_peak_c:.4f} degC, "
           f"the real solver returns {optimized.peak_c:.4f} degC (delta "
-          f"{record.resolve_delta_k:.1e} K, field {record.resolve_field_delta_k:.1e} K)")
+          f"{record.resolve_delta_k:.1e} K, {field_text})")
     print("  Moves:")
     print(f"    {'id':<8}{'initial mm':>16}{'optimized mm':>16}{'moved mm':>10}"
           f"   peak before -> after")
@@ -1127,7 +1157,8 @@ def print_experiment_comparison(experiment: Experiment) -> None:
 
 def run_experiment_pipeline(experiment: Experiment, *, open_browser: bool,
                             optimize: bool, method: str, iterations: int,
-                            seed: int) -> dict:
+                            seed: int, surrogate_top_k: int = 25,
+                            surrogate_samples: int = 40) -> dict:
     """The product workflow: a validated initial placement, its baseline
     solve, an optional optimization from it, a real re-solve of the winner,
     and the before/after report."""
@@ -1183,7 +1214,9 @@ def run_experiment_pipeline(experiment: Experiment, *, open_browser: bool,
     optimized_html = None
     if optimize:
         t0 = time.perf_counter()
-        experiment.optimize(method=method, iterations=iterations, seed=seed, verbose=True)
+        experiment.optimize(method=method, iterations=iterations, seed=seed,
+                            verbose=True, surrogate_top_k=surrogate_top_k,
+                            surrogate_samples=surrogate_samples)
         timing.optimize_s = time.perf_counter() - t0
         print_experiment_comparison(experiment)
         t0 = time.perf_counter()
@@ -1554,6 +1587,12 @@ def main(argv=None) -> int:
               "transient from a configuration without chiplets.", file=sys.stderr)
         return 1
 
+    if args.optimize and experiment is None and args.optimize_method == "surrogate":
+        print("\n[FATAL] --optimize-method surrogate needs a configuration that defines "
+              "chiplets and initial_placement: the surrogate is calibrated against the "
+              "initial placement's own solves.", file=sys.stderr)
+        return EXIT_PREFLIGHT_FAILED
+
     if args.optimize and experiment is None:
         preflight_error = preflight_optimizer_fit(config)
         if preflight_error is None:
@@ -1572,7 +1611,8 @@ def main(argv=None) -> int:
             outcome = run_experiment_pipeline(
                 experiment, open_browser=not args.no_browser, optimize=args.optimize,
                 method=args.optimize_method, iterations=args.optimize_iterations,
-                seed=args.optimize_seed)
+                seed=args.optimize_seed, surrogate_top_k=args.surrogate_top_k,
+                surrogate_samples=args.surrogate_samples)
         else:
             outcome = run_pipeline(
                 config, total_steps, duration_s,
