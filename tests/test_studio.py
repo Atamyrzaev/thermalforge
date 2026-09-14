@@ -241,10 +241,24 @@ class TestHttpApi:
             return err.code, err.headers.get("Content-Type", ""), err.read()
 
     def test_app_and_assets_are_served(self, base_url):
-        for path, kind in [("/", "text/html"), ("/js/app.js", "javascript"),
-                           ("/js/viewer3d.js", "javascript"), ("/css/app.css", "text/css")]:
+        for path, kind in [("/", "text/html"), ("/css/app.css", "text/css")]:
             status, ctype, body = self.request(base_url + path)
             assert status == 200 and kind in ctype and body, path
+
+    def test_every_imported_module_is_served(self, base_url):
+        # A missing or misnamed ES module blanks the whole app, so follow the
+        # import graph from app.js and fetch every module it reaches.
+        import re
+        pending, seen = ["app.js"], set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            status, ctype, body = self.request(f"{base_url}/js/{name}")
+            assert status == 200 and "javascript" in ctype and body, name
+            pending += re.findall(r'from\s+"\./([\w-]+\.js)"', body.decode("utf-8"))
+        assert {"app.js", "viewer3d.js", "report.js", "mapdraw.js"} <= seen
 
     def test_paths_outside_the_app_are_refused(self, base_url):
         assert self.request(base_url + "/../run_studio.py")[0] == 404

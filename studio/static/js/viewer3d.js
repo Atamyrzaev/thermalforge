@@ -136,6 +136,9 @@ export class Viewer3D {
     this.cam = { yaw: 0.7, pitch: 0.62, dist: 40, target: [0, 1, 0] };
     this.pointers = new Map();
     this.raf = null;
+    this.spinning = false;
+    this.spinRaf = null;
+    this.onSpinChange = null;
     this.mvp = null;
 
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -295,7 +298,24 @@ export class Viewer3D {
     return { eye, f, r, u };
   }
 
+  setSpin(on) {
+    this.spinning = on;
+    if (on && !this.spinRaf) {
+      let last = performance.now();
+      const step = (now) => {
+        if (!this.spinning) { this.spinRaf = null; return; }
+        this.cam.yaw -= Math.min(50, now - last) * 0.00035;
+        last = now;
+        this.draw();
+        this.spinRaf = requestAnimationFrame(step);
+      };
+      this.spinRaf = requestAnimationFrame(step);
+    }
+    if (this.onSpinChange) this.onSpinChange(on);
+  }
+
   onDown(e) {
+    if (this.spinning) this.setSpin(false);
     try { this.canvas.setPointerCapture(e.pointerId); } catch (_) { /* capture is a nicety */ }
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey });
     this.hideTip();

@@ -90,6 +90,9 @@
       <button class="tab active" data-tab="floorplan">Floorplan &amp; heat map</button>
       <button class="tab" data-tab="view3d">3D thermal view</button>
       <button class="tab" data-tab="compare" id="tab-compare-btn" disabled>Before / after</button>
+      <span class="tabs-spacer"></span>
+      <button class="tab-tool" id="btn-focus" title="Hide the side panels to give the view the whole screen">Full view</button>
+      <button class="tab-tool" id="btn-help">How it works</button>
     </nav>
 
     <div class="tab-panel active" id="tab-floorplan">
@@ -123,6 +126,7 @@
             <button data-view="iso">3D</button>
             <button data-view="top">Top</button>
             <button data-view="front">Side</button>
+            <button id="gl-spin" title="Slowly rotate the view">Spin</button>
           </div>
         </div>
         <div class="gl-controls">
@@ -141,7 +145,10 @@
     </div>
 
     <div class="tab-panel" id="tab-compare">
-      <div class="compare-banner" id="compare-banner"></div>
+      <div class="compare-head">
+        <div class="compare-banner" id="compare-banner"></div>
+        <button id="btn-report" class="btn" title="Save a self-contained HTML report of this result">Download report</button>
+      </div>
       <div class="compare-grid">
         <figure><figcaption>Before</figcaption><div class="canvas-wrap small"><canvas id="cmp-initial"></canvas></div></figure>
         <figure><figcaption>After (optimized)</figcaption><div class="canvas-wrap small"><canvas id="cmp-optimized"></canvas></div></figure>
@@ -210,6 +217,30 @@
     </div>
     <div class="progress"><div class="progress-bar" id="opt-bar"></div></div>
     <button id="btn-cancel" class="btn">Stop</button>
+  </div>
+</div>
+
+<div id="help-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <div class="overlay-card help-card">
+    <h3 id="help-title">How RISC3D Studio works</h3>
+    <ol class="help-steps">
+      <li><b>Real 3-D heat physics.</b> The package &mdash; silicon interposer, microbumps in underfill,
+        silicon die &mdash; is divided into a 3-D grid of cells (19,200 for a 20 &times; 20 mm package), and
+        heat conduction through every cell is solved, cooled through the die backside. Each result is
+        checked before it is shown: the equations are satisfied, and every watt generated leaves through
+        the cooled face.</li>
+      <li><b>Live floorplanning.</b> Drag a chiplet and the whole package is solved again in milliseconds:
+        the expensive matrix factorization is computed once per package and reused.</li>
+      <li><b>Exact optimization, not guessing.</b> Heat adds up linearly, so any layout's temperature is the
+        sum of what each chiplet causes on its own. The optimizer covers every layout on the placement grid
+        and skips only branches it can <em>prove</em> are hotter than the best one found &mdash; a chiplet can
+        only add heat. The winner is the provably coolest layout on that grid, and it is solved again from
+        scratch before you see it.</li>
+    </ol>
+    <p class="muted">Scope: steady state; cooling represented by an effective heat-transfer coefficient on the
+      die backside; uniform power inside each chiplet. The solver is verified numerically; the model has not
+      yet been validated against measurements of real hardware.</p>
+    <button class="btn btn-primary" id="btn-help-close">Got it</button>
   </div>
 </div>
 

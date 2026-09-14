@@ -4,6 +4,7 @@ import { decodeField, getJSON, postJSON } from "./api.js";
 import { drawColorbar } from "./colormap.js";
 import { FloorplanView, escapeHtml } from "./floorplan.js";
 import { columnMax, drawPackageMap, formatW, setupCanvas } from "./mapdraw.js";
+import { downloadReport } from "./report.js";
 import { Viewer3D } from "./viewer3d.js";
 
 const $ = (id) => document.getElementById(id);
@@ -32,6 +33,7 @@ const state = {
   busy: false,
   jobId: null,
   tab: "floorplan",
+  focus: false,
   viewer: null,
   glMode: "current",
 };
@@ -271,6 +273,8 @@ function renderChipletList() {
   const total = state.chiplets.reduce((s, c) => s + c.power_w, 0);
   $("power-total").textContent = `${state.chiplets.length} · ${formatW(total)} W`;
   renderEditor();
+  const selected = ul.querySelector("li.selected");
+  if (selected) selected.scrollIntoView({ block: "nearest" });
 }
 
 function renderEditor() {
@@ -382,6 +386,7 @@ function syncPackageControls() {
 }
 
 function loadScenario(sc) {
+  $("scenario").title = sc.summary || "";
   state.pkg = { ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
@@ -555,19 +560,6 @@ function renderCompare() {
   span = Math.max(0.1, Math.ceil(span * 10) / 10);
   const g = a.grid;
 
-  const panel = (canvasId, part, heat, showTemps) => {
-    const canvas = $(canvasId);
-    const { ctx, width, height } = setupCanvas(canvas);
-    drawPackageMap(ctx, width, height, {
-      sizeMm: g.size_mm, compact: true, heat,
-      chiplets: withColours(part.placement),
-      temps: showTemps ? new Map(part.chiplets.map((c) => [c.id, c.max_c])) : null,
-      peak: showTemps ? part.peak : null,
-    });
-  };
-  panel("cmp-initial", a, { values: a.colmax, nx: g.nx, ny: g.ny, lo, hi, kind: "temp" }, true);
-  panel("cmp-optimized", b, { values: b.colmax, nx: g.nx, ny: g.ny, lo, hi, kind: "temp" }, true);
-  panel("cmp-delta", b, { values: delta, nx: g.nx, ny: g.ny, lo: -span, hi: span, kind: "delta" }, false);
   drawColorbar($("cmp-colorbar"), "temp");
   drawColorbar($("cmp-dcolorbar"), "delta");
   $("cmp-cb-min").textContent = `${lo} °C`;
@@ -593,20 +585,35 @@ function renderCompare() {
       <td>${m.max_before_c.toFixed(1)} → <span class="${cls}">${m.max_after_c.toFixed(1)} °C</span></td></tr>`;
   }).join("");
 
-  const identical = cert.identical_chiplets
-    ? " Identical chiplets are interchangeable, so mirror-image duplicates were not counted twice." : "";
+  const identical = cert.identical_chiplets ? " Identical chiplets are interchangeable, so duplicates were counted once." : "";
+  const stat = (label, value, title = "") => `<div title="${title}"><span>${label}</span><b>${value}</b></div>`;
   $("certificate").innerHTML = `
     <div class="badge">EXACT · PROVEN OPTIMUM</div>
-    <p>Every one of <b>${cert.combinations.toLocaleString()}</b> ways to place these chiplets on the
-    ${cert.pitch_mm} mm grid was covered.${identical}</p>
-    <p>${cert.layouts_scored.toLocaleString()} complete layouts were scored exactly by adding full 3-D solutions.
-    All others were ruled out without loss: ${cert.excluded_overlap.toLocaleString()} candidate positions because
-    chiplets would overlap, and ${cert.excluded_bound.toLocaleString()} branches because a proven lower bound on
-    their peak already exceeded the best layout found (a chiplet can only add heat).</p>
-    <p>The winner was re-solved from scratch with the full solver: difference
-    <b>${cert.resolve_delta_k.toExponential(1)} K</b>.</p>
-    <p class="muted">${cert.unit_solves.toLocaleString()} single-chiplet solves in ${cert.precompute_s.toFixed(1)} s
-    · search ${cert.search_s.toFixed(1)} s · total ${cert.total_s.toFixed(1)} s</p>`;
+    <p>All layouts on the ${cert.pitch_mm} mm grid are covered. A branch is skipped only when a proven lower bound
+    shows it is hotter than the best layout found (a chiplet can only add heat).${identical}</p>
+    <div class="cert-stats">
+      ${stat("Layouts on the grid", cert.combinations.toLocaleString())}
+      ${stat("Scored exactly", cert.layouts_scored.toLocaleString(), "Complete layouts evaluated by adding full 3-D solutions")}
+      ${stat("Ruled out by bound", cert.excluded_bound.toLocaleString(), "Branches whose proven lower bound already exceeded the best layout")}
+      ${stat("Ruled out by overlap", cert.excluded_overlap.toLocaleString(), "Candidate positions where chiplets would overlap")}
+      ${stat("Re-solve check", `${cert.resolve_delta_k.toExponential(1)} K`, "Winner re-solved from scratch with the full solver; difference from the search value")}
+      ${stat("Time", `${cert.total_s.toFixed(1)} s`, `${cert.unit_solves} single-chiplet solves ${cert.precompute_s.toFixed(1)} s · search ${cert.search_s.toFixed(1)} s`)}
+    </div>`;
+
+  // Maps last: the text above changes the layout, and the maps must be sized to the final layout.
+  const panel = (canvasId, part, heat, showTemps) => {
+    const canvas = $(canvasId);
+    const { ctx, width, height } = setupCanvas(canvas);
+    drawPackageMap(ctx, width, height, {
+      sizeMm: g.size_mm, compact: true, heat,
+      chiplets: withColours(part.placement),
+      temps: showTemps ? new Map(part.chiplets.map((c) => [c.id, c.max_c])) : null,
+      peak: showTemps ? part.peak : null,
+    });
+  };
+  panel("cmp-initial", a, { values: a.colmax, nx: g.nx, ny: g.ny, lo, hi, kind: "temp" }, true);
+  panel("cmp-optimized", b, { values: b.colmax, nx: g.nx, ny: g.ny, lo, hi, kind: "temp" }, true);
+  panel("cmp-delta", b, { values: delta, nx: g.nx, ny: g.ny, lo: -span, hi: span, kind: "delta" }, false);
 }
 
 // ---------------------------------------------------------------------- 3D
@@ -614,6 +621,7 @@ function ensureViewer() {
   if (state.viewer) return state.viewer;
   try {
     state.viewer = new Viewer3D($("gl"), $("gl-labels"), $("gl-tooltip"));
+    state.viewer.onSpinChange = (on) => $("gl-spin").classList.toggle("active", on);
   } catch (err) {
     toast(err.message);
     return null;
@@ -680,8 +688,17 @@ function update3D() {
 }
 
 // -------------------------------------------------------------------- tabs
+// The comparison always gets the full width; other tabs follow "Full view".
+function applyLayout() {
+  document.querySelector(".layout").classList.toggle("focus", state.focus || state.tab === "compare");
+  $("btn-focus").classList.toggle("active", state.focus);
+  $("btn-focus").disabled = state.tab === "compare";
+}
+
 function switchTab(name) {
   state.tab = name;
+  applyLayout();
+  if (name !== "view3d" && state.viewer && state.viewer.spinning) state.viewer.setSpin(false);
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
   $("tab-floorplan").classList.toggle("active", name === "floorplan");
   $("tab-view3d").classList.toggle("active", name === "view3d");
@@ -755,7 +772,30 @@ function wire() {
   $("ed-delete").addEventListener("click", removeSelected);
 
   for (const b of document.querySelectorAll("#gl-mode button")) b.addEventListener("click", () => { if (!b.disabled) setGlMode(b.dataset.mode); });
-  for (const b of document.querySelectorAll("#gl-views button")) b.addEventListener("click", () => { const v = ensureViewer(); if (v) v.setView(b.dataset.view); });
+  for (const b of document.querySelectorAll("#gl-views button[data-view]")) b.addEventListener("click", () => { const v = ensureViewer(); if (v) v.setView(b.dataset.view); });
+  $("gl-spin").addEventListener("click", () => { const v = ensureViewer(); if (v) v.setSpin(!v.spinning); });
+  $("btn-report").addEventListener("click", () => {
+    if (!state.opt) return;
+    const sel = $("scenario");
+    downloadReport({
+      opt: state.opt, pkg: state.pkg,
+      scenarioTitle: sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : "Custom layout",
+      colours: new Map(state.chiplets.map((c) => [c.id, c.color])),
+    });
+  });
+  $("btn-focus").addEventListener("click", () => {
+    state.focus = !state.focus;
+    applyLayout();
+    requestAnimationFrame(() => {
+      if (state.tab === "floorplan") renderFloorplan(violations().ids);
+      if (state.tab === "view3d" && state.viewer) state.viewer.requestDraw();
+    });
+  });
+  const help = $("help-overlay");
+  $("btn-help").addEventListener("click", () => help.classList.remove("hidden"));
+  $("btn-help-close").addEventListener("click", () => help.classList.add("hidden"));
+  help.addEventListener("click", (e) => { if (e.target === help) help.classList.add("hidden"); });
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") help.classList.add("hidden"); });
   $("gl-peel").addEventListener("input", () => {
     const v = Number($("gl-peel").value);
     $("gl-peel-val").textContent = v ? `${v} layer${v > 1 ? "s" : ""}` : "none";
@@ -794,10 +834,9 @@ function wire() {
       removeSelected();
     }
   });
-  window.addEventListener("resize", () => {
-    drawColorbar($("fp-colorbar"), "temp");
-    if (state.tab === "compare") renderCompare();
-  });
+  window.addEventListener("resize", () => drawColorbar($("fp-colorbar"), "temp"));
+  // Redraw the comparison whenever its maps change size (window resize or the banner/tables reflowing).
+  new ResizeObserver(() => { if (state.tab === "compare" && state.opt) renderCompare(); }).observe($("cmp-initial"));
 }
 
 async function init() {

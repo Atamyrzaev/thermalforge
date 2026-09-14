@@ -123,7 +123,15 @@ export function drawPackageMap(ctx, width, height, opts) {
     ctx.strokeStyle = invalid ? "#ff5d6c" : selected ? "#ffffff" : (opts.heat ? "rgba(255,255,255,0.85)" : c.color || "#8aa0b8");
     ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
     ctx.setLineDash([]);
+  }
 
+  const peakXY = opts.peak ? { px: toX(opts.peak.x_mm), py: toY(opts.peak.y_mm) } : null;
+  const MARK = 11;  // crosshair arm length, px
+
+  // Chiplet labels.
+  for (const c of opts.chiplets) {
+    const px = toX(c.x_mm), py = toY(c.y_mm + c.h_mm);
+    const pw = c.w_mm * s, ph = c.h_mm * s;
     if (!opts.compact || pw > 46) {
       const lines = [c.name];
       if (!opts.compact) lines.push(`${formatW(c.power_w)} W`);
@@ -138,7 +146,14 @@ export function drawPackageMap(ctx, width, height, opts) {
         ctx.beginPath(); ctx.rect(px, py, pw, ph); ctx.clip();
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         const lineH = fontPx * 1.3;
-        const top = py + ph / 2 - (lines.length - 1) * lineH / 2;
+        const textH = lines.length * lineH;
+        let top = py + ph / 2 - (lines.length - 1) * lineH / 2;
+        // When the peak marker would sit on the text, move the text above or below it.
+        if (peakXY && Math.abs(peakXY.px - (px + pw / 2)) < widest * fontPx / 2 + MARK
+            && peakXY.py > top - lineH / 2 - MARK && peakXY.py < top - lineH / 2 + textH + MARK) {
+          if (peakXY.py - MARK - 2 - textH >= py + 1) top = peakXY.py - MARK - 2 - textH + lineH / 2;
+          else if (peakXY.py + MARK + 2 + textH <= py + ph - 1) top = peakXY.py + MARK + 2 + lineH / 2;
+        }
         lines.forEach((text, n) => {
           ctx.font = `${n === 0 ? 700 : 500} ${fontPx}px Segoe UI, system-ui, sans-serif`;
           ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.75)";
@@ -152,11 +167,11 @@ export function drawPackageMap(ctx, width, height, opts) {
   }
 
   // Peak marker.
-  if (opts.peak) {
-    const px = toX(opts.peak.x_mm), py = toY(opts.peak.y_mm);
+  if (peakXY) {
+    const { px, py } = peakXY;
     ctx.lineWidth = 2; ctx.strokeStyle = "#ffffff";
     ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(px - 11, py); ctx.lineTo(px + 11, py); ctx.moveTo(px, py - 11); ctx.lineTo(px, py + 11); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px - MARK, py); ctx.lineTo(px + MARK, py); ctx.moveTo(px, py - MARK); ctx.lineTo(px, py + MARK); ctx.stroke();
     if (!opts.compact && opts.peak.t_c !== undefined) {
       const label = `Peak ${opts.peak.t_c.toFixed(1)} °C`;
       ctx.font = "700 12px Segoe UI, system-ui, sans-serif";

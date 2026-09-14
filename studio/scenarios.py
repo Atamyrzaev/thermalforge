@@ -70,7 +70,9 @@ def scenarios() -> List[dict]:
         {
             "id": "datacenter-coldplate",
             "title": "Datacenter accelerator - liquid cold plate",
-            "summary": "The same four chiplets at 150 W under a liquid cold plate.",
+            "summary": "The same four chiplets at 150 W under a liquid cold plate. Each "
+                       "chiplet's own power density dominates here, so placement gains "
+                       "are small: the optimizer proves how little there is to win.",
             "package": {"size_mm": size_mm, "h_w_m2k": 25000.0, "ambient_c": 25.0,
                         "pitch_mm": 2.0},
             "chiplets": scaled(150.0),
