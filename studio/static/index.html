@@ -251,9 +251,11 @@
     <p class="muted"><b>How we know it is right.</b> Every solve checks its own residual and energy balance.
       The optimizer is checked against an independent brute force. The solver reproduces two closed-form
       solutions &mdash; a uniformly heated slab, to second order with the coefficient the discretization
-      predicts, and a rectangular flux channel to within 3&nbsp;%. A 2&nbsp;/&nbsp;1&nbsp;/&nbsp;0.5&nbsp;mm
-      convergence study sets the &plusmn; printed beside every peak, so you can see how much of the answer is
-      still the mesh.</p>
+      predicts, and a rectangular flux channel to within 3&nbsp;%. The &plusmn; printed beside every peak is
+      measured, not assumed: a 2&nbsp;/&nbsp;1&nbsp;/&nbsp;0.5&nbsp;mm mesh convergence study plus conductivity
+      perturbations (silicon &plusmn;10&nbsp;%, bump composite &plusmn;30&nbsp;%), added in quadrature. On these
+      scenarios it comes to about 3.5&nbsp;% of the rise above ambient, and the silicon conductivity dominates
+      it &mdash; not the mesh.</p>
     <p class="muted">Scope: steady state; cooling represented by an effective heat-transfer coefficient on the
       die backside; power entering at the active plane of each die but spread over one 20&nbsp;µm cell; uniform
       power inside each chiplet. All of that is <b>verification</b> &mdash; the model has not yet been compared

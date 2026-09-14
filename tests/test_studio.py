@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import itertools
 import json
+import math
 import threading
 import time
 import urllib.error
@@ -229,11 +230,26 @@ class TestMeshErrorBar:
         pkg = spec()
         chiplets = E.parse_chiplets([chip("a", 3, 3, 5.0, 0, 0)], pkg)
         out = E.solve(cache, pkg, chiplets)
-        band = out["metrics"]["mesh"]
-        if band is None:
-            pytest.skip("no mesh study committed; run tools/mesh_convergence.py")
-        assert 0 < band["band_k"] < out["metrics"]["rise_k"]
-        assert band["cell_mm"] in (0.5, 1.0, 2.0)
+        budget = out["metrics"]["uncertainty"]
+        if budget is None:
+            pytest.skip("no studies committed; run the tools in tools/")
+        assert 0 < budget["combined_k"] < out["metrics"]["rise_k"]
+        assert budget["cell_mm"] in (0.5, 1.0, 2.0)
+
+    def test_the_budget_adds_independent_sources_in_quadrature(self):
+        mesh = {"cases": {"passive": {"order_p": 1.0, "band_pct_of_rise_by_cell_mm": {"0.5": 1.0}}}}
+        materials = {"cases": {"passive": {"material_band_k": 2.0, "rise_k": 50.0}}}
+        budget = E.error_budget(0.5, 50.0, 1000.0, mesh, materials)
+        assert budget["mesh_k"] == pytest.approx(0.5)      # 1 % of 50 K
+        assert budget["material_k"] == pytest.approx(2.0)  # same rise as the study
+        assert budget["combined_k"] == pytest.approx(math.hypot(0.5, 2.0))
+        assert budget["combined_k"] < budget["mesh_k"] + budget["material_k"]
+
+    def test_one_study_alone_still_gives_a_budget(self):
+        mesh = {"cases": {"passive": {"band_pct_of_rise_by_cell_mm": {"0.5": 1.0}}}}
+        only_mesh = E.error_budget(0.5, 50.0, 1000.0, mesh, {})
+        assert only_mesh["material_k"] is None and only_mesh["combined_k"] == pytest.approx(0.5)
+        assert E.error_budget(0.5, 50.0, 1000.0, {}, {}) is None
 
 
 class TestExactOptimizer:

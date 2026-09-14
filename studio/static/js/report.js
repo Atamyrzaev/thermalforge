@@ -141,7 +141,7 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
       <h2>Key figures</h2>
       <table><tr><th></th><th>Before</th><th>After</th></tr>
         ${kpi("Peak temperature", a.peak.t_c, b.peak.t_c, "°C", 2)}
-        ${b.metrics.mesh ? `<tr><td>Mesh error bar</td><td>± ${a.metrics.mesh.band_k.toFixed(2)} K</td><td>± ${b.metrics.mesh.band_k.toFixed(2)} K</td></tr>` : ""}
+        ${b.metrics.uncertainty ? `<tr><td>Error budget</td><td>± ${a.metrics.uncertainty.combined_k.toFixed(2)} K</td><td>± ${b.metrics.uncertainty.combined_k.toFixed(2)} K</td></tr>` : ""}
         ${kpi("Rise over ambient", a.metrics.rise_k, b.metrics.rise_k, "K", 2)}
         ${kpi("Thermal resistance", a.metrics.rja_k_per_w, b.metrics.rja_k_per_w, "K/W", 3)}
         <tr><td>Peak location</td><td>${a.peak.x_mm.toFixed(2)}, ${a.peak.y_mm.toFixed(2)} mm · ${escapeHtml(a.peak.layer)}</td>
@@ -175,10 +175,11 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
     cooling as an effective heat-transfer coefficient on the die backside, uniform power within each chiplet, placement
     on the stated grid. The solver is verified numerically: residual and energy balance on every solve, agreement
     with an independent exhaustive search, and agreement with closed-form solutions for a uniformly heated slab and
-    a rectangular flux channel. The mesh error bar comes from a 2 / 1 / 0.5 mm convergence study on a reference
-    package (Grid Convergence Index, safety factor 1.25) scaled to this design's rise above ambient: it says how
-    much of the answer is still the mesh. None of that is validation -- the model has not yet been compared with
-    measurements of real hardware.</p>
+    a rectangular flux channel. The error budget combines two measured sensitivities, in quadrature: a
+    2 / 1 / 0.5 mm mesh convergence study (Grid Convergence Index, safety factor 1.25) and conductivity
+    perturbations (silicon ±10 %, bump composite ±30 %), both scaled to this design's rise above ambient. It
+    says how much the answer moves when the model's own inputs move. None of that is validation -- the model
+    has not yet been compared with measurements of real hardware.</p>
 </main></body></html>`;
 }
 

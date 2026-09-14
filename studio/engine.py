@@ -63,7 +63,9 @@ for _logger in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder",
 # Mesh sensitivity, measured by tools/mesh_convergence.py and read from its
 # output. Absent that file the app simply reports no band rather than an
 # invented one.
-MESH_STUDY_PATH = Path(__file__).resolve().parent.parent / "validation" / "mesh_convergence.json"
+VALIDATION_DIR = Path(__file__).resolve().parent.parent / "validation"
+MESH_STUDY_PATH = VALIDATION_DIR / "mesh_convergence.json"
+MATERIAL_STUDY_PATH = VALIDATION_DIR / "material_sensitivity.json"
 
 DZ_M = 20e-6
 DZ_UM = 20.0
@@ -353,14 +355,64 @@ class ModelCache:
 # One placement
 # ---------------------------------------------------------------------------
 
-def _load_mesh_study() -> Optional[dict]:
+def _load_study(path: Path) -> Optional[dict]:
     try:
-        return json.loads(MESH_STUDY_PATH.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-_MESH_STUDY = _load_mesh_study()
+_MESH_STUDY = _load_study(MESH_STUDY_PATH)
+_MATERIAL_STUDY = _load_study(MATERIAL_STUDY_PATH)
+
+
+def _case_for(h_w_m2k: float, cases: dict) -> Optional[str]:
+    """Which measured case this design resembles. Harder cooling means
+    steeper gradients, and both studies were run for both regimes."""
+    if not cases:
+        return None
+    name = "coldplate" if h_w_m2k >= 10000.0 else "passive"
+    return name if name in cases else next(iter(cases))
+
+
+def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
+                 mesh_study: Optional[dict] = None,
+                 material_study: Optional[dict] = None) -> Optional[dict]:
+    """What is known about how wrong the peak could be, in kelvin.
+
+    Two measured, independent contributions, added in quadrature:
+      mesh      -- a 2/1/0.5 mm convergence study (tools/mesh_convergence.py)
+      materials -- silicon conductivity +/-10 %, bump composite +/-30 %
+                   (tools/material_sensitivity.py)
+
+    Both are measured on a reference package and scaled to THIS design's rise
+    above ambient, which is what they are proportional to. This is a
+    sensitivity budget, not a validation bound: it says how much the answer
+    moves when the model's own inputs move, and nothing about whether the
+    model matches hardware. Returns None when the studies have not been run.
+    """
+    mesh = mesh_band(cell_mm, rise_k, h_w_m2k, mesh_study)
+    material_study = _MATERIAL_STUDY if material_study is None else material_study
+    material_k = None
+    if material_study and rise_k > 0:
+        cases = material_study.get("cases") or {}
+        name = _case_for(h_w_m2k, cases)
+        case = cases.get(name) if name else None
+        if case and case.get("rise_k"):
+            material_k = float(case["material_band_k"]) / float(case["rise_k"]) * rise_k
+    if mesh is None and material_k is None:
+        return None
+    mesh_k = mesh["band_k"] if mesh else 0.0
+    combined = math.hypot(mesh_k, material_k or 0.0)
+    return {
+        "mesh_k": mesh_k,
+        "material_k": material_k,
+        "combined_k": combined,
+        "pct_of_rise": 100.0 * combined / rise_k if rise_k else 0.0,
+        "cell_mm": mesh["cell_mm"] if mesh else cell_mm,
+        "measured_on": mesh["measured_on"] if mesh else _case_for(h_w_m2k, (material_study or {}).get("cases") or {}),
+        "observed_order": mesh["observed_order"] if mesh else None,
+    }
 
 
 def mesh_band(cell_mm: float, rise_k: float, h_w_m2k: float,
@@ -443,7 +495,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
             "flux_package_w_cm2": total_w / (area_mm2 / 100.0),
             "flux_chiplets_w_cm2": total_w / (chip_mm2 / 100.0) if chip_mm2 > 0 else None,
             "lambda_mm": model.lambda_mm, "h_w_m2k": spec.h_w_m2k,
-            "mesh": mesh_band(spec.cell_mm, rise_k, spec.h_w_m2k),
+            "uncertainty": error_budget(spec.cell_mm, rise_k, spec.h_w_m2k),
         },
         "verification": {
             "residual": float(result.residual),

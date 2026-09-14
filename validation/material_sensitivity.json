@@ -1,0 +1,50 @@
+{
+  "what": "one-at-a-time conductivity perturbations on the reference package",
+  "cell_mm": 0.5,
+  "perturbations": {
+    "silicon_k": 0.1,
+    "composite_k": 0.3
+  },
+  "cases": {
+    "passive": {
+      "baseline_peak_c": 76.55454365503635,
+      "shifts_k": {
+        "silicon_k": {
+          "up": -1.5191500679096634,
+          "down": 1.7837308014603082,
+          "band_k": 1.7837308014603082
+        },
+        "composite_k": {
+          "up": -0.0242454420985041,
+          "down": 0.04336390493278941,
+          "band_k": 0.04336390493278941
+        }
+      },
+      "material_band_k": 1.7842578289948046,
+      "mesh_band_k": 0.43009584203572054,
+      "combined_band_k": 1.8353632974606604,
+      "rise_k": 51.554543655036355,
+      "combined_band_pct_of_rise": 3.5600417874736903
+    },
+    "coldplate": {
+      "baseline_peak_c": 103.58391919579583,
+      "shifts_k": {
+        "silicon_k": {
+          "up": -1.841176554445724,
+          "down": 1.9840674303532069,
+          "band_k": 1.9840674303532069
+        },
+        "composite_k": {
+          "up": -0.014326098164701762,
+          "down": 0.027140913761115826,
+          "band_k": 0.027140913761115826
+        }
+      },
+      "material_band_k": 1.9842530577998778,
+      "mesh_band_k": 1.7600924042451724,
+      "combined_band_k": 2.652392404767763,
+      "rise_k": 78.58391919579583,
+      "combined_band_pct_of_rise": 3.3752355849791518
+    }
+  }
+}

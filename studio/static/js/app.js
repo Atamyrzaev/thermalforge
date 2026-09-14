@@ -297,7 +297,7 @@ function renderKpis() {
   const m = res.metrics;
   $("kpi-peak").textContent = res.peak.t_c.toFixed(1);
   const hottest = state.chiplets.find((c) => c.id === res.hottest_chiplet);
-  const band = m.mesh ? ` · ±${m.mesh.band_k.toFixed(2)} K from the mesh` : "";
+  const band = m.uncertainty ? ` · ±${m.uncertainty.combined_k.toFixed(2)} K (mesh + material data)` : "";
   $("kpi-peak-sub").textContent =
     `${hottest ? `inside ${hottest.name}, ` : ""}${res.peak.layer} · x ${res.peak.x_mm.toFixed(2)}, y ${res.peak.y_mm.toFixed(2)} mm${band}`;
   $("kpi-rise").textContent = `${m.rise_k.toFixed(1)} K`;
@@ -337,10 +337,13 @@ function renderChecks() {
     [m.floor_ratio == null || m.floor_ratio >= 1, "Physically bounded",
       `rise ${m.rise_k.toFixed(1)} K is above the cooling floor P/(hA) = ${m.floor_rise_k.toFixed(1)} K`],
   ];
-  if (m.mesh) {
-    items.push([true, "Mesh error bar",
-      `±${m.mesh.band_k.toFixed(2)} K (${m.mesh.band_pct_of_rise.toFixed(1)} % of the rise) at `
-      + `${m.mesh.cell_mm} mm cells, from a 2/1/0.5 mm convergence study`]);
+  const u = m.uncertainty;
+  if (u) {
+    items.push([true, "Error budget",
+      `±${u.combined_k.toFixed(2)} K (${u.pct_of_rise.toFixed(1)} % of the rise): mesh ±${u.mesh_k.toFixed(2)} K `
+      + `at ${u.cell_mm} mm cells`
+      + (u.material_k === null ? "" : `, conductivities ±${u.material_k.toFixed(2)} K`)
+      + `. Measured, not assumed — and not a claim about real hardware.`]);
   }
   box.innerHTML = items.map(([ok, title, detail]) =>
     `<li><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "✗"}</span><span>${title}<small>${detail}</small></span></li>`).join("")

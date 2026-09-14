@@ -35,12 +35,13 @@ JavaScript in the browser.
 |---|---|
 | **Verified** | Residual and energy balance on every solve. The optimizer agrees with an independent brute force. The solver reproduces closed-form solutions for a uniformly heated slab (second order, with the predicted coefficient) and a rectangular flux channel (`tests/test_benchmarks.py`). |
 | **Not validated** | No result has been compared with a measured package. Until that happens, every reported temperature is labelled *verified, not validated* (`src/validation_status.py`). |
-| **Error bar** | A 2 / 1 / 0.5 mm mesh-convergence study (`tools/mesh_convergence.py`, results in `validation/`) gives the band the app prints beside the peak: ±0.4 K passive, ±1.8 K under a cold plate, on the reference package. |
+| **Error budget** | Two measured sensitivities, added in quadrature and printed beside every peak: mesh refinement (`tools/mesh_convergence.py`: ±0.43 K passive, ±1.76 K cold plate) and conductivity perturbations (`tools/material_sensitivity.py`: silicon ±10 %, bump composite ±30 %). On the demo scenarios that is **±2.1 to ±2.6 K, about 3.5 % of the rise** — dominated by the silicon conductivity, not by the mesh. Results are versioned in `validation/`. |
 
 Known limitations are printed on the reports themselves, not hidden here: power
-enters at the active plane but is one mesh cell (20 µm) thick, silicon is
-homogeneous (no BEOL, device layer or TSVs), cooling is one effective coefficient
-on the die backside, and the stack is fixed at 100/40/100 µm.
+enters at the active plane but is spread over one mesh cell (20 µm) rather than a
+sub-micron device layer, silicon is homogeneous (no BEOL, device layer or TSVs),
+cooling is one effective coefficient on the die backside, and the stack is three
+editable layers (interposer / bumps / die) rather than an arbitrary one.
 
 ## Layout
 
@@ -49,9 +50,9 @@ on the die backside, and the stack is fixed at 100/40/100 µm.
 | `studio/` | The app: `engine.py` (physics + exact optimizer), `server.py` (stdlib HTTP API), `static/` (the UI) |
 | `src/` | The core: `thermal_solver.py`, `grid_builder.py`, `composite_materials.py`, `experiment.py`, `exhaustive.py`, `optimizer.py`, `surrogate.py` |
 | `main.py` | Command-line pipeline (Stage 1 single die, Stage 2 placement) |
-| `tools/mesh_convergence.py` | The mesh study behind the error bar |
+| `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
 | `validation/` | Measured verification artifacts, versioned as evidence |
-| `tests/` | 244 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 255 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 
