@@ -1164,7 +1164,14 @@ class ThermalSolver:
             rho_cp_flat = self._rho_cp.reshape(N)
             forcing = self._boundary_forcing + self.q_map.reshape(N) / rho_cp_flat
 
-            if N <= DIRECT_SOLVE_MAX_UNKNOWNS:
+            # An externally supplied factorization is used WHATEVER the size.
+            # The threshold below exists because scipy's default ordering
+            # fills in badly on this operator; a caller that has already
+            # built a factorization (studio/engine.py factorizes the
+            # symmetric form with a fill-reducing ordering) has taken that
+            # problem on itself, and the checks below still police the
+            # answer either way.
+            if self._steady_lu is not None or N <= DIRECT_SOLVE_MAX_UNKNOWNS:
                 # Direct path. M depends only on the static material maps, so
                 # its factorization is computed once and reused for every
                 # subsequent q_map (a placement sweep pays one factorization,

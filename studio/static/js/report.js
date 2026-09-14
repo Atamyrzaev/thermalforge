@@ -138,7 +138,9 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
       <h2>Inputs</h2>
       <table>
         <tr><td>Package</td><td>${g.size_mm} × ${g.size_mm} mm · ${(g.layers || []).map((l) => `${escapeHtml(l.name)} ${l.thickness_um} µm`).join(" / ")}</td></tr>
-        <tr><td>Cooling</td><td>h = ${pkg.h_w_m2k.toLocaleString()} W/m²K on the die backside · ambient ${pkg.ambient_c} °C</td></tr>
+        <tr><td>Cooling path</td><td>${(g.cooling_layers && g.cooling_layers.length
+          ? g.cooling_layers.map(([label, thickness, k]) => `${escapeHtml(label)} ${thickness} µm (k = ${k} W/m·K)`).join(" → ")
+          : "none — the coolant meets the die backside")} → h = ${pkg.h_w_m2k.toLocaleString()} W/m²K · ambient ${pkg.ambient_c} °C</td></tr>
         <tr><td>Mesh</td><td>${g.nx} × ${g.ny} × ${g.nz} cells (${(g.nx * g.ny * g.nz).toLocaleString()} unknowns) · ${g.cell_mm} mm × ${g.cell_mm} mm × ${g.dz_um} µm</td></tr>
         <tr><td>Placement grid</td><td>${cert.pitch_mm} mm</td></tr>
         <tr><td>Assembly keep-out</td><td>${cert.keepout_um ? `${cert.keepout_um} µm requested, ${cert.keepout_enforced_um} µm enforced on this mesh` : "none"}</td></tr>

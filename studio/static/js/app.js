@@ -61,8 +61,12 @@ function stackOf(pkg) {
   return (pkg && pkg.stack_um) || DEFAULT_STACK_UM;
 }
 
+// Cells the cooling path adds above the die, mirroring COOLING_STACKS.
+const COOLING_CELLS = { direct: 0, lid: 3, lid_heatsink: 6, coldplate: 3 };
+
 function nzOf(pkg) {
-  return Math.round(stackOf(pkg).reduce((a, b) => a + b, 0) / 20);
+  const stack = Math.round(stackOf(pkg).reduce((a, b) => a + b, 0) / 20);
+  return stack + (COOLING_CELLS[(pkg && pkg.cooling) || "direct"] || 0);
 }
 
 // A chiplet edge only lands on a cell boundary, so any positive keep-out
@@ -78,7 +82,7 @@ function cellMm(pkg) {
   const nz = nzOf(pkg);
   for (const cell of [0.5, 1, 2]) {
     const n = pkg.size_mm / cell;
-    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= 20000) return cell;
+    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= 36000) return cell;
   }
   return 1;
 }
@@ -107,7 +111,8 @@ function toast(message, kind = "error") {
 function packageRequest() {
   const p = state.pkg;
   return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm,
-           stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100 };
+           stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100,
+           cooling: p.cooling || "direct" };
 }
 
 function chipletRequest(list = state.chiplets) {
@@ -562,6 +567,7 @@ function syncPackageControls() {
   const p = state.pkg;
   $("pkg-size").value = String(p.size_mm);
   $("pkg-ambient").value = p.ambient_c;
+  $("pkg-path").value = p.cooling || "direct";
   const preset = COOLING_PRESETS.includes(String(p.h_w_m2k)) ? String(p.h_w_m2k) : "custom";
   $("pkg-cooling").value = preset;
   $("pkg-h-wrap").classList.toggle("hidden", preset !== "custom");
@@ -597,7 +603,8 @@ function renderStackStrip() {
 function loadScenario(sc) {
   $("scenario").title = sc.summary || "";
   state.scenarioId = sc.id;
-  state.pkg = { stack_um: [...DEFAULT_STACK_UM], keepout_um: DEFAULT_KEEPOUT_UM, ...sc.package };
+  state.pkg = { stack_um: [...DEFAULT_STACK_UM], keepout_um: DEFAULT_KEEPOUT_UM,
+                cooling: "direct", ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
   state.shown = null;
@@ -980,7 +987,8 @@ function update3D() {
   cut.max = g.ny - 1;
   viewer.setData({
     values, nx: g.nx, ny: g.ny, nz: g.nz, cell_mm: g.cell_mm, dz_um: g.dz_um,
-    layers: g.layers, dieStart: g.layers[g.layers.length - 1].k0, chiplets, kind, lo, hi, peak,
+    layers: g.layers, dieStart: g.die_k0 !== undefined ? g.die_k0 : g.layers[g.layers.length - 1].k0,
+    chiplets, kind, lo, hi, peak,
   });
 }
 
@@ -1051,6 +1059,11 @@ function wire() {
     }
     record();
     state.pkg.stack_um = stack;
+    packageChanged();
+  });
+  $("pkg-path").addEventListener("change", () => {
+    record();
+    state.pkg.cooling = $("pkg-path").value;
     packageChanged();
   });
   $("pkg-keepout").addEventListener("change", () => {

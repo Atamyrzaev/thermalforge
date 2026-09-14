@@ -134,6 +134,102 @@ class TestEngineSolve:
             E.parse_chiplets([], pkg)
 
 
+class TestCoolingPath:
+    """Heat does not leave a real package through a film coefficient on bare
+    silicon: it crosses a TIM into a lid or a cold plate, SPREADS sideways in
+    that metal, and only then meets the coolant. The spreading is why the
+    layers are meshed instead of folded into an effective h."""
+
+    CHIPLET = [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8,
+                "x_mm": 7, "y_mm": 7, "power_pattern": "mac_array"}]
+
+    def peak(self, cache, cooling, **overrides):
+        pkg = spec(size_mm=20.0, h_w_m2k=1000.0, cooling=cooling, **overrides)
+        out = E.solve(cache, pkg, E.parse_chiplets(self.CHIPLET, pkg))
+        assert out["ok"], out.get("violations")
+        return out
+
+    def test_a_lid_spreads_heat_and_the_floor_does_not_move(self, cache):
+        """The cooling floor is P/(hA): same power, same outer area, same
+        floor. A lid cannot beat it -- what a lid removes is the SPREADING
+        penalty on top of it, which is most of the hotspot."""
+        bare = self.peak(cache, "direct")
+        lidded = self.peak(cache, "lid")
+        assert lidded["metrics"]["floor_rise_k"] == pytest.approx(bare["metrics"]["floor_rise_k"])
+        assert lidded["peak"]["t_c"] < bare["peak"]["t_c"] - 20.0
+        assert lidded["peak"]["t_c"] - lidded["ambient_c"] > lidded["metrics"]["floor_rise_k"]
+
+    def test_the_path_is_meshed_and_the_die_is_still_the_die(self, cache):
+        """The extra cells are cooling, not silicon: power still goes into
+        the die's active plane and the peak is still reported in the die."""
+        out = self.peak(cache, "lid")
+        g = out["grid"]
+        assert g["nz"] == 15                       # 12 stack + 1 TIM + 2 lid
+        assert [layer["name"] for layer in g["layers"]][-2:] == ["TIM", "Copper lid"]
+        assert (g["die_k0"], g["die_k1"]) == (7, 12)
+        assert out["peak"]["layer"] == "Die (Si)"
+        model, _ = cache.get(spec(size_mm=20.0, h_w_m2k=1000.0, cooling="lid"))
+        assert model.power_z == (7, 8)             # the active plane, unmoved
+
+    def test_a_thicker_lid_spreads_more(self, cache):
+        thin = spec(size_mm=20.0, h_w_m2k=1000.0,
+                    cooling_layers=[["TIM", 50.0, 5.0, 1], ["Lid", 500.0, 400.0, 2]])
+        thick = spec(size_mm=20.0, h_w_m2k=1000.0,
+                     cooling_layers=[["TIM", 50.0, 5.0, 1], ["Lid", 2000.0, 400.0, 2]])
+        hot = E.solve(cache, thin, E.parse_chiplets(self.CHIPLET, thin))
+        cool = E.solve(cache, thick, E.parse_chiplets(self.CHIPLET, thick))
+        assert cool["peak"]["t_c"] < hot["peak"]["t_c"]
+
+    def test_a_worse_tim_costs_temperature(self, cache):
+        """The TIM is in series with everything: its resistance lands on
+        every watt, so a worse one can only make the die hotter."""
+        good = spec(size_mm=20.0, h_w_m2k=1000.0,
+                    cooling_layers=[["TIM", 50.0, 8.0, 1], ["Lid", 1000.0, 400.0, 2]])
+        poor = spec(size_mm=20.0, h_w_m2k=1000.0,
+                    cooling_layers=[["TIM", 50.0, 1.0, 1], ["Lid", 1000.0, 400.0, 2]])
+        assert (E.solve(cache, poor, E.parse_chiplets(self.CHIPLET, poor))["peak"]["t_c"]
+                > E.solve(cache, good, E.parse_chiplets(self.CHIPLET, good))["peak"]["t_c"])
+
+    def test_the_compact_layer_keeps_the_through_plane_resistance(self, cache):
+        """A 1 mm lid modelled as 2 cells must still impose t/k of the real
+        lid. Checked against the closed form: with the same spreading in both
+        cases (one uniform source over the whole package), the difference
+        between a bare die and a lidded one is exactly the layers' 1-D
+        resistance."""
+        area_m2 = (20e-3) ** 2
+        # One chiplet covering the whole package: no spreading anywhere, so
+        # every remaining difference is 1-D resistance.
+        flat = [{"id": "all", "name": "ALL", "w_mm": 20, "h_mm": 20, "power_w": 8,
+                 "x_mm": 0, "y_mm": 0}]
+        bare = spec(size_mm=20.0, h_w_m2k=1000.0, cooling="direct")
+        lidded = spec(size_mm=20.0, h_w_m2k=1000.0,
+                      cooling_layers=[["TIM", 50.0, 5.0, 1], ["Lid", 1000.0, 400.0, 2]])
+        a = E.solve(cache, bare, E.parse_chiplets(flat, bare))["peak"]["t_c"]
+        b = E.solve(cache, lidded, E.parse_chiplets(flat, lidded))["peak"]["t_c"]
+        flux = 8.0 / area_m2
+        expected = flux * (50e-6 / 5.0 + 1000e-6 / 400.0)      # t/k of TIM + lid
+        assert b - a == pytest.approx(expected, rel=0.02)
+
+    def test_an_impossible_cooling_path_is_refused(self):
+        with pytest.raises(E.StudioError, match="cooling must be one of"):
+            E.PackageSpec.parse({"size_mm": 10.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                 "pitch_mm": 2.0, "cooling": "magic"})
+        with pytest.raises(E.StudioError, match="cells must be a whole number"):
+            E.PackageSpec.parse({"size_mm": 10.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                 "pitch_mm": 2.0, "cooling_layers": [["Lid", 1000.0, 400.0, 0]]})
+        with pytest.raises(E.StudioError, match="at most"):
+            E.PackageSpec.parse({"size_mm": 10.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                 "pitch_mm": 2.0,
+                                 "cooling_layers": [["Lid", 1000.0, 400.0, 6]] * 3})
+
+    def test_the_optimizer_works_through_a_cooling_path(self, cache):
+        pkg = spec(size_mm=20.0, h_w_m2k=1000.0, pitch_mm=4.0, cooling="lid")
+        raw = [chip("a", 4, 4, 6.0, 0, 0), chip("b", 4, 4, 4.0, 12, 12)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
+        assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
+
+
 class TestInternalPowerMap:
     """A chiplet is not a uniform heater. An NPU's MAC array, a GPU's engines
     and a CPU's core complex draw most of the current over part of the die,

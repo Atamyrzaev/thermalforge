@@ -60,6 +60,7 @@ export function serializeDesign(pkg, chiplets, title) {
       ambient_c: pkg.ambient_c, pitch_mm: pkg.pitch_mm,
       stack_um: pkg.stack_um || DEFAULT_STACK_UM,
       keepout_um: pkg.keepout_um === undefined ? DEFAULT_KEEPOUT_UM : pkg.keepout_um,
+      cooling: pkg.cooling || "direct",
     },
     chiplets: chiplets.map((c) => ({
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
@@ -147,6 +148,7 @@ export function parseDesign(text) {
     stack_um: parseStack(p.stack_um),
     keepout_um: p.keepout_um === undefined || p.keepout_um === null
       ? DEFAULT_KEEPOUT_UM : number(p, "keepout_um", 0, 2000, "package"),
+    cooling: typeof p.cooling === "string" ? p.cooling.slice(0, 30) : "direct",
   };
   if (!Array.isArray(raw.chiplets) || !raw.chiplets.length) throw new Error("the file has no chiplets");
   if (raw.chiplets.length > MAX_CHIPLETS) throw new Error(`at most ${MAX_CHIPLETS} chiplets`);

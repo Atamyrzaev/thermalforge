@@ -78,7 +78,9 @@ def scenarios() -> List[dict]:
             "id": "edge-ai-soc",
             "title": "Edge AI SoC - passive cooling",
             "summary": "The project's canonical experiment: CPU, GPU, HBM and NPU chiplets "
-                       "(12 W) on a 20 x 20 mm interposer with a passive heat spreader.",
+                       "(12 W) on a 20 x 20 mm interposer, cooled straight off the die "
+                       "backside -- the hardest case for placement, and the one the "
+                       "command-line pipeline reproduces.",
             "package": {"size_mm": size_mm, "h_w_m2k": bcs["h_convective"],
                         "ambient_c": bcs["t_ambient_c"],
                         "pitch_mm": raw["initial_placement"]["pitch_um"] / 1e3},
@@ -87,20 +89,21 @@ def scenarios() -> List[dict]:
         {
             "id": "datacenter-coldplate",
             "title": "Datacenter accelerator - liquid cold plate",
-            "summary": "The same four chiplets at 150 W under a liquid cold plate. Each "
-                       "chiplet's own power density dominates here, so placement gains "
-                       "are small: the optimizer proves how little there is to win.",
+            "summary": "The same four chiplets at 150 W, bonded through a thin TIM to a "
+                       "copper cold plate. The plate spreads the heat, so placement matters "
+                       "less than it does on a bare die -- and the optimizer says by how much.",
             "package": {"size_mm": size_mm, "h_w_m2k": 25000.0, "ambient_c": 25.0,
-                        "pitch_mm": 2.0},
+                        "pitch_mm": 2.0, "cooling": "coldplate"},
             "chiplets": scaled(150.0),
         },
         {
             "id": "riscv-manycore",
             "title": "RISC-V many-core - forced air",
             "summary": "Illustrative: four identical RISC-V cores, an NPU and SRAM packed "
-                       "into one corner under forced-air cooling.",
+                       "into one corner, under a copper lid and an aluminium heatsink base "
+                       "with forced air over it.",
             "package": {"size_mm": 20.0, "h_w_m2k": 2500.0, "ambient_c": 35.0,
-                        "pitch_mm": 2.0},
+                        "pitch_mm": 2.0, "cooling": "lid_heatsink"},
             "chiplets": rv_cores + [
                 {"id": "npu", "name": "NPU", "w_mm": 5.0, "h_mm": 5.0, "power_w": 8.0,
                  "x_mm": 8.0, "y_mm": 0.0, "color": _colour("NPU"),

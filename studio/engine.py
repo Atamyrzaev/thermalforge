@@ -38,7 +38,7 @@ import time
 import json
 from collections import OrderedDict
 from pathlib import Path
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -99,6 +99,41 @@ POWER_PATTERNS: Dict[str, Tuple[Tuple[float, float, float, float, float], ...]] 
                    (0.08, 0.55, 0.37, 0.37, 0.17), (0.55, 0.55, 0.37, 0.37, 0.17)),
 }
 MAX_BLOCKS = 8
+
+# THE COOLING PATH ABOVE THE DIE.
+# Real hardware does not put a film coefficient on bare silicon: heat crosses
+# a TIM into a lid or a cold plate, spreads sideways in that metal, and only
+# then meets the coolant. The spreading is the point -- a copper lid moves
+# heat away from the hotspot far better than it conducts through -- so these
+# layers are meshed, not folded into an effective h.
+#
+# They are meshed COMPACTLY: a 1 mm lid is represented by a few 20 um cells
+# with anisotropic conductivities chosen so that the layer keeps both the
+# quantity that governs spreading (in-plane sheet conductance k*t) and the
+# one that governs the temperature drop through it (t/k):
+#     k_inplane = k * t_real / t_model      k_through = k * t_model / t_real
+# That is exact for a layer whose in-plane and through-plane conduction are
+# independent, which is what a thin uniform sheet is. What it gives up is the
+# temperature profile INSIDE the layer, which nothing downstream needs.
+# (rho is scaled the same way so the thermal mass is right if a transient
+# mode ever uses these layers.)
+COOLING_LAYER_FIELDS = ("name", "thickness_um", "k_w_mk", "cells")
+COOLING_STACKS: Dict[str, Tuple[Tuple[str, float, float, int], ...]] = {
+    # h applies straight to the die backside: a bare die on a cold plate.
+    "direct": (),
+    # Thermal grease to a copper lid, the common 2.5D package.
+    "lid": (("TIM", 50.0, 5.0, 1), ("Copper lid", 1000.0, 400.0, 2)),
+    # Lid, a second TIM and an aluminium heatsink base carrying the fins.
+    "lid_heatsink": (("TIM 1", 50.0, 5.0, 1), ("Copper lid", 1000.0, 400.0, 2),
+                     ("TIM 2", 100.0, 3.0, 1), ("Heatsink base", 2000.0, 200.0, 2)),
+    # Cold plate bonded straight to the die with a thin high-conductivity TIM.
+    "coldplate": (("TIM", 25.0, 8.0, 1), ("Cold plate base", 1500.0, 390.0, 2)),
+}
+MAX_COOLING_CELLS = 10
+# Unknowns the app is willing to factorize. Above the protected solver's own
+# threshold because the studio factorizes the symmetric form with a
+# fill-reducing ordering: measured 1.3 s at 19,200 and 4.2 s at 32,000.
+STUDIO_MAX_UNKNOWNS = 36_000
 CELL_CHOICES_MM = (0.5, 1.0, 2.0)
 MAX_CHIPLETS = 12
 
@@ -144,6 +179,8 @@ class PackageSpec:
     pitch_mm: float         # placement grid for the optimizer
     stack_um: Tuple[float, float, float] = STACK_UM   # interposer / bumps / die
     keepout_um: float = DEFAULT_KEEPOUT_UM            # minimum chiplet-to-chiplet clearance
+    cooling: str = "direct"                           # which path above the die
+    cooling_layers: Tuple[Tuple[str, float, float, int], ...] = ()
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -165,6 +202,7 @@ class PackageSpec:
             if sum(layers) > MAX_STACK_UM:
                 raise StudioError(f"the stack totals {sum(layers):g} um; "
                                   f"at most {MAX_STACK_UM:g} um is supported")
+        cooling, cooling_layers = PackageSpec._parse_cooling(raw)
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
             h_w_m2k=_number(raw, "h_w_m2k", 10.0, 1e6, "package"),
@@ -173,6 +211,8 @@ class PackageSpec:
             stack_um=layers,
             keepout_um=(DEFAULT_KEEPOUT_UM if raw.get("keepout_um") is None
                         else _number(raw, "keepout_um", 0.0, MAX_KEEPOUT_UM, "package")),
+            cooling=cooling,
+            cooling_layers=cooling_layers,
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -180,20 +220,72 @@ class PackageSpec:
                               f"number of {cell:g} mm mesh cells")
         return spec
 
+    @staticmethod
+    def _parse_cooling(raw: dict) -> Tuple[str, Tuple[Tuple[str, float, float, int], ...]]:
+        """The path between the die backside and the coolant.
+
+        Either a named stack, or explicit layers so a design file can carry a
+        path the presets do not cover.
+        """
+        name = raw.get("cooling", "direct")
+        if not isinstance(name, str) or (name not in COOLING_STACKS and name != "custom"):
+            raise StudioError(f"cooling must be one of {', '.join(sorted(COOLING_STACKS))}")
+        explicit = raw.get("cooling_layers")
+        if explicit is None:
+            return name, COOLING_STACKS.get(name, ())
+        if not isinstance(explicit, list):
+            raise StudioError("cooling_layers must be a list")
+        layers = []
+        for n, item in enumerate(explicit, start=1):
+            if not isinstance(item, (list, tuple)) or len(item) != 4:
+                raise StudioError(f"cooling layer {n} must be "
+                                  f"[name, thickness_um, k_w_mk, cells]")
+            label, thickness, k, cells = item
+            label = str(label)[:40]
+            thickness = _number({"t": thickness}, "t", 1.0, 20000.0, f"cooling layer {n}")
+            k = _number({"k": k}, "k", 0.05, 2000.0, f"cooling layer {n}")
+            if not isinstance(cells, int) or isinstance(cells, bool) or not 1 <= cells <= 6:
+                raise StudioError(f"cooling layer {n}: cells must be a whole number, 1 to 6")
+            layers.append((label, thickness, k, cells))
+        if sum(layer[3] for layer in layers) > MAX_COOLING_CELLS:
+            raise StudioError(f"the cooling path may use at most {MAX_COOLING_CELLS} mesh cells")
+        return ("custom" if name == "direct" and layers else name), tuple(layers)
+
+    @property
+    def cooling_cells(self) -> int:
+        return sum(layer[3] for layer in self.cooling_layers)
+
+    @property
+    def die_cells(self) -> int:
+        """Cells of real die, before anything the cooling path adds."""
+        return int(round(self.stack_um[2] / DZ_UM))
+
     @property
     def nz(self) -> int:
-        """Cells through the stack: every layer is a whole number of them."""
-        return int(round(sum(self.stack_um) / DZ_UM))
+        """Cells through the stack: every layer is a whole number of them,
+        and the cooling path adds its own on top of the die."""
+        return int(round(sum(self.stack_um) / DZ_UM)) + self.cooling_cells
 
     @property
     def layers(self) -> Tuple[dict, ...]:
-        """Layer names with the cell range each occupies, bottom to top."""
+        """Every layer, bottom to top, with the cells it occupies. Cooling
+        layers report the thickness they REPRESENT, not the cells they use."""
         out, k0 = [], 0
         for name, thickness in zip(LAYER_NAMES, self.stack_um):
             k1 = k0 + int(round(thickness / DZ_UM))
             out.append({"name": name, "k0": k0, "k1": k1, "thickness_um": thickness})
             k0 = k1
+        for label, thickness, k_w_mk, cells in self.cooling_layers:
+            out.append({"name": label, "k0": k0, "k1": k0 + cells,
+                        "thickness_um": thickness, "k_w_mk": k_w_mk, "compact": True})
+            k0 += cells
         return tuple(out)
+
+    @property
+    def die_z(self) -> Tuple[int, int]:
+        n_i = int(round(self.stack_um[0] / DZ_UM))
+        n_b = int(round(self.stack_um[1] / DZ_UM))
+        return (n_i + n_b, n_i + n_b + self.die_cells)
 
     @property
     def cell_mm(self) -> float:
@@ -202,7 +294,7 @@ class PackageSpec:
         it can force a coarser lateral mesh -- which the app then says."""
         for cell in CELL_CHOICES_MM:
             n = _whole(self.size_mm, cell)
-            if n is not None and n >= 8 and n * n * self.nz <= DIRECT_SOLVE_MAX_UNKNOWNS:
+            if n is not None and n >= 8 and n * n * self.nz <= STUDIO_MAX_UNKNOWNS:
                 return cell
         raise StudioError(f"a {self.size_mm:g} mm package does not fit a supported mesh; "
                           f"use a whole number of millimetres")
@@ -225,7 +317,8 @@ class PackageSpec:
 
     @property
     def model_key(self) -> Tuple:
-        return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um)
+        return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um,
+                self.cooling_layers)
 
 
 @dataclass(frozen=True)
@@ -386,6 +479,28 @@ class SymmetricFactor:
         """Temperature rise theta with S theta = q, columns of q in W/m^3."""
         return self._lu.solve(np.asarray(q_w_m3, dtype=np.float64))
 
+def _apply_cooling_materials(grid_builder, spec: PackageSpec) -> None:
+    """Writes the compact cooling layers over the cells build_stack filled
+    with silicon. See COOLING_STACKS for what "compact" means and why.
+    """
+    if not spec.cooling_layers:
+        return
+    k0 = spec.die_z[1]
+    for _label, thickness_um, k_w_mk, cells in spec.cooling_layers:
+        t_model_um = cells * DZ_UM
+        ratio = thickness_um / t_model_um
+        k_inplane = k_w_mk * ratio          # same sheet conductance k * t
+        k_through = k_w_mk / ratio          # same through-plane resistance t / k
+        zs = slice(k0, k0 + cells)
+        grid_builder.kx_map[:, :, zs] = k_inplane
+        grid_builder.ky_map[:, :, zs] = k_inplane
+        grid_builder.kz_map[:, :, zs] = k_through
+        # Thermal mass scaled the same way, so a transient mode would see the
+        # real heat capacity of the layer rather than the modelled slab's.
+        grid_builder.rho_map[:, :, zs] = grid_builder.rho_map[:, :, zs] * ratio
+        k0 += cells
+
+
 class ThermalModel:
     """One package: materials, boundary conditions and the factorized
     operator. Built once per (size, cell, h, ambient); every placement after
@@ -394,21 +509,31 @@ class ThermalModel:
     def __init__(self, spec: PackageSpec):
         t0 = time.perf_counter()
         n, cell_m = spec.n_cells, spec.cell_mm * 1e-3
+        # The cooling path rides on top of the die. The stack section only
+        # knows three layers, so the mesh is built with a die tall enough to
+        # hold the cooling cells and their materials are written afterwards;
+        # the Package is then corrected so "the die" means the real die.
+        die_um_meshed = spec.stack_um[2] + spec.cooling_cells * DZ_UM
         config = PipelineConfig(
             grid=GridSection(nx=n, ny=n, nz=spec.nz, dx=cell_m, dy=cell_m, dz=DZ_M),
             boundary_conditions=BoundaryConditionsSection(
                 h_convective=spec.h_w_m2k, t_ambient_c=spec.ambient_c,
                 bottom_bc="neumann", top_bc="robin", side_bc="neumann"),
             stack=StackSection(interposer_um=spec.stack_um[0], bump_um=spec.stack_um[1],
-                               die_um=spec.stack_um[2]),
+                               die_um=die_um_meshed),
             power=PowerSection(die_power_w=0.0, die_footprint_frac=0.5),
             solver=SolverSection(), visualization=VisualizationSection(),
             case=CaseSection(name="studio"),
         )
         config.validate()
         self.spec = spec
-        self.package = package_from_config(config)
+        meshed = package_from_config(config)
+        self.package = replace(
+            meshed, die_z=spec.die_z,
+            layer_cells=(meshed.layer_cells[0], meshed.layer_cells[1], spec.die_cells),
+            stack_um=spec.stack_um)
         grid_builder = build_stack(config)
+        _apply_cooling_materials(grid_builder, spec)
         grid_builder.validate_grid()
         self.solver = ThermalSolver.from_grid_builder(grid_builder)
         self.factor = SymmetricFactor(self.solver)
@@ -578,7 +703,10 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
         "grid": {"nx": pkg.nx, "ny": pkg.ny, "nz": pkg.nz, "cell_mm": spec.cell_mm,
                  "dz_um": pkg.dz * 1e6, "size_mm": spec.size_mm,
                  "layers": [dict(layer_) for layer_ in spec.layers],
-                 "stack_um": list(spec.stack_um)},
+                 "stack_um": list(spec.stack_um),
+                 "die_k0": spec.die_z[0], "die_k1": spec.die_z[1],
+                 "cooling": spec.cooling,
+                 "cooling_layers": [list(layer_) for layer_ in spec.cooling_layers]},
         "field_b64": base64.b64encode(field_c.astype("<f4").tobytes(order="C")).decode("ascii"),
         "t_min_c": float(field_c.min()),
         "t_max_c": float(field_c.max()),
