@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RISC3D Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 29 9v14L16 30 3 23V9z' fill='%23ff7a45'/%3E%3Cpath d='M16 8 23 12v8l-7 4-7-4v-8z' fill='%230f1624'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9v14L16 30 3 23V9z" fill="#ff7a45"/><path d="M16 8 23 12v8l-7 4-7-4v-8z" fill="#0f1624"/></svg>
+    <div>
+      <div class="brand-name">RISC3D Studio</div>
+      <div class="brand-sub">Thermal co-optimization for 3D-IC chiplet packages</div>
+    </div>
+  </div>
+  <div class="scenario">
+    <label for="scenario">Scenario</label>
+    <select id="scenario"></select>
+  </div>
+  <div class="actions">
+    <button id="btn-simulate" class="btn">Simulate</button>
+    <button id="btn-optimize" class="btn btn-primary">Optimize placement</button>
+  </div>
+  <div id="status" class="status"><span class="dot"></span><span id="status-text">Starting</span></div>
+</header>
+
+<main class="layout">
+  <aside class="panel left">
+    <section class="card">
+      <h2>Package</h2>
+      <div class="field-grid">
+        <label>Size<select id="pkg-size">
+          <option value="10">10 × 10 mm</option><option value="15">15 × 15 mm</option>
+          <option value="20">20 × 20 mm</option><option value="30">30 × 30 mm</option>
+          <option value="40">40 × 40 mm</option></select></label>
+        <label>Ambient<span class="input-unit"><input id="pkg-ambient" type="number" step="1" min="-40" max="125"><em>°C</em></span></label>
+        <label class="span2">Cooling<select id="pkg-cooling">
+          <option value="1000">Passive heat spreader · h = 1,000 W/m²K</option>
+          <option value="2500">Forced air · h = 2,500 W/m²K</option>
+          <option value="5000">Heatsink + fan · h = 5,000 W/m²K</option>
+          <option value="25000">Liquid cold plate · h = 25,000 W/m²K</option>
+          <option value="custom">Custom h…</option></select></label>
+        <label id="pkg-h-wrap" class="span2 hidden">Heat-transfer coefficient<span class="input-unit"><input id="pkg-h" type="number" step="100" min="10"><em>W/m²K</em></span></label>
+        <label class="span2">Optimizer grid<select id="pkg-pitch">
+          <option value="1">1 mm (finest, slowest proof)</option>
+          <option value="2">2 mm</option>
+          <option value="4">4 mm (fastest)</option></select></label>
+      </div>
+      <div class="stack-strip" title="Vertical stack, bottom to top">
+        <span style="flex:100" class="s-int">Interposer 100 µm</span>
+        <span style="flex:40" class="s-bump">Bumps 40 µm</span>
+        <span style="flex:100" class="s-die">Die 100 µm</span>
+      </div>
+    </section>
+
+    <section class="card grow">
+      <div class="card-head">
+        <h2>Chiplets</h2>
+        <span id="power-total" class="muted"></span>
+      </div>
+      <ul id="chiplet-list" class="chiplet-list"></ul>
+      <div class="add-row">
+        <select id="library"></select>
+        <button id="btn-add" class="btn btn-small">Add</button>
+      </div>
+    </section>
+
+    <section class="card" id="editor">
+      <h2>Selected chiplet</h2>
+      <div id="editor-empty" class="muted">Click a chiplet on the floorplan to edit it.</div>
+      <div id="editor-form" class="field-grid hidden">
+        <label class="span2">Name<input id="ed-name" type="text" maxlength="40"></label>
+        <label>Width<span class="input-unit"><input id="ed-w" type="number"><em>mm</em></span></label>
+        <label>Height<span class="input-unit"><input id="ed-h" type="number"><em>mm</em></span></label>
+        <label>Power<span class="input-unit"><input id="ed-p" type="number" step="0.1" min="0"><em>W</em></span></label>
+        <label>Position<span id="ed-pos" class="readout"></span></label>
+        <div class="span2 editor-buttons">
+          <button id="ed-rotate" class="btn btn-small">Rotate 90°</button>
+          <button id="ed-delete" class="btn btn-small btn-danger">Remove</button>
+        </div>
+      </div>
+    </section>
+  </aside>
+
+  <section class="stage">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="floorplan">Floorplan &amp; heat map</button>
+      <button class="tab" data-tab="view3d">3D thermal view</button>
+      <button class="tab" data-tab="compare" id="tab-compare-btn" disabled>Before / after</button>
+    </nav>
+
+    <div class="tab-panel active" id="tab-floorplan">
+      <div class="canvas-wrap">
+        <canvas id="floorplan"></canvas>
+        <div id="fp-tooltip" class="tooltip hidden"></div>
+        <div id="fp-warning" class="warning hidden"></div>
+      </div>
+      <div class="colorbar-row">
+        <span id="fp-cb-min"></span>
+        <canvas id="fp-colorbar" class="colorbar"></canvas>
+        <span id="fp-cb-max"></span>
+        <span class="muted cb-label">Hottest point through the stack (°C)</span>
+        <span class="muted cb-hint">Drag chiplets · arrow keys nudge · R rotates · re-solves live</span>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-view3d">
+      <div class="canvas-wrap">
+        <canvas id="gl"></canvas>
+        <div id="gl-labels" class="gl-labels"></div>
+        <div id="gl-tooltip" class="tooltip hidden"></div>
+        <div class="gl-toolbar">
+          <div class="seg" id="gl-mode">
+            <button data-mode="current" class="active">Current</button>
+            <button data-mode="initial" disabled>Before</button>
+            <button data-mode="optimized" disabled>After</button>
+            <button data-mode="delta" disabled>Difference</button>
+          </div>
+          <div class="seg" id="gl-views">
+            <button data-view="iso">3D</button>
+            <button data-view="top">Top</button>
+            <button data-view="front">Side</button>
+          </div>
+        </div>
+        <div class="gl-controls">
+          <label>Peel layers <input id="gl-peel" type="range" min="0" max="11" value="0"><span id="gl-peel-val">none</span></label>
+          <label>Section cut <input id="gl-cut" type="range" min="0" max="39" value="0"><span id="gl-cut-val">off</span></label>
+          <label>Height ×<input id="gl-exag" type="range" min="1" max="60" value="25"><span id="gl-exag-val">25</span></label>
+        </div>
+        <div class="hint">Left-drag rotate · right-drag or Shift-drag pan · scroll zoom · double-click reset · hover a block for its temperature</div>
+      </div>
+      <div class="colorbar-row">
+        <span id="gl-cb-min"></span>
+        <canvas id="gl-colorbar" class="colorbar"></canvas>
+        <span id="gl-cb-max"></span>
+        <span id="gl-cb-label" class="muted cb-label">Temperature (°C) · height exaggerated for visibility</span>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-compare">
+      <div class="compare-banner" id="compare-banner"></div>
+      <div class="compare-grid">
+        <figure><figcaption>Before</figcaption><div class="canvas-wrap small"><canvas id="cmp-initial"></canvas></div></figure>
+        <figure><figcaption>After (optimized)</figcaption><div class="canvas-wrap small"><canvas id="cmp-optimized"></canvas></div></figure>
+        <figure><figcaption>Difference (after − before)</figcaption><div class="canvas-wrap small"><canvas id="cmp-delta"></canvas></div></figure>
+      </div>
+      <div class="compare-scales">
+        <div class="colorbar-row"><span id="cmp-cb-min"></span><canvas id="cmp-colorbar" class="colorbar"></canvas><span id="cmp-cb-max"></span><span class="muted cb-label">°C, same scale for before and after</span></div>
+        <div class="colorbar-row"><span id="cmp-d-min"></span><canvas id="cmp-dcolorbar" class="colorbar"></canvas><span id="cmp-d-max"></span><span class="muted cb-label">K, blue = cooler after</span></div>
+      </div>
+      <div class="compare-tables">
+        <table class="table" id="moves-table">
+          <thead><tr><th>Chiplet</th><th>Before (x, y) mm</th><th>After (x, y) mm</th><th>Moved</th><th>Hottest point</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="certificate" id="certificate"></div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel right">
+    <section class="card kpi-card">
+      <div class="kpi-main">
+        <div class="kpi-label">Peak temperature</div>
+        <div class="kpi-value"><span id="kpi-peak">–</span><small>°C</small></div>
+        <div id="kpi-peak-sub" class="kpi-sub"></div>
+      </div>
+      <div class="kpi-grid">
+        <div><div class="kpi-label">Rise over ambient</div><div class="kpi-small" id="kpi-rise">–</div></div>
+        <div><div class="kpi-label">Thermal resistance</div><div class="kpi-small" id="kpi-rja">–</div></div>
+        <div><div class="kpi-label">Total power</div><div class="kpi-small" id="kpi-power">–</div></div>
+        <div><div class="kpi-label">Power density</div><div class="kpi-small" id="kpi-flux">–</div></div>
+      </div>
+    </section>
+
+    <section class="card hidden" id="opt-card">
+      <h2>Optimization result</h2>
+      <div id="opt-summary"></div>
+      <div class="editor-buttons">
+        <button id="btn-show-initial" class="btn btn-small">Show before</button>
+        <button id="btn-show-optimized" class="btn btn-small">Show after</button>
+      </div>
+    </section>
+
+    <section class="card grow">
+      <h2>Chiplet temperatures</h2>
+      <div id="chiplet-bars" class="bars"></div>
+    </section>
+
+    <section class="card">
+      <h2>Solver checks</h2>
+      <ul id="checks" class="checks"></ul>
+    </section>
+  </aside>
+</main>
+
+<div id="opt-overlay" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="overlay-card">
+    <div class="spinner"></div>
+    <h3>Finding the provably coolest placement</h3>
+    <p class="muted" id="opt-stage">Preparing…</p>
+    <div class="opt-stats">
+      <div><div class="kpi-label">Best so far</div><div class="kpi-small" id="opt-best">–</div></div>
+      <div><div class="kpi-label">Layouts on the grid</div><div class="kpi-small" id="opt-combos">–</div></div>
+      <div><div class="kpi-label">Layouts scored</div><div class="kpi-small" id="opt-leaves">–</div></div>
+      <div><div class="kpi-label">Elapsed</div><div class="kpi-small" id="opt-elapsed">–</div></div>
+    </div>
+    <div class="progress"><div class="progress-bar" id="opt-bar"></div></div>
+    <button id="btn-cancel" class="btn">Stop</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<footer class="footer">
+  Steady-state 3-D heat conduction, finite-volume solver, every number solved and checked (residual and energy balance) · placement optimum is exact over the chosen grid · model verified, not yet validated against measurements
+</footer>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
