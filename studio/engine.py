@@ -65,14 +65,14 @@ for _logger in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder",
 # invented one.
 MESH_STUDY_PATH = Path(__file__).resolve().parent.parent / "validation" / "mesh_convergence.json"
 
-NZ = 12
 DZ_M = 20e-6
-STACK_UM = (100.0, 40.0, 100.0)
-LAYERS = (
-    {"name": "Interposer (Si)", "k0": 0, "k1": 5, "thickness_um": 100.0},
-    {"name": "Microbumps + underfill", "k0": 5, "k1": 7, "thickness_um": 40.0},
-    {"name": "Die (Si)", "k0": 7, "k1": 12, "thickness_um": 100.0},
-)
+DZ_UM = 20.0
+STACK_UM = (100.0, 40.0, 100.0)          # the default: interposer / bumps / die
+LAYER_NAMES = ("Interposer (Si)", "Microbumps + underfill", "Die (Si)")
+# Each layer must hold a whole number of 20 um cells, at least one, and the
+# whole stack must stay small enough to mesh laterally as well.
+MIN_LAYER_UM = DZ_UM
+MAX_STACK_UM = 600.0
 CELL_CHOICES_MM = (0.5, 1.0, 2.0)
 MAX_CHIPLETS = 12
 
@@ -116,16 +116,34 @@ class PackageSpec:
     h_w_m2k: float          # effective heat-transfer coefficient on the die backside
     ambient_c: float
     pitch_mm: float         # placement grid for the optimizer
+    stack_um: Tuple[float, float, float] = STACK_UM   # interposer / bumps / die
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
         if not isinstance(raw, dict):
             raise StudioError("package must be an object")
+        stack = raw.get("stack_um")
+        if stack is None:
+            layers = STACK_UM
+        else:
+            if not isinstance(stack, (list, tuple)) or len(stack) != 3:
+                raise StudioError("stack_um must be three thicknesses: interposer, bumps, die")
+            names = ("interposer", "bumps", "die")
+            layers = tuple(_number({"t": value}, "t", MIN_LAYER_UM, MAX_STACK_UM, f"stack ({name})")
+                           for name, value in zip(names, stack))
+            for name, value in zip(names, layers):
+                if _whole(value, DZ_UM) is None:
+                    raise StudioError(f"the {name} layer ({value:g} um) must be a whole number "
+                                      f"of {DZ_UM:g} um cells")
+            if sum(layers) > MAX_STACK_UM:
+                raise StudioError(f"the stack totals {sum(layers):g} um; "
+                                  f"at most {MAX_STACK_UM:g} um is supported")
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
             h_w_m2k=_number(raw, "h_w_m2k", 10.0, 1e6, "package"),
             ambient_c=_number(raw, "ambient_c", -40.0, 125.0, "package"),
             pitch_mm=_number(raw, "pitch_mm", 0.5, 20.0, "package"),
+            stack_um=layers,
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -134,12 +152,28 @@ class PackageSpec:
         return spec
 
     @property
+    def nz(self) -> int:
+        """Cells through the stack: every layer is a whole number of them."""
+        return int(round(sum(self.stack_um) / DZ_UM))
+
+    @property
+    def layers(self) -> Tuple[dict, ...]:
+        """Layer names with the cell range each occupies, bottom to top."""
+        out, k0 = [], 0
+        for name, thickness in zip(LAYER_NAMES, self.stack_um):
+            k1 = k0 + int(round(thickness / DZ_UM))
+            out.append({"name": name, "k0": k0, "k1": k1, "thickness_um": thickness})
+            k0 = k1
+        return tuple(out)
+
+    @property
     def cell_mm(self) -> float:
         """The finest lateral mesh cell that keeps the model on the direct
-        (exact, factorized) solver path."""
+        (exact, factorized) solver path. A taller stack spends cells on z, so
+        it can force a coarser lateral mesh -- which the app then says."""
         for cell in CELL_CHOICES_MM:
             n = _whole(self.size_mm, cell)
-            if n is not None and n >= 8 and n * n * NZ <= DIRECT_SOLVE_MAX_UNKNOWNS:
+            if n is not None and n >= 8 and n * n * self.nz <= DIRECT_SOLVE_MAX_UNKNOWNS:
                 return cell
         raise StudioError(f"a {self.size_mm:g} mm package does not fit a supported mesh; "
                           f"use a whole number of millimetres")
@@ -149,8 +183,8 @@ class PackageSpec:
         return _whole(self.size_mm, self.cell_mm)
 
     @property
-    def model_key(self) -> Tuple[float, float, float, float]:
-        return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c)
+    def model_key(self) -> Tuple:
+        return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um)
 
 
 @dataclass(frozen=True)
@@ -258,12 +292,12 @@ class ThermalModel:
         t0 = time.perf_counter()
         n, cell_m = spec.n_cells, spec.cell_mm * 1e-3
         config = PipelineConfig(
-            grid=GridSection(nx=n, ny=n, nz=NZ, dx=cell_m, dy=cell_m, dz=DZ_M),
+            grid=GridSection(nx=n, ny=n, nz=spec.nz, dx=cell_m, dy=cell_m, dz=DZ_M),
             boundary_conditions=BoundaryConditionsSection(
                 h_convective=spec.h_w_m2k, t_ambient_c=spec.ambient_c,
                 bottom_bc="neumann", top_bc="robin", side_bc="neumann"),
-            stack=StackSection(interposer_um=STACK_UM[0], bump_um=STACK_UM[1],
-                               die_um=STACK_UM[2]),
+            stack=StackSection(interposer_um=spec.stack_um[0], bump_um=spec.stack_um[1],
+                               die_um=spec.stack_um[2]),
             power=PowerSection(die_power_w=0.0, die_footprint_frac=0.5),
             solver=SolverSection(), visualization=VisualizationSection(),
             case=CaseSection(name="studio"),
@@ -376,7 +410,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
     floor_k = total_w / (spec.h_w_m2k * area_mm2 * 1e-6)
     rise_k = float(result.peak_c) - spec.ambient_c
     i, j, k = result.peak_ijk
-    layer = next(l["name"] for l in LAYERS if l["k0"] <= k < l["k1"])
+    layer = next(l["name"] for l in spec.layers if l["k0"] <= k < l["k1"])
     by_id = {c.id: c for c in chiplets}
     rows = []
     for row in result.per_chiplet:
@@ -388,7 +422,8 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
     return {
         "grid": {"nx": pkg.nx, "ny": pkg.ny, "nz": pkg.nz, "cell_mm": spec.cell_mm,
                  "dz_um": pkg.dz * 1e6, "size_mm": spec.size_mm,
-                 "layers": [dict(layer_) for layer_ in LAYERS]},
+                 "layers": [dict(layer_) for layer_ in spec.layers],
+                 "stack_um": list(spec.stack_um)},
         "field_b64": base64.b64encode(field_c.astype("<f4").tobytes(order="C")).decode("ascii"),
         "t_min_c": float(field_c.min()),
         "t_max_c": float(field_c.max()),

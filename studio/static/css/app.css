@@ -94,7 +94,10 @@ select:focus, input:focus { outline: 2px solid rgba(79,140,255,.45); outline-off
 .panel.right .card { padding: 12px 14px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; }
 
-.stack-strip { display: flex; margin-top: 12px; border-radius: 6px; overflow: hidden; font-size: 10px; height: 22px; }
+.stack-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.stack-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.stack-note { font-size: 11px; margin-top: 6px; }
+.stack-strip { display: flex; margin-top: 10px; border-radius: 6px; overflow: hidden; font-size: 10px; height: 22px; }
 .stack-strip span { display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; color: #0b111c; font-weight: 600; }
 .s-int { background: #7f93b3; } .s-bump { background: #c9a86a; } .s-die { background: #a7b9d6; }
 

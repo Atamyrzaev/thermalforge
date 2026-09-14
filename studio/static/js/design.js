@@ -58,6 +58,7 @@ export function serializeDesign(pkg, chiplets, title) {
     package: {
       size_mm: pkg.size_mm, h_w_m2k: pkg.h_w_m2k,
       ambient_c: pkg.ambient_c, pitch_mm: pkg.pitch_mm,
+      stack_um: pkg.stack_um || DEFAULT_STACK_UM,
     },
     chiplets: chiplets.map((c) => ({
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
@@ -67,6 +68,28 @@ export function serializeDesign(pkg, chiplets, title) {
 }
 
 const COLOUR = /^#[0-9a-fA-F]{3,8}$/;
+const DEFAULT_STACK_UM = [100, 40, 100];
+
+// Layer thicknesses, in whole 20 um mesh cells. A file without a stack is a
+// file from before the stack was editable: it means the default one.
+function parseStack(raw) {
+  if (raw === undefined || raw === null) return [...DEFAULT_STACK_UM];
+  if (!Array.isArray(raw) || raw.length !== 3) {
+    throw new Error("stack_um must be three thicknesses: interposer, bumps, die");
+  }
+  const names = ["interposer", "bumps", "die"];
+  const stack = raw.map((value, n) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 20 || value > 400) {
+      throw new Error(`the ${names[n]} layer must be between 20 and 400 µm`);
+    }
+    if (Math.abs(value / 20 - Math.round(value / 20)) > 1e-9) {
+      throw new Error(`the ${names[n]} layer (${value} µm) must be a whole number of 20 µm cells`);
+    }
+    return value;
+  });
+  if (stack.reduce((a, b) => a + b, 0) > 600) throw new Error("the stack can total at most 600 µm");
+  return stack;
+}
 
 function number(source, key, lo, hi, where) {
   const value = source[key];
@@ -94,6 +117,7 @@ export function parseDesign(text) {
     h_w_m2k: number(p, "h_w_m2k", 10, 1e6, "package"),
     ambient_c: number(p, "ambient_c", -40, 125, "package"),
     pitch_mm: number(p, "pitch_mm", 0.5, 20, "package"),
+    stack_um: parseStack(p.stack_um),
   };
   if (!Array.isArray(raw.chiplets) || !raw.chiplets.length) throw new Error("the file has no chiplets");
   if (raw.chiplets.length > MAX_CHIPLETS) throw new Error(`at most ${MAX_CHIPLETS} chiplets`);

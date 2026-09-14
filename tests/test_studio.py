@@ -130,6 +130,66 @@ class TestEngineSolve:
             E.parse_chiplets([], pkg)
 
 
+class TestStackEditor:
+    """The stack is the customer's, not a constant: any whole number of 20 um
+    cells per layer, with the mesh and the physics following."""
+
+    def test_layers_and_mesh_follow_the_stack(self):
+        default = spec()
+        assert default.stack_um == E.STACK_UM
+        assert default.nz == 12
+        assert [l["name"] for l in default.layers] == list(E.LAYER_NAMES)
+        assert [(l["k0"], l["k1"]) for l in default.layers] == [(0, 5), (5, 7), (7, 12)]
+
+        taller = spec(stack_um=[200.0, 40.0, 100.0])
+        assert taller.nz == 17
+        assert taller.layers[-1]["k0"] == 12          # die starts above 240 um of stack
+        assert taller.model_key != default.model_key  # so it is a different cached model
+
+    def test_a_taller_stack_can_force_a_coarser_lateral_mesh(self):
+        """20 mm at 0.5 mm cells is 1,600 columns; the direct solver path caps
+        the total, so spending cells on z has to cost lateral resolution."""
+        assert spec(size_mm=20.0).cell_mm == 0.5
+        assert spec(size_mm=20.0, stack_um=[300.0, 60.0, 100.0]).cell_mm == 1.0
+
+    @pytest.mark.parametrize("stack, message", [
+        ([100.0, 30.0, 100.0], "whole number"),
+        ([10.0, 40.0, 100.0], "stack"),
+        ([400.0, 100.0, 200.0], "at most"),
+        ([100.0, 40.0], "three thicknesses"),
+        ("thick", "three thicknesses"),
+    ])
+    def test_an_unbuildable_stack_is_refused_with_a_reason(self, stack, message):
+        with pytest.raises(E.StudioError, match=message):
+            E.PackageSpec.parse({"size_mm": 10.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                 "pitch_mm": 2.0, "stack_um": stack})
+
+    def test_a_thicker_interposer_spreads_heat_and_lowers_the_peak(self, cache):
+        """The physical claim behind the control: more silicon under the
+        chiplet is more room to spread. Compared at a FIXED mesh so the
+        difference is the stack, not the discretization."""
+        chiplet = [chip("hot", 2, 2, 6.0, 4, 4)]
+        thin = spec(stack_um=[100.0, 40.0, 100.0])
+        thick = spec(stack_um=[300.0, 40.0, 100.0])
+        assert thin.cell_mm == thick.cell_mm            # same lateral mesh
+        hot = E.solve(cache, thin, E.parse_chiplets(chiplet, thin))
+        cool = E.solve(cache, thick, E.parse_chiplets(chiplet, thick))
+        assert cool["peak"]["t_c"] < hot["peak"]["t_c"]
+        # ... and both still conserve energy exactly.
+        for out in (hot, cool):
+            v = out["verification"]
+            assert v["sink_heat_w"] == pytest.approx(v["specified_w"], rel=1e-9)
+
+    def test_power_still_enters_at_the_active_plane_of_a_custom_stack(self, cache):
+        pkg = spec(stack_um=[200.0, 60.0, 80.0])
+        model, _ = cache.get(pkg)
+        z0, z1 = model.power_z
+        assert (z0, z1) == (13, 14)        # (200 + 60) / 20 = 13 cells below the die
+        out = E.solve(cache, pkg, E.parse_chiplets([chip("a", 2, 2, 4.0, 2, 2)], pkg))
+        assert out["peak"]["z_um"] == pytest.approx(270.0)     # first die cell centre
+        assert out["peak"]["layer"] == "Die (Si)"
+
+
 class TestMeshErrorBar:
     """The band is measured (tools/mesh_convergence.py), scaled to the design
     in hand, and absent rather than invented when no study has been run."""

@@ -45,10 +45,21 @@ const state = {
 let floorplan = null;
 
 // ------------------------------------------------------------------ helpers
+const DEFAULT_STACK_UM = [100, 40, 100];
+
+function stackOf(pkg) {
+  return (pkg && pkg.stack_um) || DEFAULT_STACK_UM;
+}
+
+function nzOf(pkg) {
+  return Math.round(stackOf(pkg).reduce((a, b) => a + b, 0) / 20);
+}
+
 function cellMm(pkg) {
+  const nz = nzOf(pkg);
   for (const cell of [0.5, 1, 2]) {
     const n = pkg.size_mm / cell;
-    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * 12 <= 20000) return cell;
+    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= 20000) return cell;
   }
   return 1;
 }
@@ -76,7 +87,8 @@ function toast(message, kind = "error") {
 
 function packageRequest() {
   const p = state.pkg;
-  return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm };
+  return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm,
+           stack_um: stackOf(p) };
 }
 
 function chipletRequest(list = state.chiplets) {
@@ -476,12 +488,30 @@ function syncPackageControls() {
   $("pkg-h-wrap").classList.toggle("hidden", preset !== "custom");
   $("pkg-h").value = p.h_w_m2k;
   $("pkg-pitch").value = String(p.pitch_mm);
+  const stack = stackOf(p);
+  $("pkg-int").value = stack[0];
+  $("pkg-bump").value = stack[1];
+  $("pkg-die").value = stack[2];
+  renderStackStrip();
+}
+
+// The strip is the stack to scale, so a 300 µm interposer looks like one.
+function renderStackStrip() {
+  const [interposer, bumps, die] = stackOf(state.pkg);
+  $("stack-strip").innerHTML =
+    `<span style="flex:${interposer}" class="s-int">Interposer ${interposer} µm</span>`
+    + `<span style="flex:${bumps}" class="s-bump">Bumps ${bumps} µm</span>`
+    + `<span style="flex:${die}" class="s-die">Die ${die} µm</span>`;
+  const cell = cellMm(state.pkg), nz = nzOf(state.pkg);
+  const n = Math.round(state.pkg.size_mm / cell);
+  $("stack-note").textContent =
+    `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`;
 }
 
 function loadScenario(sc) {
   $("scenario").title = sc.summary || "";
   state.scenarioId = sc.id;
-  state.pkg = { ...sc.package };
+  state.pkg = { stack_um: [...DEFAULT_STACK_UM], ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
   state.shown = null;
@@ -534,6 +564,11 @@ function resetDesign() {
 
 function packageChanged(physics = true) {
   for (const c of state.chiplets) fitInside(c);
+  // A taller stack can force a coarser lateral mesh, which can in turn make
+  // the placement grid finer than the mesh; keep the two consistent.
+  const cell = cellMm(state.pkg);
+  if (state.pkg.pitch_mm < cell) state.pkg.pitch_mm = cell;
+  syncPackageControls();
   if (physics) { clearOptimization(); state.shown = null; }
   renderAll();
   requestSolve();
@@ -918,6 +953,24 @@ function wire() {
     const v = Number($("pkg-h").value);
     if (Number.isFinite(v) && v >= 10) { record(); state.pkg.h_w_m2k = v; packageChanged(); }
   });
+  const stackField = (id, index) => $(id).addEventListener("change", () => {
+    const value = Math.round(Number($(id).value) / 20) * 20;
+    if (!Number.isFinite(value) || value < 20 || value > 400) { syncPackageControls(); return; }
+    const stack = [...stackOf(state.pkg)];
+    stack[index] = value;
+    if (stack.reduce((a, b) => a + b, 0) > 600) {
+      toast("The stack can total at most 600 µm on this mesh.");
+      syncPackageControls();
+      return;
+    }
+    record();
+    state.pkg.stack_um = stack;
+    packageChanged();
+  });
+  stackField("pkg-int", 0);
+  stackField("pkg-bump", 1);
+  stackField("pkg-die", 2);
+
   $("pkg-pitch").addEventListener("change", () => {
     record();
     state.pkg.pitch_mm = Number($("pkg-pitch").value);

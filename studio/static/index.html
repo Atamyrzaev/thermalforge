@@ -58,11 +58,13 @@
           <option value="2">2 mm</option>
           <option value="4">4 mm (fastest)</option></select></label>
       </div>
-      <div class="stack-strip" title="Vertical stack, bottom to top">
-        <span style="flex:100" class="s-int">Interposer 100 µm</span>
-        <span style="flex:40" class="s-bump">Bumps 40 µm</span>
-        <span style="flex:100" class="s-die">Die 100 µm</span>
+      <div class="stack-fields">
+        <label>Interposer<span class="input-unit"><input id="pkg-int" type="number" step="20" min="20" max="400"><em>µm</em></span></label>
+        <label>Bumps<span class="input-unit"><input id="pkg-bump" type="number" step="20" min="20" max="400"><em>µm</em></span></label>
+        <label>Die<span class="input-unit"><input id="pkg-die" type="number" step="20" min="20" max="400"><em>µm</em></span></label>
       </div>
+      <div class="stack-strip" id="stack-strip" title="Vertical stack, bottom to top"></div>
+      <div class="stack-note muted" id="stack-note"></div>
     </section>
 
     <section class="card grow">
