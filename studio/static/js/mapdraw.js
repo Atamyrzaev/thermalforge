@@ -123,6 +123,23 @@ export function drawPackageMap(ctx, width, height, opts) {
     ctx.strokeStyle = invalid ? "#ff5d6c" : selected ? "#ffffff" : (opts.heat ? "rgba(255,255,255,0.85)" : c.color || "#8aa0b8");
     ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
     ctx.setLineDash([]);
+
+    // Where the power actually sits inside the chiplet: the compute blocks.
+    // Drawn as hatched outlines so the heat under them reads as caused.
+    const blocks = (opts.blocksOf ? opts.blocksOf(c) : c.blocks) || [];
+    for (const [fx, fy, fw, fh, share] of blocks) {
+      const bw = fw * pw, bh = fh * ph;
+      if (bw < 3 || bh < 3) continue;
+      const bx = px + fx * pw;
+      const by = py + (1 - fy - fh) * ph;      // y points up in the model
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.22, 0.08 + share * 0.2)})`;
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = "rgba(255,255,255,0.75)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      ctx.setLineDash([]);
+    }
   }
 
   const peakXY = opts.peak ? { px: toX(opts.peak.x_mm), py: toY(opts.peak.y_mm) } : null;

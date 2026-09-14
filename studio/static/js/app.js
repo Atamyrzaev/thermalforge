@@ -11,18 +11,27 @@ import { Viewer3D } from "./viewer3d.js";
 const $ = (id) => document.getElementById(id);
 
 const LIBRARY = [
-  { key: "cpu", name: "CPU", w_mm: 4, h_mm: 4, power_w: 10, color: "#4f8cff" },
-  { key: "gpu", name: "GPU", w_mm: 6, h_mm: 5, power_w: 14, color: "#35c48b" },
-  { key: "npu", name: "NPU", w_mm: 5, h_mm: 5, power_w: 8, color: "#ffb347" },
-  { key: "hbm", name: "HBM", w_mm: 8, h_mm: 8, power_w: 4, color: "#b27cff" },
-  { key: "rv", name: "RISC-V core", w_mm: 3, h_mm: 3, power_w: 2.5, color: "#5ad1e6" },
-  { key: "serdes", name: "SerDes", w_mm: 2, h_mm: 4, power_w: 1.5, color: "#ff7aa8" },
-  { key: "sram", name: "SRAM", w_mm: 6, h_mm: 6, power_w: 2, color: "#c38cff" },
+  { key: "cpu", name: "CPU", w_mm: 4, h_mm: 4, power_w: 10, color: "#4f8cff", power_pattern: "quad_cores" },
+  { key: "gpu", name: "GPU", w_mm: 6, h_mm: 5, power_w: 14, color: "#35c48b", power_pattern: "two_engines" },
+  { key: "npu", name: "NPU", w_mm: 5, h_mm: 5, power_w: 8, color: "#ffb347", power_pattern: "mac_array" },
+  { key: "hbm", name: "HBM", w_mm: 8, h_mm: 8, power_w: 4, color: "#b27cff", power_pattern: "uniform" },
+  { key: "rv", name: "RISC-V core", w_mm: 3, h_mm: 3, power_w: 2.5, color: "#5ad1e6", power_pattern: "uniform" },
+  { key: "serdes", name: "SerDes", w_mm: 2, h_mm: 4, power_w: 1.5, color: "#ff7aa8", power_pattern: "uniform" },
+  { key: "sram", name: "SRAM", w_mm: 6, h_mm: 6, power_w: 2, color: "#c38cff", power_pattern: "uniform" },
 ];
 const COOLING_PRESETS = ["1000", "2500", "5000", "25000"];
 
+const PATTERN_LABELS = {
+  uniform: "Uniform across the footprint",
+  mac_array: "MAC array — 40 % of the area, 70 % of the power",
+  two_engines: "Two engines — 35 % of the power each",
+  quad_cores: "Four cores — 17 % of the power each",
+  custom: "Custom blocks (from the file)",
+};
+
 const state = {
   scenarios: [],
+  patterns: { uniform: [] },     // served by the engine, never invented here
   pkg: null,
   chiplets: [],
   selectedId: null,
@@ -46,6 +55,7 @@ let floorplan = null;
 
 // ------------------------------------------------------------------ helpers
 const DEFAULT_STACK_UM = [100, 40, 100];
+const DEFAULT_KEEPOUT_UM = 100;
 
 function stackOf(pkg) {
   return (pkg && pkg.stack_um) || DEFAULT_STACK_UM;
@@ -53,6 +63,15 @@ function stackOf(pkg) {
 
 function nzOf(pkg) {
   return Math.round(stackOf(pkg).reduce((a, b) => a + b, 0) / 20);
+}
+
+// A chiplet edge only lands on a cell boundary, so any positive keep-out
+// costs at least one whole empty cell. This mirrors PackageSpec.keepout_cells.
+function keepoutMm(pkg) {
+  const requested = pkg && pkg.keepout_um !== undefined ? pkg.keepout_um : 100;
+  if (!requested) return 0;
+  const cell = cellMm(pkg);
+  return Math.ceil(requested / (cell * 1000) - 1e-9) * cell;
 }
 
 function cellMm(pkg) {
@@ -88,11 +107,22 @@ function toast(message, kind = "error") {
 function packageRequest() {
   const p = state.pkg;
   return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm,
-           stack_um: stackOf(p) };
+           stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100 };
 }
 
 function chipletRequest(list = state.chiplets) {
-  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm }) => ({ id, name, w_mm, h_mm, power_w, x_mm, y_mm }));
+  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm, power_pattern, blocks }) => ({
+    id, name, w_mm, h_mm, power_w, x_mm, y_mm,
+    power_pattern: power_pattern || "uniform",
+    ...(blocks && blocks.length ? { blocks } : {}),
+  }));
+}
+
+// The blocks a chiplet actually carries: its own (a file may define them) or
+// the served pattern's.
+function blocksOf(c) {
+  if (c.blocks && c.blocks.length) return c.blocks;
+  return state.patterns[c.power_pattern || "uniform"] || [];
 }
 
 function withColours(placement) {
@@ -123,9 +153,15 @@ function violations() {
       const A = list[a], B = list[b];
       const ox = Math.min(A.x_mm + A.w_mm, B.x_mm + B.w_mm) - Math.max(A.x_mm, B.x_mm);
       const oy = Math.min(A.y_mm + A.h_mm, B.y_mm + B.h_mm) - Math.max(A.y_mm, B.y_mm);
+      const keepout = keepoutMm(state.pkg);
       if (ox > 1e-9 && oy > 1e-9) {
         ids.add(A.id); ids.add(B.id);
         messages.push(`${A.name} overlaps ${B.name}`);
+      } else if (keepout > 0 && ox > 1e-9 - keepout && oy > 1e-9 - keepout) {
+        ids.add(A.id); ids.add(B.id);
+        const clearance = Math.max(-ox, -oy);
+        messages.push(`${A.name} and ${B.name} clear each other by ${clearance.toFixed(2)} mm; `
+          + `the keep-out needs ${keepout.toFixed(2)} mm on this mesh`);
       }
     }
   }
@@ -272,6 +308,7 @@ function renderFloorplan(invalidIds = new Set()) {
   const heat = heatFor(res);
   const temps = new Map(((res && res.chiplets) || []).map((r) => [r.id, r.max_c]));
   floorplan.setModel({
+    blocksOf,
     sizeMm: state.pkg.size_mm,
     cellMm: cellMm(state.pkg),
     pitchMm: state.pkg.pitch_mm,
@@ -372,6 +409,28 @@ function renderChipletList() {
   if (selected) selected.scrollIntoView({ block: "nearest" });
 }
 
+function renderPatternOptions() {
+  const names = Object.keys(state.patterns);
+  $("ed-pattern").innerHTML = names
+    .map((name) => `<option value="${name}">${escapeHtml(PATTERN_LABELS[name] || name)}</option>`)
+    .join("");
+}
+
+// What the hottest region of this chiplet actually runs at, per cm^2 -- the
+// number a junction follows, which the chiplet average hides.
+function hottestDensity(c) {
+  const blocks = blocksOf(c);
+  const area_cm2 = c.w_mm * c.h_mm / 100;
+  if (!area_cm2) return 0;
+  let factor = 1;
+  if (blocks.length) {
+    const rest = 1 - blocks.reduce((sum, b) => sum + b[4], 0);
+    factor = rest;
+    for (const [, , w, h, share] of blocks) factor = Math.max(factor, share / (w * h));
+  }
+  return c.power_w / area_cm2 * factor;
+}
+
 function renderEditor() {
   const c = state.chiplets.find((q) => q.id === state.selectedId);
   $("editor-empty").classList.toggle("hidden", !!c);
@@ -385,6 +444,19 @@ function renderEditor() {
   set("ed-p", +c.power_w.toFixed(4));
   for (const id of ["ed-w", "ed-h"]) { $(id).step = cell; $(id).min = cell; $(id).max = state.pkg.size_mm; }
   $("ed-pos").textContent = `${c.x_mm.toFixed(1)}, ${c.y_mm.toFixed(1)} mm`;
+  const pattern = c.power_pattern || "uniform";
+  if (!$("ed-pattern").querySelector(`option[value="${pattern}"]`)) {
+    const option = document.createElement("option");
+    option.value = pattern;
+    option.textContent = PATTERN_LABELS[pattern] || pattern;
+    $("ed-pattern").appendChild(option);
+  }
+  $("ed-pattern").value = pattern;
+  const average = c.power_w / (c.w_mm * c.h_mm / 100);
+  const hottest = hottestDensity(c);
+  $("ed-density").textContent = hottest > average * 1.01
+    ? `${average.toFixed(0)} W/cm² average · ${hottest.toFixed(0)} W/cm² in the hot region`
+    : `${average.toFixed(0)} W/cm² across the footprint`;
 }
 
 // ------------------------------------------------------------ interactions
@@ -424,6 +496,9 @@ function rotateSelected() {
   if (!c) return;
   record();
   [c.w_mm, c.h_mm] = [c.h_mm, c.w_mm];
+  if (c.blocks && c.blocks.length) {
+    c.blocks = c.blocks.map(([x, y, w, h, share]) => [y, x, h, w, share]);
+  }
   fitInside(c);
   renderChipletList();
   requestSolve();
@@ -453,7 +528,8 @@ function addChiplet(key) {
   let n = 1;
   while (state.chiplets.some((c) => c.id === `${key}${n}`)) n++;
   const c = { id: `${key}${n}`, name: `${tpl.name} ${n}`, w_mm: tpl.w_mm, h_mm: tpl.h_mm,
-              power_w: tpl.power_w, x_mm: 0, y_mm: 0, color: tpl.color };
+              power_w: tpl.power_w, x_mm: 0, y_mm: 0, color: tpl.color,
+              power_pattern: tpl.power_pattern || "uniform" };
   const step = Math.max(cellMm(state.pkg), state.pkg.pitch_mm);
   for (let y = 0; y + c.h_mm <= size + 1e-9; y += step) {
     for (let x = 0; x + c.w_mm <= size + 1e-9; x += step) {
@@ -491,6 +567,7 @@ function syncPackageControls() {
   $("pkg-h-wrap").classList.toggle("hidden", preset !== "custom");
   $("pkg-h").value = p.h_w_m2k;
   $("pkg-pitch").value = String(p.pitch_mm);
+  $("pkg-keepout").value = p.keepout_um !== undefined ? p.keepout_um : DEFAULT_KEEPOUT_UM;
   const stack = stackOf(p);
   $("pkg-int").value = stack[0];
   $("pkg-bump").value = stack[1];
@@ -507,14 +584,20 @@ function renderStackStrip() {
     + `<span style="flex:${die}" class="s-die">Die ${die} µm</span>`;
   const cell = cellMm(state.pkg), nz = nzOf(state.pkg);
   const n = Math.round(state.pkg.size_mm / cell);
+  const keepout = keepoutMm(state.pkg);
+  const requested = state.pkg.keepout_um !== undefined ? state.pkg.keepout_um : DEFAULT_KEEPOUT_UM;
+  const keepoutNote = keepout > 0
+    ? ` · keep-out ${requested} µm → ${(keepout * 1000).toFixed(0)} µm on this mesh`
+    : " · no keep-out";
   $("stack-note").textContent =
-    `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`;
+    `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`
+    + keepoutNote;
 }
 
 function loadScenario(sc) {
   $("scenario").title = sc.summary || "";
   state.scenarioId = sc.id;
-  state.pkg = { stack_um: [...DEFAULT_STACK_UM], ...sc.package };
+  state.pkg = { stack_um: [...DEFAULT_STACK_UM], keepout_um: DEFAULT_KEEPOUT_UM, ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
   state.shown = null;
@@ -970,6 +1053,15 @@ function wire() {
     state.pkg.stack_um = stack;
     packageChanged();
   });
+  $("pkg-keepout").addEventListener("change", () => {
+    const value = Number($("pkg-keepout").value);
+    if (!Number.isFinite(value) || value < 0 || value > 2000) { syncPackageControls(); return; }
+    record();
+    state.pkg.keepout_um = value;
+    clearOptimization();
+    syncPackageControls();
+    requestSolve();
+  });
   stackField("pkg-int", 0);
   stackField("pkg-bump", 1);
   stackField("pkg-die", 2);
@@ -1002,6 +1094,16 @@ function wire() {
   $("ed-name").addEventListener("change", () => {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
     if (c && $("ed-name").value.trim()) { record(); c.name = $("ed-name").value.trim(); renderChipletList(); renderFloorplan(); }
+  });
+  $("ed-pattern").addEventListener("change", () => {
+    const c = state.chiplets.find((q) => q.id === state.selectedId);
+    if (!c) return;
+    record();
+    c.power_pattern = $("ed-pattern").value;
+    delete c.blocks;                 // a named pattern replaces custom blocks
+    renderChipletList();
+    renderFloorplan();
+    requestSolve();
   });
   $("ed-rotate").addEventListener("click", rotateSelected);
   $("ed-delete").addEventListener("click", removeSelected);
@@ -1132,6 +1234,8 @@ async function init() {
     const res = await getJSON("/api/scenarios");
     if (!res.ok) throw new Error(res.error || "no scenarios");
     state.scenarios = res.scenarios;
+    if (res.power_patterns) state.patterns = res.power_patterns;
+    renderPatternOptions();
     $("scenario").innerHTML = res.scenarios.map((s) => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join("");
     loadScenario(res.scenarios[0]);
   } catch (err) {

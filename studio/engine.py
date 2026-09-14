@@ -50,8 +50,8 @@ from src.config_loader import (
     SolverSection, StackSection, VisualizationSection,
 )
 from src.experiment import (
-    ChipletDef, Placement, build_stack, package_from_config, power_z_range,
-    solve_placement, validate_placement,
+    ChipletDef, Placement, PowerBlock, block_cells, build_stack, package_from_config,
+    power_z_range, solve_placement, uniform_share, validate_placement,
 )
 from src.surrogate import spreading_length_m
 from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
@@ -75,6 +75,30 @@ LAYER_NAMES = ("Interposer (Si)", "Microbumps + underfill", "Die (Si)")
 # whole stack must stay small enough to mesh laterally as well.
 MIN_LAYER_UM = DZ_UM
 MAX_STACK_UM = 600.0
+
+# Assembly needs room between chiplets for underfill flow and microbump
+# dispense tolerance; 100 um is a common floor for 2.5D packages. Enforced on
+# the mesh, so the clearance actually applied is a whole number of cells.
+DEFAULT_KEEPOUT_UM = 100.0
+MAX_KEEPOUT_UM = 2000.0
+
+# Where the power sits INSIDE a chiplet. A chiplet is not a uniform heater:
+# the compute array draws most of the current over part of the die, and that
+# is where the junction runs hottest. Each entry is
+# (x, y, width, height, share of the chiplet's power), in fractions of the
+# footprint, so a pattern survives a resize and transposes under rotation.
+POWER_PATTERNS: Dict[str, Tuple[Tuple[float, float, float, float, float], ...]] = {
+    "uniform": (),
+    # A centred compute array: 40 % of the area carrying 70 % of the power,
+    # the shape of an NPU MAC matrix or a GPU shader cluster.
+    "mac_array": ((0.185, 0.185, 0.63, 0.63, 0.70),),
+    # Two engines side by side, each 20 % of the area with 35 % of the power.
+    "two_engines": ((0.08, 0.20, 0.34, 0.60, 0.35), (0.58, 0.20, 0.34, 0.60, 0.35)),
+    # Four cores in a 2 x 2 complex, 17 % of the power each.
+    "quad_cores": ((0.08, 0.08, 0.37, 0.37, 0.17), (0.55, 0.08, 0.37, 0.37, 0.17),
+                   (0.08, 0.55, 0.37, 0.37, 0.17), (0.55, 0.55, 0.37, 0.37, 0.17)),
+}
+MAX_BLOCKS = 8
 CELL_CHOICES_MM = (0.5, 1.0, 2.0)
 MAX_CHIPLETS = 12
 
@@ -119,6 +143,7 @@ class PackageSpec:
     ambient_c: float
     pitch_mm: float         # placement grid for the optimizer
     stack_um: Tuple[float, float, float] = STACK_UM   # interposer / bumps / die
+    keepout_um: float = DEFAULT_KEEPOUT_UM            # minimum chiplet-to-chiplet clearance
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -146,6 +171,8 @@ class PackageSpec:
             ambient_c=_number(raw, "ambient_c", -40.0, 125.0, "package"),
             pitch_mm=_number(raw, "pitch_mm", 0.5, 20.0, "package"),
             stack_um=layers,
+            keepout_um=(DEFAULT_KEEPOUT_UM if raw.get("keepout_um") is None
+                        else _number(raw, "keepout_um", 0.0, MAX_KEEPOUT_UM, "package")),
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -185,6 +212,18 @@ class PackageSpec:
         return _whole(self.size_mm, self.cell_mm)
 
     @property
+    def keepout_cells(self) -> int:
+        """The keep-out in whole mesh cells, rounded UP: a chiplet edge only
+        lands on a cell boundary, so any positive keep-out costs at least one
+        empty cell between neighbours."""
+        return int(math.ceil(self.keepout_um / (self.cell_mm * 1e3) - 1e-9))
+
+    @property
+    def keepout_enforced_um(self) -> float:
+        """What the mesh can actually enforce -- never less than asked."""
+        return self.keepout_cells * self.cell_mm * 1e3
+
+    @property
     def model_key(self) -> Tuple:
         return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um)
 
@@ -198,10 +237,69 @@ class ChipletIn:
     power_w: float
     x_mm: float
     y_mm: float
+    power_pattern: str = "uniform"
+    blocks: Tuple[PowerBlock, ...] = ()
 
     def as_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "w_mm": self.w_mm, "h_mm": self.h_mm,
-                "power_w": self.power_w, "x_mm": self.x_mm, "y_mm": self.y_mm}
+                "power_w": self.power_w, "x_mm": self.x_mm, "y_mm": self.y_mm,
+                "power_pattern": self.power_pattern,
+                "blocks": [[b.x_frac, b.y_frac, b.w_frac, b.h_frac, b.share] for b in self.blocks]}
+
+    @property
+    def hottest_block_density_w_cm2(self) -> float:
+        """Power density of the busiest region, which is what a junction
+        temperature actually follows -- not the chiplet average."""
+        area_cm2 = self.w_mm * self.h_mm / 100.0
+        if area_cm2 <= 0:
+            return 0.0
+        best = uniform_share(self.blocks) / 1.0 if self.blocks else 1.0
+        for b in self.blocks:
+            area_frac = b.w_frac * b.h_frac
+            if area_frac > 0:
+                best = max(best, b.share / area_frac)
+        return self.power_w / area_cm2 * best
+
+
+def _parse_blocks(item: dict, where: str) -> Tuple[str, Tuple[PowerBlock, ...]]:
+    """The chiplet's internal power map: a named pattern, or explicit blocks.
+
+    Explicit blocks win when both are given, so a design file can carry a map
+    the presets cannot express.
+    """
+    pattern = item.get("power_pattern", "uniform")
+    if not isinstance(pattern, str) or pattern not in POWER_PATTERNS:
+        raise StudioError(f"{where}: power_pattern must be one of "
+                          f"{', '.join(sorted(POWER_PATTERNS))}")
+    raw_blocks = item.get("blocks")
+    if raw_blocks is None:
+        return pattern, tuple(PowerBlock(*values) for values in POWER_PATTERNS[pattern])
+    if not isinstance(raw_blocks, list):
+        raise StudioError(f"{where}: blocks must be a list")
+    if len(raw_blocks) > MAX_BLOCKS:
+        raise StudioError(f"{where}: at most {MAX_BLOCKS} internal blocks")
+    blocks: List[PowerBlock] = []
+    total = 0.0
+    for n, values in enumerate(raw_blocks, start=1):
+        if not isinstance(values, (list, tuple)) or len(values) != 5:
+            raise StudioError(f"{where}: block {n} must be [x, y, width, height, share] "
+                              f"as fractions of the footprint")
+        x, y, w, h, share = (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool)
+                             and math.isfinite(v) else None for v in values)
+        if None in (x, y, w, h, share):
+            raise StudioError(f"{where}: block {n} must be five numbers")
+        if not (0.0 <= x < 1.0 and 0.0 <= y < 1.0 and 0.0 < w <= 1.0 and 0.0 < h <= 1.0):
+            raise StudioError(f"{where}: block {n} must sit inside the footprint")
+        if x + w > 1.0 + 1e-9 or y + h > 1.0 + 1e-9:
+            raise StudioError(f"{where}: block {n} runs past the edge of the chiplet")
+        if not 0.0 <= share <= 1.0:
+            raise StudioError(f"{where}: block {n} share must be between 0 and 1")
+        total += share
+        blocks.append(PowerBlock(x, y, w, h, share))
+    if total > 1.0 + 1e-9:
+        raise StudioError(f"{where}: internal blocks claim {total:.2f} of the power, "
+                          f"which is more than the chiplet has")
+    return (pattern if not blocks else item.get("power_pattern", "custom")), tuple(blocks)
 
 
 def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
@@ -222,6 +320,7 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
             raise StudioError(f"duplicate chiplet id '{cid}'")
         seen.add(cid)
         name = str(item.get("name") or cid)[:40]
+        pattern, blocks = _parse_blocks(item, name)
         chiplet = ChipletIn(
             id=cid, name=name,
             w_mm=_number(item, "w_mm", cell, spec.size_mm, name),
@@ -229,6 +328,7 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
             power_w=_number(item, "power_w", 0.0, 2000.0, name),
             x_mm=_number(item, "x_mm", 0.0, spec.size_mm, name),
             y_mm=_number(item, "y_mm", 0.0, spec.size_mm, name),
+            power_pattern=pattern, blocks=blocks,
         )
         for label, value in (("width", chiplet.w_mm), ("height", chiplet.h_mm),
                              ("x", chiplet.x_mm), ("y", chiplet.y_mm)):
@@ -240,7 +340,8 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
 
 def _catalog(chiplets) -> Tuple[ChipletDef, ...]:
     return tuple(ChipletDef(id=c.id, name=c.name, width_um=c.w_mm * 1e3,
-                            height_um=c.h_mm * 1e3, power_w=c.power_w) for c in chiplets)
+                            height_um=c.h_mm * 1e3, power_w=c.power_w,
+                            blocks=c.blocks) for c in chiplets)
 
 
 def _placement(chiplets, pitch_mm: float) -> Placement:
@@ -470,7 +571,9 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
         area_cm2 = c.w_mm * c.h_mm / 100.0
         rows.append({"id": c.id, "name": c.name, "max_c": float(row.max_c),
                      "mean_c": float(row.mean_c), "power_w": c.power_w,
-                     "density_w_cm2": c.power_w / area_cm2 if area_cm2 > 0 else 0.0})
+                     "density_w_cm2": c.power_w / area_cm2 if area_cm2 > 0 else 0.0,
+                     "power_pattern": c.power_pattern,
+                     "hottest_density_w_cm2": c.hottest_block_density_w_cm2})
     return {
         "grid": {"nx": pkg.nx, "ny": pkg.ny, "nz": pkg.nz, "cell_mm": spec.cell_mm,
                  "dz_um": pkg.dz * 1e6, "size_mm": spec.size_mm,
@@ -514,7 +617,8 @@ def solve(cache: ModelCache, spec: PackageSpec, chiplets) -> dict:
     model, built = cache.get(spec)
     catalog = _catalog(chiplets)
     placement = _placement(chiplets, spec.cell_mm)
-    violations = validate_placement(model.package, catalog, placement)
+    violations = validate_placement(model.package, catalog, placement,
+                                    spec.keepout_enforced_um * 1e-6)
     if violations:
         return {"ok": False, "violations": violations}
     with model.lock:
@@ -549,19 +653,29 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
     # The rise is linear in power, so chiplets with the same footprint share
     # one set of solves at 1 W and are scaled: exact, and it removes repeated
     # work for identical blocks (four RISC-V cores cost one set, not four).
-    per_watt: Dict[Tuple[int, int], np.ndarray] = {}
+    per_watt: Dict[tuple, np.ndarray] = {}
     for index, (chiplet, (wc, hc), pos) in enumerate(zip(chiplets, sizes, positions)):
         _check_cancel(cancel)
-        if (wc, hc) in per_watt:
-            fields.append(per_watt[(wc, hc)] * chiplet.power_w)
+        cells = block_cells(wc, hc, chiplet.blocks)
+        # Chiplets share solves only when their internal map matches too: a
+        # MAC array in the middle is a different heat source from a uniform
+        # block of the same size.
+        key = (wc, hc, cells)
+        if key in per_watt:
+            fields.append(per_watt[key] * chiplet.power_w)
             if on_chiplet is not None:
                 on_chiplet(index + 1)
             continue
-        q = 1.0 / (wc * hc * (z1 - z0) * pkg.cell_volume_m3)
+        nk = z1 - z0
+        rest = uniform_share(chiplet.blocks)
+        q = rest / (wc * hc * nk * pkg.cell_volume_m3)
         rhs = np.zeros((n_cells, len(pos)), dtype=np.float64, order="F")
         for col, (x, y) in enumerate(pos):
             block[:] = 0.0
             block[x:x + wc, y:y + hc, z0:z1] = q
+            for bi, bj, bw, bh, share in cells:
+                block[x + bi:x + bi + bw, y + bj:y + bj + bh, z0:z1] += (
+                    share / (bw * bh * nk * pkg.cell_volume_m3))
             rhs[:, col] = block.reshape(n_cells)
         # S theta = q: the rise above ambient; the boundary forcing cancels.
         full = model.factor.rise_for_power(rhs)
@@ -569,7 +683,7 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
             raise StudioError("a single-chiplet rise went negative; the exactness bound "
                               "would not hold, so the search refuses to run")
         theta_per_watt = np.ascontiguousarray(full[model.die_cells, :].T)
-        per_watt[(wc, hc)] = theta_per_watt
+        per_watt[key] = theta_per_watt
         theta = theta_per_watt * chiplet.power_w
         peak = float(theta.max()) if theta.size else 0.0
         if theta.size and float(theta.min()) < -NEGATIVE_FIELD_TOL * max(1.0, peak):
@@ -594,6 +708,7 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
                      sizes: List[Tuple[int, int]], signatures: List[tuple],
                      incumbent: Tuple[float, Optional[List[int]]],
                      bound_cells: Optional[int] = None,
+                     clearance_cells: int = 0,
                      improve_incumbent: bool = True,
                      cancel: Optional[threading.Event] = None,
                      on_progress: Optional[Callable[[SearchStats, float], None]] = None
@@ -604,6 +719,11 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
     over the cells where a peak can occur. Returns (best rise in K, position
     index per chiplet, stats). `incumbent` is a known layout (value, indices)
     or (inf, None); the search can only improve on it.
+
+    `clearance_cells`: minimum empty cells between any two chiplets -- the
+    assembly keep-out. Positions that violate it are excluded from the search
+    exactly as overlapping ones are, so the optimum returned is the coolest
+    BUILDABLE layout rather than the coolest drawable one.
 
     `bound_cells`: interior nodes only need a LOWER bound, and a maximum over
     any subset of cells is still one, so they use the first `bound_cells`
@@ -636,8 +756,10 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
             (wa, ha), (wb, hb) = sizes[a], sizes[b]
             ax, ay = pa[:, 0][:, None], pa[:, 1][:, None]
             bx, by = pb[:, 0][None, :], pb[:, 1][None, :]
-            overlap = ((np.minimum(ax + wa, bx + wb) > np.maximum(ax, bx))
-                       & (np.minimum(ay + ha, by + hb) > np.maximum(ay, by)))
+            # Too close counts as incompatible, not just overlapping: the
+            # pair must clear the keep-out in x or in y.
+            overlap = ((np.minimum(ax + wa, bx + wb) + clearance_cells > np.maximum(ax, bx))
+                       & (np.minimum(ay + ha, by + hb) + clearance_cells > np.maximum(ay, by)))
             compat[(a, b)] = ~overlap
 
     def allowed_for(ci: int, chosen_: List[Optional[int]]) -> np.ndarray:
@@ -769,7 +891,8 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
     model, _built = cache.get(spec)
     pkg = model.package
     catalog = _catalog(chiplets)
-    violations = validate_placement(pkg, catalog, _placement(chiplets, spec.cell_mm))
+    keepout_m = spec.keepout_enforced_um * 1e-6
+    violations = validate_placement(pkg, catalog, _placement(chiplets, spec.cell_mm), keepout_m)
     if violations:
         raise StudioError("the starting placement is invalid: " + "; ".join(violations))
 
@@ -812,7 +935,8 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
         value = float(sum(f[c] for f, c in zip(fields, start_choice)).max())
         incumbent_value, incumbent_choice = value, start_choice
 
-    signatures = [(sizes[i], chiplets[i].power_w) for i in range(len(chiplets))]
+    signatures = [(sizes[i], chiplets[i].power_w,
+                   block_cells(*sizes[i], chiplets[i].blocks)) for i in range(len(chiplets))]
 
     t0 = time.perf_counter()
 
@@ -823,7 +947,8 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
 
     best_value, best_choice, stats = branch_and_bound(
         fields, positions, sizes, signatures, (incumbent_value, incumbent_choice),
-        bound_cells=model.bound_cells, cancel=cancel, on_progress=search_progress)
+        bound_cells=model.bound_cells, clearance_cells=spec.keepout_cells,
+        cancel=cancel, on_progress=search_progress)
     search_s = time.perf_counter() - t0
     if best_choice is None:
         raise StudioError("no non-overlapping layout exists on this placement grid; "
@@ -836,7 +961,7 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
                     for i, c in enumerate(chiplets))
     # Defense in depth: never report a layout that breaks the placement rules,
     # whatever the search believed.
-    winner_violations = validate_placement(pkg, catalog, _placement(winners, cell))
+    winner_violations = validate_placement(pkg, catalog, _placement(winners, cell), keepout_m)
     if winner_violations:
         raise StudioError("the search produced an invalid layout; refusing to report it: "
                           + "; ".join(winner_violations))
@@ -880,6 +1005,8 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
         "certificate": {
             "exact": True,
             "pitch_mm": spec.pitch_mm,
+            "keepout_um": spec.keepout_um,
+            "keepout_enforced_um": spec.keepout_enforced_um,
             "positions_per_chiplet": [int(len(p)) for p in positions],
             "combinations": int(combinations),
             "layouts_scored": int(stats.leaves),

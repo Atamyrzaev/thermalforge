@@ -73,10 +73,16 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
     ? `Already optimal: no layout on the ${cert.pitch_mm} mm grid is cooler than the starting placement (${imp.initial_peak_c.toFixed(2)} °C).`
     : `Peak ${imp.initial_peak_c.toFixed(2)} °C → ${imp.optimized_peak_c.toFixed(2)} °C: −${imp.delta_k.toFixed(2)} K, ${imp.pct_of_rise.toFixed(1)}% of the rise above ambient removed by moving chiplets only.`;
 
+  const hottest = new Map(a.chiplets.map((row) => [row.id, row]));
   const chipletRows = a.placement.map((c) => {
     const area = c.w_mm * c.h_mm;
+    const row = hottest.get(c.id) || {};
+    const peak = row.hottest_density_w_cm2;
+    const pattern = (row.power_pattern || "uniform").replace(/_/g, " ");
     return `<tr><td>${escapeHtml(c.name)}</td><td>${c.w_mm} × ${c.h_mm}</td><td>${formatW(c.power_w)}</td>
-      <td>${(c.power_w / (area / 100)).toFixed(1)}</td></tr>`;
+      <td>${(c.power_w / (area / 100)).toFixed(1)}</td>
+      <td>${escapeHtml(pattern)}${peak && peak > c.power_w / (area / 100) * 1.01
+        ? ` · ${peak.toFixed(0)} W/cm² hot region` : ""}</td></tr>`;
   }).join("");
   const moveRows = opt.moves.map((m) => `<tr><td>${escapeHtml(m.name)}</td>
     <td>${m.from_mm[0].toFixed(1)}, ${m.from_mm[1].toFixed(1)}</td>
@@ -135,9 +141,10 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
         <tr><td>Cooling</td><td>h = ${pkg.h_w_m2k.toLocaleString()} W/m²K on the die backside · ambient ${pkg.ambient_c} °C</td></tr>
         <tr><td>Mesh</td><td>${g.nx} × ${g.ny} × ${g.nz} cells (${(g.nx * g.ny * g.nz).toLocaleString()} unknowns) · ${g.cell_mm} mm × ${g.cell_mm} mm × ${g.dz_um} µm</td></tr>
         <tr><td>Placement grid</td><td>${cert.pitch_mm} mm</td></tr>
+        <tr><td>Assembly keep-out</td><td>${cert.keepout_um ? `${cert.keepout_um} µm requested, ${cert.keepout_enforced_um} µm enforced on this mesh` : "none"}</td></tr>
       </table>
       <h2>Chiplets</h2>
-      <table><tr><th>Chiplet</th><th>Size (mm)</th><th>Power (W)</th><th>Density (W/cm²)</th></tr>${chipletRows}</table>
+      <table><tr><th>Chiplet</th><th>Size (mm)</th><th>Power (W)</th><th>Density (W/cm²)</th><th>Power inside</th></tr>${chipletRows}</table>
       <h2>Key figures</h2>
       <table><tr><th></th><th>Before</th><th>After</th></tr>
         ${kpi("Peak temperature", a.peak.t_c, b.peak.t_c, "°C", 2)}

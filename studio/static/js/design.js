@@ -59,16 +59,20 @@ export function serializeDesign(pkg, chiplets, title) {
       size_mm: pkg.size_mm, h_w_m2k: pkg.h_w_m2k,
       ambient_c: pkg.ambient_c, pitch_mm: pkg.pitch_mm,
       stack_um: pkg.stack_um || DEFAULT_STACK_UM,
+      keepout_um: pkg.keepout_um === undefined ? DEFAULT_KEEPOUT_UM : pkg.keepout_um,
     },
     chiplets: chiplets.map((c) => ({
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
       power_w: c.power_w, x_mm: c.x_mm, y_mm: c.y_mm, color: c.color,
+      power_pattern: c.power_pattern || "uniform",
+      ...(c.blocks && c.blocks.length ? { blocks: c.blocks } : {}),
     })),
   };
 }
 
 const COLOUR = /^#[0-9a-fA-F]{3,8}$/;
 const DEFAULT_STACK_UM = [100, 40, 100];
+const DEFAULT_KEEPOUT_UM = 100;
 
 // Layer thicknesses, in whole 20 um mesh cells. A file without a stack is a
 // file from before the stack was editable: it means the default one.
@@ -89,6 +93,29 @@ function parseStack(raw) {
   });
   if (stack.reduce((a, b) => a + b, 0) > 600) throw new Error("the stack can total at most 600 µm");
   return stack;
+}
+
+// Internal power blocks, as fractions of the footprint. The engine checks
+// them again; this keeps a bad file from reaching it with a clear message.
+function parseBlocks(raw, where) {
+  if (!Array.isArray(raw)) throw new Error(`${where}: blocks must be a list`);
+  if (raw.length > 8) throw new Error(`${where}: at most 8 internal blocks`);
+  let total = 0;
+  return raw.map((block, n) => {
+    if (!Array.isArray(block) || block.length !== 5
+        || block.some((v) => typeof v !== "number" || !Number.isFinite(v))) {
+      throw new Error(`${where}: block ${n + 1} must be [x, y, width, height, share]`);
+    }
+    const [x, y, w, h, share] = block;
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.000000001 || y + h > 1.000000001) {
+      throw new Error(`${where}: block ${n + 1} must sit inside the footprint`);
+    }
+    total += share;
+    if (share < 0 || total > 1.000000001) {
+      throw new Error(`${where}: internal blocks claim more power than the chiplet has`);
+    }
+    return [x, y, w, h, share];
+  });
 }
 
 function number(source, key, lo, hi, where) {
@@ -118,6 +145,8 @@ export function parseDesign(text) {
     ambient_c: number(p, "ambient_c", -40, 125, "package"),
     pitch_mm: number(p, "pitch_mm", 0.5, 20, "package"),
     stack_um: parseStack(p.stack_um),
+    keepout_um: p.keepout_um === undefined || p.keepout_um === null
+      ? DEFAULT_KEEPOUT_UM : number(p, "keepout_um", 0, 2000, "package"),
   };
   if (!Array.isArray(raw.chiplets) || !raw.chiplets.length) throw new Error("the file has no chiplets");
   if (raw.chiplets.length > MAX_CHIPLETS) throw new Error(`at most ${MAX_CHIPLETS} chiplets`);
@@ -138,6 +167,8 @@ export function parseDesign(text) {
       x_mm: number(c, "x_mm", 0, pkg.size_mm, where),
       y_mm: number(c, "y_mm", 0, pkg.size_mm, where),
       color: typeof c.color === "string" && COLOUR.test(c.color) ? c.color : "#8aa0b8",
+      power_pattern: typeof c.power_pattern === "string" ? c.power_pattern.slice(0, 30) : "uniform",
+      ...(c.blocks === undefined ? {} : { blocks: parseBlocks(c.blocks, where) }),
     };
   });
   const title = typeof raw.title === "string" ? raw.title.slice(0, 80) : "Opened design";

@@ -171,7 +171,16 @@ def make_handler(studio: Studio):
             path = self.path.split("?", 1)[0]
             try:
                 if path == "/api/scenarios":
-                    self._send_json({"ok": True, "scenarios": scenarios()})
+                    # The internal power patterns travel with the scenarios so
+                    # the UI never keeps its own copy of the physics.
+                    self._send_json({
+                        "ok": True,
+                        "scenarios": scenarios(),
+                        "power_patterns": {
+                            name: [list(block) for block in blocks]
+                            for name, blocks in engine.POWER_PATTERNS.items()
+                        },
+                    })
                 elif path.startswith("/api/jobs/"):
                     job = studio.jobs.get(path.rsplit("/", 1)[-1])
                     if job is None:

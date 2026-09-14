@@ -30,15 +30,32 @@ def _colour(name: str) -> str:
     return "#8aa0b8"
 
 
+# What the compute actually looks like inside each part. A chiplet is not a
+# uniform heater, and assuming it is under-reports the junction: on the NPU
+# below, a MAC array carrying 70 % of the power in 40 % of the area runs 13 K
+# hotter than the same watts spread evenly.
+PATTERNS = {"NPU": "mac_array", "GPU": "two_engines", "CPU": "quad_cores"}
+
+
+def _pattern(name: str) -> str:
+    upper = name.upper()
+    for key, pattern in PATTERNS.items():
+        if upper.startswith(key):
+            return pattern
+    return "uniform"
+
+
 def _canonical_chiplets() -> List[dict]:
     raw = json.loads(CANONICAL.read_text(encoding="utf-8"))
     origins = raw["initial_placement"]["origins_um"]
     out = []
     for c in raw["chiplets"]:
-        out.append({"id": c["id"], "name": c["name"].replace("_", " "),
+        name = c["name"].replace("_", " ")
+        out.append({"id": c["id"], "name": name,
                     "w_mm": c["width_um"] / 1e3, "h_mm": c["height_um"] / 1e3,
                     "power_w": c["power_w"], "x_mm": origins[c["id"]][0] / 1e3,
-                    "y_mm": origins[c["id"]][1] / 1e3, "color": _colour(c["name"])})
+                    "y_mm": origins[c["id"]][1] / 1e3, "color": _colour(c["name"]),
+                    "power_pattern": _pattern(name)})
     return out
 
 
@@ -86,7 +103,8 @@ def scenarios() -> List[dict]:
                         "pitch_mm": 2.0},
             "chiplets": rv_cores + [
                 {"id": "npu", "name": "NPU", "w_mm": 5.0, "h_mm": 5.0, "power_w": 8.0,
-                 "x_mm": 8.0, "y_mm": 0.0, "color": _colour("NPU")},
+                 "x_mm": 8.0, "y_mm": 0.0, "color": _colour("NPU"),
+                 "power_pattern": "mac_array"},
                 {"id": "sram", "name": "SRAM", "w_mm": 6.0, "h_mm": 6.0, "power_w": 2.0,
                  "x_mm": 0.0, "y_mm": 8.0, "color": _colour("SRAM")},
             ],

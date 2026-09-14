@@ -70,13 +70,16 @@ def brute_force_optimum(cache, pkg, chiplets):
                 rise = np.asarray(result.field_k, dtype=np.float64) - model.package.t_ambient_k
                 spots.append(((float(x), float(y)), rise))
         options.append(spots)
+    # The same assembly rule the engine applies, written independently here:
+    # a pair is legal when it clears the keep-out in x or in y.
+    keepout = pkg.keepout_enforced_um * 1e-3
     best, best_xy = np.inf, None
     for combo in itertools.product(*options):
         rects = [(xy[0], xy[1], c["w_mm"], c["h_mm"]) for (xy, _), c in zip(combo, chiplets)]
-        overlap = any(min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]) > 1e-9
-                      and min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]) > 1e-9
-                      for a, b in itertools.combinations(rects, 2))
-        if overlap:
+        too_close = any(min(a[0] + a[2], b[0] + b[2]) + keepout - max(a[0], b[0]) > 1e-9
+                        and min(a[1] + a[3], b[1] + b[3]) + keepout - max(a[1], b[1]) > 1e-9
+                        for a, b in itertools.combinations(rects, 2))
+        if too_close:
             continue
         peak = float(sum(rise for _, rise in combo).max()) + pkg.ambient_c
         if peak < best:
@@ -129,6 +132,168 @@ class TestEngineSolve:
             E.parse_chiplets([chip("a", 2.3, 2, 1, 0, 0)], pkg)
         with pytest.raises(E.StudioError, match="at least one"):
             E.parse_chiplets([], pkg)
+
+
+class TestInternalPowerMap:
+    """A chiplet is not a uniform heater. An NPU's MAC array, a GPU's engines
+    and a CPU's core complex draw most of the current over part of the die,
+    and the junction follows the hot region, not the average."""
+
+    def test_the_same_watts_run_hotter_when_they_are_concentrated(self, cache):
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        base = {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8,
+                "x_mm": 7, "y_mm": 7}
+        peaks = {}
+        for pattern in ("uniform", "quad_cores", "two_engines", "mac_array"):
+            chiplets = E.parse_chiplets([dict(base, power_pattern=pattern)], pkg)
+            out = E.solve(cache, pkg, chiplets)
+            peaks[pattern] = out["peak"]["t_c"]
+            # Conservation is not optional: the watts must still all arrive.
+            v = out["verification"]
+            assert v["deposited_w"] == pytest.approx(8.0, rel=1e-9)
+            assert v["sink_heat_w"] == pytest.approx(8.0, rel=1e-9)
+        assert peaks["uniform"] < peaks["quad_cores"] < peaks["two_engines"] < peaks["mac_array"]
+        # And the effect is worth modelling: a MAC array is >10 K hotter than
+        # the uniform assumption at identical power.
+        assert peaks["mac_array"] - peaks["uniform"] > 10.0
+
+    def test_the_hot_region_density_is_reported_not_just_the_average(self, cache):
+        pkg = spec(size_mm=20.0)
+        chiplets = E.parse_chiplets([{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5,
+                                      "power_w": 8, "x_mm": 6, "y_mm": 6,
+                                      "power_pattern": "mac_array"}], pkg)
+        row = E.solve(cache, pkg, chiplets)["chiplets"][0]
+        assert row["density_w_cm2"] == pytest.approx(32.0)          # 8 W over 25 mm^2
+        assert row["hottest_density_w_cm2"] > 50.0                  # 70 % over 40 % of it
+        assert row["power_pattern"] == "mac_array"
+
+    def test_blocks_land_on_cells_and_never_round_away(self):
+        """A block smaller than one cell still has to go somewhere: rounding
+        it away would move its power back into the uniform part silently."""
+        from src.experiment import PowerBlock, block_cells, uniform_share
+        tiny = (PowerBlock(0.45, 0.45, 0.02, 0.02, 0.5),)
+        assert block_cells(4, 4, tiny) == ((2, 2, 1, 1, 0.5),)
+        assert uniform_share(tiny) == pytest.approx(0.5)
+        # A block that would run past the edge is clipped to the footprint.
+        wide = (PowerBlock(0.75, 0.0, 0.5, 1.0, 0.4),)
+        i0, j0, w, h, share = block_cells(4, 4, wide)[0]
+        assert i0 + w <= 4 and j0 + h <= 4 and share == 0.4
+
+    def test_two_chiplets_of_one_size_but_different_maps_are_solved_apart(self, cache):
+        """The optimizer shares single-chiplet solves between identical
+        footprints. Identical must include what is inside them."""
+        pkg = spec(size_mm=20.0)
+        raw = [{"id": "a", "name": "A", "w_mm": 4, "h_mm": 4, "power_w": 6,
+                "x_mm": 0, "y_mm": 0, "power_pattern": "mac_array"},
+               {"id": "b", "name": "B", "w_mm": 4, "h_mm": 4, "power_w": 6,
+                "x_mm": 10, "y_mm": 10, "power_pattern": "uniform"}]
+        chiplets = E.parse_chiplets(raw, pkg)
+        model, _ = cache.get(pkg)
+        sizes = [(8, 8), (8, 8)]
+        positions = [np.array([(0, 0), (20, 20)]), np.array([(0, 0), (20, 20)])]
+        with model.lock:
+            fields = E.unit_fields(model, chiplets, positions, sizes)
+        assert not np.allclose(fields[0], fields[1]), "the two maps shared one solve"
+
+    @pytest.mark.parametrize("blocks, message", [
+        ([[0.1, 0.1, 0.5, 0.5, 0.7], [0.1, 0.1, 0.5, 0.5, 0.7]], "more than the chiplet has"),
+        ([[0.8, 0.1, 0.5, 0.2, 0.3]], "past the edge"),
+        ([[0.1, 0.1, 0.5, 0.5]], r"\[x, y, width, height, share\]"),
+        ([[0.1, 0.1, 0.0, 0.5, 0.3]], "inside the footprint"),
+    ])
+    def test_an_impossible_internal_map_is_refused(self, blocks, message):
+        pkg = spec()
+        with pytest.raises(E.StudioError, match=message):
+            E.parse_chiplets([{"id": "a", "name": "A", "w_mm": 4, "h_mm": 4, "power_w": 5,
+                               "x_mm": 0, "y_mm": 0, "blocks": blocks}], pkg)
+
+    def test_an_unknown_pattern_is_refused_with_the_list(self):
+        pkg = spec()
+        with pytest.raises(E.StudioError, match="power_pattern must be one of"):
+            E.parse_chiplets([{"id": "a", "name": "A", "w_mm": 4, "h_mm": 4, "power_w": 5,
+                               "x_mm": 0, "y_mm": 0, "power_pattern": "sprinkles"}], pkg)
+
+    def test_the_optimizer_still_proves_its_answer_with_internal_maps(self, cache):
+        """Superposition does not care where inside a chiplet the heat is, as
+        long as the unit field is built the same way -- and the re-solve check
+        is what proves it did."""
+        pkg = spec(size_mm=20.0, pitch_mm=4.0)
+        raw = [{"id": "npu", "name": "NPU", "w_mm": 4, "h_mm": 4, "power_w": 8,
+                "x_mm": 0, "y_mm": 0, "power_pattern": "mac_array"},
+               {"id": "cpu", "name": "CPU", "w_mm": 4, "h_mm": 4, "power_w": 5,
+                "x_mm": 12, "y_mm": 12, "power_pattern": "quad_cores"}]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
+        assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
+
+
+class TestAssemblyKeepOut:
+    """Chiplets that touch cannot be built: underfill has to flow between
+    them and the microbump dispense has a tolerance. The rule is a minimum
+    edge-to-edge clearance, and the optimizer has to respect it or it is
+    returning layouts nobody can assemble."""
+
+    @staticmethod
+    def pairs_clear(placement, keepout_mm):
+        """Every pair clears in x or in y, checked from the reported layout."""
+        for a, b in itertools.combinations(placement, 2):
+            gx = max(a["x_mm"], b["x_mm"]) - min(a["x_mm"] + a["w_mm"], b["x_mm"] + b["w_mm"])
+            gy = max(a["y_mm"], b["y_mm"]) - min(a["y_mm"] + a["h_mm"], b["y_mm"] + b["h_mm"])
+            if max(gx, gy) < keepout_mm - 1e-9:
+                return False, (a["id"], b["id"], max(gx, gy))
+        return True, None
+
+    def test_the_mesh_rounds_the_keep_out_up_never_down(self):
+        """A chiplet edge lands on a cell boundary, so a 100 um keep-out on a
+        0.5 mm mesh is enforced as 0.5 mm. Rounding down would report a rule
+        that was not applied."""
+        assert spec(keepout_um=0.0).keepout_cells == 0
+        fine = spec(size_mm=20.0, keepout_um=100.0)
+        assert fine.cell_mm == 0.5
+        assert (fine.keepout_cells, fine.keepout_enforced_um) == (1, 500.0)
+        assert spec(size_mm=20.0, keepout_um=600.0).keepout_cells == 2
+        assert spec(size_mm=30.0, keepout_um=100.0).keepout_enforced_um == 1000.0   # 1 mm mesh
+
+    def test_touching_and_corner_touching_are_both_refused(self, cache):
+        pkg = spec(keepout_um=100.0)
+        touching = [chip("a", 2, 2, 3.0, 0, 0), chip("b", 2, 2, 3.0, 2, 0)]
+        out = E.solve(cache, pkg, E.parse_chiplets(touching, pkg))
+        assert out["ok"] is False and any("keep-out" in v for v in out["violations"])
+
+        corner = [chip("a", 2, 2, 3.0, 0, 0), chip("b", 2, 2, 3.0, 2, 2)]
+        out = E.solve(cache, pkg, E.parse_chiplets(corner, pkg))
+        assert out["ok"] is False and any("keep-out" in v for v in out["violations"])
+
+        # The same layouts are legal with the rule switched off.
+        loose = spec(keepout_um=0.0)
+        assert E.solve(cache, loose, E.parse_chiplets(touching, loose))["ok"]
+        assert E.solve(cache, loose, E.parse_chiplets(corner, loose))["ok"]
+
+    def test_the_optimizer_returns_a_layout_that_can_be_built(self, cache):
+        pkg = spec(keepout_um=100.0)
+        raw = [chip("hot", 2, 2, 6.0, 0, 0), chip("mid", 4, 2, 3.0, 4, 0), chip("big", 4, 4, 2.0, 0, 4)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        ok, offender = self.pairs_clear(out["optimized"]["placement"], pkg.keepout_enforced_um * 1e-3)
+        assert ok, f"optimizer returned an unbuildable layout: {offender}"
+        cert = out["certificate"]
+        assert cert["keepout_um"] == 100.0 and cert["keepout_enforced_um"] == 500.0
+
+    def test_the_rule_costs_temperature_and_the_engine_says_so(self, cache):
+        """The constrained optimum cannot be cooler than the unconstrained
+        one -- and quoting the cheaper number would be quoting a layout that
+        cannot be assembled."""
+        raw = [chip("hot", 2, 2, 6.0, 0, 0), chip("mid", 4, 2, 3.0, 4, 0), chip("big", 4, 4, 2.0, 0, 4)]
+        loose = spec(keepout_um=0.0)
+        strict = spec(keepout_um=100.0)
+        free = E.optimize(cache, loose, E.parse_chiplets(raw, loose))
+        built = E.optimize(cache, strict, E.parse_chiplets(raw, strict))
+        assert built["certificate"]["lattice_optimum_c"] >= free["certificate"]["lattice_optimum_c"] - 1e-9
+
+    def test_a_start_that_cannot_be_built_is_refused_not_optimized(self, cache):
+        pkg = spec(keepout_um=100.0)
+        touching = E.parse_chiplets([chip("a", 2, 2, 3.0, 0, 0), chip("b", 2, 2, 3.0, 2, 0)], pkg)
+        with pytest.raises(E.StudioError, match="keep-out"):
+            E.optimize(cache, pkg, touching)
 
 
 class TestStackEditor:
@@ -267,7 +432,9 @@ class TestExactOptimizer:
 
     def test_identical_chiplets_are_handled_exactly(self, cache):
         pkg = spec()
-        raw = [chip("c0", 2, 2, 4.0, 0, 0), chip("c1", 2, 2, 4.0, 2, 0), chip("m", 4, 2, 2.0, 0, 6)]
+        # The start must itself satisfy the keep-out: the engine refuses to
+        # optimize from a placement it would not report.
+        raw = [chip("c0", 2, 2, 4.0, 0, 0), chip("c1", 2, 2, 4.0, 4, 0), chip("m", 4, 2, 2.0, 0, 6)]
         truth, _xy = brute_force_optimum(cache, pkg, raw)
         out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
         assert out["certificate"]["identical_chiplets"] == 1
@@ -298,19 +465,25 @@ class TestExactOptimizer:
         signatures = [(sizes[i], chiplets[i].power_w) for i in range(len(chiplets))]
         value, choice, stats = E.branch_and_bound(
             fields, positions, sizes, signatures, (np.inf, None),
-            bound_cells=model.bound_cells, improve_incumbent=False)
+            bound_cells=model.bound_cells, clearance_cells=pkg.keepout_cells,
+            improve_incumbent=False)
         assert choice is not None
         assert stats.pruned_bound > 0          # the bound did real work
         # Two different factorizations of the same system agree to ~1e-9 K.
         assert value + pkg.ambient_c == pytest.approx(truth, abs=1e-7)
 
     def test_reproduces_the_projects_validated_optimum(self, cache):
-        """The canonical experiment's exhaustive optimum, measured by the
-        independent src/exhaustive.py search: 70.2110 degC."""
+        """The canonical experiment's optimum under every rule the product
+        enforces: power at the active plane, the half-cell sink resistance,
+        the 100 um assembly keep-out, and each chiplet's internal power map.
+        With uniform chiplets and no keep-out the same case optimizes to
+        70.2273 degC -- the difference is not noise, it is what those rules
+        cost, and quoting the lower number would be quoting a package nobody
+        can build out of parts nobody makes."""
         sc = next(s for s in scenarios() if s["id"] == "edge-ai-soc")
         pkg = E.PackageSpec.parse(sc["package"])
         out = E.optimize(cache, pkg, E.parse_chiplets(sc["chiplets"], pkg))
-        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(70.2273, abs=5e-5)
+        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(73.7656, abs=5e-5)
         assert out["certificate"]["combinations"] == 8_294_400
 
     def test_an_optimal_start_is_kept(self, cache):

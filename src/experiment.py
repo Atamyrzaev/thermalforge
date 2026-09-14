@@ -85,6 +85,29 @@ class ExperimentError(Exception):
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class PowerBlock:
+    """A region INSIDE a chiplet that carries more than its share of the power.
+
+    A chiplet is not a uniform heater: an NPU's MAC array, a GPU's shader
+    cluster or a CPU's core complex occupies part of the die and draws most
+    of the current, and that is where the junction actually runs hottest.
+    Blocks are stored as fractions of the footprint so they survive a resize
+    or a rotation, and `share` is the fraction of the chiplet's power the
+    block carries. Whatever the blocks do not take is spread over the rest of
+    the footprint, so the chiplet's total power is unchanged.
+    """
+    x_frac: float
+    y_frac: float
+    w_frac: float
+    h_frac: float
+    share: float
+
+    def transposed(self) -> "PowerBlock":
+        """The block as it sits after the chiplet is rotated 90 degrees."""
+        return PowerBlock(self.y_frac, self.x_frac, self.h_frac, self.w_frac, self.share)
+
+
+@dataclass(frozen=True)
 class ChipletDef:
     """WHAT a chiplet is: a rectangular footprint carrying a fixed power.
 
@@ -98,6 +121,7 @@ class ChipletDef:
     width_um: float
     height_um: float
     power_w: float
+    blocks: Tuple[PowerBlock, ...] = ()      # internal hotspots; empty means uniform
 
     @property
     def width_m(self) -> float:
@@ -246,9 +270,16 @@ def origin_cells(package: Package, x_m: float, y_m: float) -> Tuple[int, int]:
 
 
 def validate_placement(package: Package, catalog: Tuple[ChipletDef, ...],
-                       placement: Placement) -> List[str]:
+                       placement: Placement, keepout_m: float = 0.0) -> List[str]:
     """Every physical constraint a placement must satisfy, as a list of
     violations in plain language. An empty list means valid.
+
+    `keepout_m` is the minimum edge-to-edge clearance between any two
+    chiplets -- assembly needs room for underfill to flow and for microbump
+    dispense tolerance, so touching neighbours are not buildable even though
+    they are geometrically disjoint. The rule is the standard spacing one:
+    two chiplets are legal when they clear each other by at least the
+    keep-out in x OR in y, which also refuses corner-to-corner contact.
 
     Returned rather than raised: the caller decides whether an invalid
     placement is a refusal to run (the initial one) or a defect in the
@@ -300,6 +331,13 @@ def validate_placement(package: Package, catalog: Tuple[ChipletDef, ...],
         if ox > tol_m and oy > tol_m:
             violations.append(
                 f"{a} and {b} overlap by {ox * 1e6:.1f} x {oy * 1e6:.1f} um")
+        elif keepout_m > 0.0 and ox > tol_m - keepout_m and oy > tol_m - keepout_m:
+            # Disjoint, but not by enough: the clearance is the larger of the
+            # two axis gaps, since clearing in one axis is what assembly needs.
+            clearance = max(max(-ox, -oy), 0.0)
+            violations.append(
+                f"{a} and {b} clear each other by only {clearance * 1e6:.0f} um; "
+                f"the keep-out is {keepout_m * 1e6:.0f} um")
     return violations
 
 
@@ -372,6 +410,30 @@ class PowerMap:
         return int(np.count_nonzero(self.q_w_m3))
 
 
+def block_cells(nvx: int, nvy: int, blocks: Tuple[PowerBlock, ...]
+                ) -> Tuple[Tuple[int, int, int, int, float], ...]:
+    """Internal blocks as whole cells: (i, j, cells_x, cells_y, share).
+
+    A block is rounded to the cells it covers and never rounds away to
+    nothing -- a MAC array smaller than one cell still has to go somewhere,
+    and dropping it would quietly move its power back into the uniform part.
+    The cells are relative to the chiplet's own origin.
+    """
+    out = []
+    for b in blocks:
+        i0 = min(nvx - 1, max(0, int(round(b.x_frac * nvx))))
+        j0 = min(nvy - 1, max(0, int(round(b.y_frac * nvy))))
+        w = max(1, min(nvx - i0, int(round(b.w_frac * nvx))))
+        h = max(1, min(nvy - j0, int(round(b.h_frac * nvy))))
+        out.append((i0, j0, w, h, b.share))
+    return tuple(out)
+
+
+def uniform_share(blocks: Tuple[PowerBlock, ...]) -> float:
+    """The fraction of a chiplet's power that is NOT in a block."""
+    return 1.0 - sum(b.share for b in blocks)
+
+
 def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
                     placement: Placement,
                     plane: str = POWER_PLANE_DEFAULT) -> PowerMap:
@@ -397,8 +459,19 @@ def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
             raise ExperimentError(
                 f"'{c.id}' does not fit in the mesh at cell ({i0}, {j0}) with extent "
                 f"{nvx} x {nvy}; call validate_placement() first")
+        # The part of the power that is spread over the whole footprint...
+        rest = uniform_share(c.blocks)
+        if rest < -1e-9:
+            raise ExperimentError(
+                f"{c.id}: internal blocks claim {1.0 - rest:.3f} of the power, which is "
+                f"more than the chiplet has")
         n_cells = nvx * nvy * nk
-        q[i0:i0 + nvx, j0:j0 + nvy, z0:z1] += c.power_w / (n_cells * package.cell_volume_m3)
+        q[i0:i0 + nvx, j0:j0 + nvy, z0:z1] += c.power_w * rest / (n_cells * package.cell_volume_m3)
+        # ... and each internal block's own share, over its own cells.
+        for bi, bj, bw, bh, share in block_cells(nvx, nvy, c.blocks):
+            cells = bw * bh * nk
+            q[i0 + bi:i0 + bi + bw, j0 + bj:j0 + bj + bh, z0:z1] += (
+                c.power_w * share / (cells * package.cell_volume_m3))
         blocks.append((c.id, i0, j0, nvx, nvy))
 
     per_chiplet = tuple(
