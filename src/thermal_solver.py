@@ -148,8 +148,9 @@ STEADY_CG_MAXITER = 200_000
 #      it is free when the answer is right. It exists to catch a REPORTING
 #      error rather than a solver one: any quantity that is not actually a
 #      peak (a temperature difference, say) fails it immediately. Check 2
-#      pins the mean sink-face rise to P/(h*A), so this transitively enforces
-#      peak_rise >= P/(h*A) -- the convective floor.
+#      pins the heat leaving the sink face to P, and the sink face can only
+#      shed P by sitting at least P/(h*A) above ambient, so this transitively
+#      enforces peak_rise >= P/(h*A) -- the convective floor.
 #
 # All three are cheap beside the solve itself (two sparse mat-vecs and a few
 # reductions), so they run on EVERY call rather than as an opt-in debug mode.
@@ -401,13 +402,25 @@ class ThermalSolver:
         the default top sink or 0 for a bottom sink -- per the chosen BC:
           - Dirichlet: half-cell-distance ghost at fixed T_ambient ->
                 coeff = 2 * kz[:, :, sink_k] / dz^2
-          - Robin (convective film): coeff = h_convective / dz
+          - Robin (convective film): the film in SERIES with conduction
+                across the half cell between the last cell centre and the
+                cooled surface, since h is defined on that surface and the
+                unknown sits half a cell inside the material:
+                coeff = 1 / (dz * (dz / (2 kz) + 1 / h))
+            Both limits are the neighbouring case: h -> infinity recovers the
+            Dirichlet coefficient above, and kz -> infinity recovers h / dz.
+            Omitting the half cell under-reports every temperature by the
+            drop it carries -- q_face * dz / (2 kz), measured at 0.004 K for
+            a passive package and 0.13 K under a cold plate -- which is small
+            but one-signed, so it is a bias, not noise.
         Returned as a (nx, ny) array, broadcastable over the sink layer.
         """
+        kz_sink = self.kz_map[:, :, self._sink_k]
         if self.bc.sink_bc == "dirichlet":
-            coeff = 2.0 * self.kz_map[:, :, self._sink_k] / (self.bc.dz ** 2)
+            coeff = 2.0 * kz_sink / (self.bc.dz ** 2)
         else:  # robin
-            coeff = np.full((self.nx, self.ny), self.bc.h_convective / self.bc.dz, dtype=np.float64)
+            resistance = self.bc.dz / (2.0 * kz_sink) + 1.0 / self.bc.h_convective
+            coeff = 1.0 / (self.bc.dz * resistance)
         return coeff
 
     def _build_conduction_operator(self) -> Tuple[sparse.csr_matrix, np.ndarray]:
@@ -1124,11 +1137,17 @@ class ThermalSolver:
         A useful independent check on any result this returns: at steady
         state all generated power must leave through the Robin sink face, so
 
-            mean(T[:, :, sink_k]) - T_ambient == P / (h * A)
+            sum over the face of (T[:, :, sink_k] - T_ambient) / R_cell == P,
+            R_cell = (dz / (2 kz) + 1 / h) / (dx * dy)
 
         exactly, independent of the mesh, where sink_k is the heat-sink face
-        (nz-1 by default, i.e. the die backside). A deviation indicates a
-        failed solve rather than discretization error.
+        (nz-1 by default, i.e. the die backside) and R_cell is that cell's
+        resistance to ambient: conduction across the half cell to the cooled
+        surface, then the film. A deviation indicates a failed solve rather
+        than discretization error. (The surface itself still sits exactly
+        P/(h*A) above ambient on average -- that is the convective floor --
+        but the last cell CENTRE sits above the surface by the half-cell
+        drop, so the two differ by a mesh-dependent amount.)
 
         Parameters
         ----------

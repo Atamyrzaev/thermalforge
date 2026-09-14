@@ -327,6 +327,30 @@ def neighbour_and_edge_gaps_m(package: Package, catalog: Tuple[ChipletDef, ...],
 # Power map: chiplet geometry + power -> cell-level source Q
 # ---------------------------------------------------------------------------
 
+POWER_PLANES = ("active", "volume")
+POWER_PLANE_DEFAULT = "active"
+
+
+def power_z_range(package: "Package", plane: str = POWER_PLANE_DEFAULT) -> Tuple[int, int]:
+    """The [start, end) die cells a chiplet's heat is deposited in.
+
+    "active" -- the device layer: ONE cell at the bumped face of the die. A
+    flip-chip die generates its heat in a device layer under a micrometre
+    thick, sitting against the bumps, with the sink on the opposite
+    (backside) face. The mesh cannot resolve a micrometre, so the source is
+    one cell (dz) thick, but it sits at the correct face, which is what sets
+    the conduction path to the sink.
+
+    "volume" -- power spread evenly through the whole die thickness. This was
+    the earlier convention; it is kept so the two can be compared, and is
+    what the transient warm-up mass of the older results assumed.
+    """
+    if plane not in POWER_PLANES:
+        raise ExperimentError(f"power plane must be one of {POWER_PLANES}, got {plane!r}")
+    z0, z1 = package.die_z
+    return (z0, min(z0 + 1, z1)) if plane == "active" else (z0, z1)
+
+
 @dataclass(frozen=True)
 class PowerMap:
     """The cell-level heat source, and the evidence that it is the catalog's.
@@ -340,6 +364,8 @@ class PowerMap:
     specified_w: float
     deposited_w: float
     blocks: Tuple[Tuple[str, int, int, int, int], ...]   # id, i0, j0, nvx, nvy
+    plane: str = POWER_PLANE_DEFAULT
+    plane_z: Tuple[int, int] = (0, 0)
 
     @property
     def powered_cells(self) -> int:
@@ -347,7 +373,8 @@ class PowerMap:
 
 
 def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
-                    placement: Placement) -> PowerMap:
+                    placement: Placement,
+                    plane: str = POWER_PLANE_DEFAULT) -> PowerMap:
     """Builds Q from geometry: for each chiplet, its power divided by the
     volume of the cells its own footprint covers through the die layer.
 
@@ -355,7 +382,7 @@ def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
     array (POWER_REL_TOL), so a footprint rounding error can never quietly
     create or destroy watts.
     """
-    z0, z1 = package.die_z
+    z0, z1 = power_z_range(package, plane)
     nk = z1 - z0
     if nk <= 0:
         raise ExperimentError(f"die layer is empty: z[{z0}:{z1}]")
@@ -386,7 +413,8 @@ def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
 
     q.setflags(write=False)
     return PowerMap(q_w_m3=q, per_chiplet_w=per_chiplet, specified_w=specified,
-                    deposited_w=deposited, blocks=tuple(blocks))
+                    deposited_w=deposited, blocks=tuple(blocks), plane=plane,
+                    plane_z=(z0, z1))
 
 
 def build_stack(config: PipelineConfig) -> GridBuilder:
@@ -455,17 +483,23 @@ def sink_heat_w(package: Package, solver: ThermalSolver, field_k: np.ndarray) ->
     """
     k = package.nz - 1 if package.sink_face == "top" else 0
     rise = field_k[:, :, k] - package.t_ambient_k
+    area = package.dx * package.dy
     if package.sink_bc == "robin":
-        return float(np.sum(package.h_convective * package.dx * package.dy * rise))
+        # The film in series with conduction across the half cell between the
+        # last cell centre and the cooled surface, matching the boundary the
+        # solver assembles -- written out here from the physics rather than
+        # read from the solver, so agreement remains evidence.
+        resistance = package.dz / (2.0 * solver.kz_map[:, :, k]) + 1.0 / package.h_convective
+        return float(np.sum(area * rise / resistance))
     # Dirichlet: conduction across the half cell between the last cell centre
     # and the face held at ambient.
-    conductance = 2.0 * solver.kz_map[:, :, k] * package.dx * package.dy / package.dz
+    conductance = 2.0 * solver.kz_map[:, :, k] * area / package.dz
     return float(np.sum(conductance * rise))
 
 
 def solve_placement(solver: ThermalSolver, package: Package,
                     catalog: Tuple[ChipletDef, ...], placement: Placement,
-                    label: str) -> ThermalResult:
+                    label: str, plane: str = POWER_PLANE_DEFAULT) -> ThermalResult:
     """Solves ONE placement with the real thermal solver.
 
     solve_steady_state() raises unless its residual, energy-balance and
@@ -475,7 +509,7 @@ def solve_placement(solver: ThermalSolver, package: Package,
     them. That read-only use of two private members is deliberate and pinned
     by a test; nothing here mutates solver state beyond q_map.
     """
-    power = build_power_map(package, catalog, placement)
+    power = build_power_map(package, catalog, placement, plane)
     solver.q_map[:] = power.q_w_m3            # the one input a placement changes
 
     t0 = time.perf_counter()

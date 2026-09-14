@@ -890,7 +890,12 @@ class TestSteadyStateVerification:
 
         dx, dy = config.grid.dx, config.grid.dy
         h = config.boundary_conditions.h_convective
-        p_out = float(np.sum(h * dx * dy * (T[:, :, nz - 1] - solver.bc.t_ambient_k)))
+        # Written from the physics, not from any solver internal: each sink
+        # cell loses heat through conduction across its own half cell (copper
+        # here) and then the film.
+        k_sink = MATERIALS["copper"]["k"]
+        resistance = config.grid.dz / (2.0 * k_sink) + 1.0 / h
+        p_out = float(np.sum(dx * dy * (T[:, :, nz - 1] - solver.bc.t_ambient_k) / resistance))
         assert p_out == pytest.approx(power_w, rel=1e-9)
 
     def test_cg_path_matches_the_exact_direct_solve(self):
@@ -1250,9 +1255,14 @@ class TestSteadyStateBackend:
 
         T = solver.solve_steady_state(apply_result=False)
         rise = float(np.mean(T[:, :, solver._sink_k])) - solver.bc.t_ambient_k
-        expected = self._analytic_mean_bottom_rise(config, config.power.die_power_w)
-
-        assert rise == pytest.approx(expected, rel=1e-6)
+        floor = self._analytic_mean_bottom_rise(config, config.power.die_power_w)
+        # The cell centre sits half a cell inside the silicon, so it carries
+        # the whole outgoing flux across that half cell on top of the floor.
+        flux = config.power.die_power_w / (config.grid.nx * config.grid.dx
+                                           * config.grid.ny * config.grid.dy)
+        half_cell = flux * config.grid.dz / (2.0 * MATERIALS["silicon"]["k"])
+        assert rise == pytest.approx(floor + half_cell, rel=1e-6)
+        assert rise - half_cell == pytest.approx(floor, rel=1e-6)
 
     def test_cg_path_matches_direct_path_on_an_anisotropic_mesh(self):
         """The two backends must agree ON A MESH THAT ACTUALLY BREAKS THE OLD
@@ -1299,9 +1309,13 @@ class TestSteadyStateBackend:
         assert np.max(np.abs(T_direct - T_iter)) < 1e-6
         # and the iterative result independently satisfies the physical invariant
         rise = float(np.mean(T_iter[:, :, solver_iter._sink_k])) - solver_iter.bc.t_ambient_k
-        assert rise == pytest.approx(
-            self._analytic_mean_bottom_rise(config, config.power.die_power_w), rel=1e-6
-        )
+        floor = self._analytic_mean_bottom_rise(config, config.power.die_power_w)
+        # The sink cell centre carries the outgoing flux across its own half
+        # cell before the film, so it sits that much above the floor.
+        flux = config.power.die_power_w / (config.grid.nx * config.grid.dx
+                                           * config.grid.ny * config.grid.dy)
+        half_cell = flux * config.grid.dz / (2.0 * MATERIALS["silicon"]["k"])
+        assert rise == pytest.approx(floor + half_cell, rel=1e-6)
 
     def test_cached_factorization_still_tracks_a_changed_power_map(self):
         """The LU factorization is cached across calls because M depends only
@@ -1667,7 +1681,10 @@ class TestStage2PowerMatchesStage1:
         opt._apply_layout_to_q_map(opt.shelf_packed_layout())
         T = opt.solver.solve_steady_state(apply_result=False)
         mean_bottom_rise = float(np.mean(T[:, :, opt.solver._sink_k])) - opt.solver.bc.t_ambient_k
-        assert mean_bottom_rise == pytest.approx(expected_floor, rel=1e-6)
+        # The sink cell centre carries the outgoing flux across its own half
+        # cell before the film, so it sits that much above the floor.
+        half_cell = (12.0 / area) * config.grid.dz / (2.0 * MATERIALS["silicon"]["k"])
+        assert mean_bottom_rise == pytest.approx(expected_floor + half_cell, rel=1e-6)
 
     def test_scaling_rejects_a_zero_power_catalog(self):
         dead = (ChipletSpec(name="a", width_um=1000.0, depth_um=1000.0, power_w=0.0),)
@@ -1938,16 +1955,21 @@ class TestCoolingPresets:
 
     @pytest.mark.parametrize("preset", ["passive-lowpower", "cowos-coldplate"])
     def test_printed_floor_is_the_solved_mean_sink_rise(self, preset):
-        """The header's floor is not decoration: at steady state the mean
-        sink-face rise equals P/(h*A) exactly, so the number printed before
-        the solve must match the field after it, and the measured R_ja can
-        never fall below it."""
+        """The header's floor is not decoration: at steady state the cooled
+        SURFACE sits exactly P/(h*A) above ambient, so the number printed
+        before the solve must match the field after it, and the measured R_ja
+        can never fall below it. The solved field reports cell centres, which
+        sit half a cell inside the silicon -- add that drop back and the
+        printed floor must reappear exactly."""
         config = self._flags("--preset", preset)
         regime = main_module.regime_summary(config)
         solver = ThermalSolver.from_grid_builder(main_module.build_chiplet_stack(config))
         T = solver.solve_steady_state(apply_result=False)
         mean_rise = float(np.mean(T[:, :, solver._sink_k])) - solver.bc.t_ambient_k
-        assert mean_rise == pytest.approx(regime["floor_rise_k"], rel=1e-9)
+        area = (config.grid.nx * config.grid.dx) * (config.grid.ny * config.grid.dy)
+        half_cell = (config.power.die_power_w / area) * config.grid.dz / (2.0 * MATERIALS["silicon"]["k"])
+        assert mean_rise - half_cell == pytest.approx(regime["floor_rise_k"], rel=1e-9)
+        assert mean_rise > regime["floor_rise_k"]
         peak_rise = float(np.max(T)) - solver.bc.t_ambient_k
         assert peak_rise / config.power.die_power_w >= regime["r_conv_k_per_w"]
 
@@ -2649,19 +2671,52 @@ class TestExperimentPowerMap:
             assert deposited[c.id] == pytest.approx(c.power_w, rel=1e-12)
         assert power.deposited_w == pytest.approx(power.specified_w, rel=1e-12)
 
-    def test_power_lives_only_in_the_footprints_and_the_die_layer(self):
+    def test_power_lives_only_in_the_footprints_and_the_active_plane(self):
+        """Heat enters at the device layer: the first die cell, against the
+        bumps, with the sink on the opposite face."""
         exp = make_experiment()
         power = experiment_module.build_power_map(exp.package, exp.catalog,
                                                   exp.initial_placement)
         q = np.asarray(power.q_w_m3)
-        z0, z1 = exp.package.die_z
-        assert not np.any(q[:, :, :z0]), "power below the die layer"
-        assert not np.any(q[:, :, z1:]), "power above the die layer"
+        die0, die1 = exp.package.die_z
+        z0, z1 = experiment_module.power_z_range(exp.package)
+        assert (z0, z1) == (die0, die0 + 1), "the active plane is the first die cell"
+        assert not np.any(q[:, :, :z0]), "power below the active plane"
+        assert not np.any(q[:, :, z1:]), "power above the active plane"
         covered = np.zeros(q.shape[:2], dtype=bool)
         for _cid, i0, j0, nvx, nvy in power.blocks:
             covered[i0:i0 + nvx, j0:j0 + nvy] = True
         assert not np.any(q[~covered, :]), "power outside every chiplet footprint"
         assert np.all(q[covered, z0:z1] > 0.0)
+        assert die1 > z1, "the rest of the die carries no source, only conduction"
+
+    def test_volume_convention_is_still_available_and_conserves_power(self):
+        """The older whole-die convention is kept so the two can be compared;
+        both deposit exactly the catalog's watts."""
+        exp = make_experiment()
+        active = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                   exp.initial_placement, "active")
+        volume = experiment_module.build_power_map(exp.package, exp.catalog,
+                                                   exp.initial_placement, "volume")
+        z0, z1 = exp.package.die_z
+        assert np.any(np.asarray(volume.q_w_m3)[:, :, z1 - 1]), "volume mode fills the die"
+        assert volume.deposited_w == pytest.approx(active.deposited_w, rel=1e-12)
+        assert volume.deposited_w == pytest.approx(volume.specified_w, rel=1e-12)
+        assert volume.powered_cells > active.powered_cells
+        with pytest.raises(experiment_module.ExperimentError):
+            experiment_module.build_power_map(exp.package, exp.catalog,
+                                              exp.initial_placement, "everywhere")
+
+    def test_the_active_plane_is_hotter_than_spreading_power_through_the_die(self):
+        """Why the convention matters: the same watts, entering at the face
+        furthest from the sink, cannot be cooler."""
+        exp = make_experiment()
+        exp.solve_initial()
+        hot = exp.initial.peak_c
+        cool = experiment_module.solve_placement(
+            exp.solver, exp.package, exp.catalog, exp.initial_placement,
+            "volume-convention", "volume").peak_c
+        assert hot >= cool - 1e-9
 
     def test_moving_a_chiplet_moves_its_power(self):
         exp = make_experiment()

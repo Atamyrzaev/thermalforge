@@ -266,10 +266,10 @@ class ExhaustivePlacementSearch:
         x0, y0 = pos
         solver = self.opt.solver
         solver.q_map[:] = 0.0
-        n_cells = nvx * nvy * self.opt._die_thickness_vox
+        n_cells = nvx * nvy * self.opt._power_thickness_vox
         q = spec.power_w / (n_cells * self.opt._cell_volume)
         solver.q_map[x0:x0 + nvx, y0:y0 + nvy,
-                     self.opt.die_z_start:self.opt.die_z_end] += q
+                     self.opt.power_z_start:self.opt.power_z_end] += q
         field = solver.solve_steady_state(apply_result=False)
         return field - self._t_amb
 
@@ -286,9 +286,9 @@ class ExhaustivePlacementSearch:
         s = self.opt.solver
         N = self.opt.nx * self.opt.ny * self.opt.nz
         s.q_map[:] = 0.0
-        n_cells = nvx * nvy * self.opt._die_thickness_vox
+        n_cells = nvx * nvy * self.opt._power_thickness_vox
         s.q_map[x0:x0 + nvx, y0:y0 + nvy,
-                self.opt.die_z_start:self.opt.die_z_end] += (
+                self.opt.power_z_start:self.opt.power_z_end] += (
             spec.power_w / (n_cells * self.opt._cell_volume))
         forcing = s._boundary_forcing + s.q_map.reshape(N) / s._rho_cp.reshape(N)
         return -forcing

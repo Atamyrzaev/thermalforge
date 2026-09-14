@@ -84,6 +84,11 @@ select:focus, input:focus { outline: 2px solid rgba(79,140,255,.45); outline-off
   gap: 12px; padding: 12px; min-height: 0;
 }
 .panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
+.panel-toolbar { display: flex; gap: 6px; align-items: center; }
+.toolbar-gap { flex: 1; }
+.btn-icon { font-size: 15px; line-height: 1; padding: 5px 9px; }
+.ask-card { text-align: left; }
+.ask-buttons { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
 .card.grow { flex: 1; min-height: 110px; overflow: auto; }
 .panel.right .card { padding: 12px 14px; }
@@ -212,6 +217,7 @@ select:focus, input:focus { outline: 2px solid rgba(79,140,255,.45); outline-off
 .spinner { width: 34px; height: 34px; border: 3px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; margin: 0 auto; animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); background: #2a1720; border: 1px solid var(--bad); color: #ffd0d5; padding: 10px 18px; border-radius: 8px; z-index: 60; max-width: 80vw; }
+.toast.info { background: #12243a; border-color: var(--blue); color: #cfe0ff; }
 .footer { padding: 6px 18px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); background: var(--bg-2); text-align: center; }
 
 @media (max-width: 1280px) {

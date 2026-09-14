@@ -188,7 +188,7 @@ class TestExactOptimizer:
         sc = next(s for s in scenarios() if s["id"] == "edge-ai-soc")
         pkg = E.PackageSpec.parse(sc["package"])
         out = E.optimize(cache, pkg, E.parse_chiplets(sc["chiplets"], pkg))
-        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(70.2110, abs=5e-5)
+        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(70.2273, abs=5e-5)
         assert out["certificate"]["combinations"] == 8_294_400
 
     def test_an_optimal_start_is_kept(self, cache):

@@ -4,6 +4,7 @@ import { decodeField, getJSON, postJSON } from "./api.js";
 import { drawColorbar } from "./colormap.js";
 import { FloorplanView, escapeHtml } from "./floorplan.js";
 import { columnMax, drawPackageMap, formatW, setupCanvas } from "./mapdraw.js";
+import { History, openDesign, saveDesign } from "./design.js";
 import { downloadReport } from "./report.js";
 import { Viewer3D } from "./viewer3d.js";
 
@@ -34,6 +35,9 @@ const state = {
   jobId: null,
   tab: "floorplan",
   focus: false,
+  scenarioId: null,     // what "Reset" goes back to
+  opened: null,         // design opened from a file, if any
+  dragging: false,
   viewer: null,
   glMode: "current",
 };
@@ -61,9 +65,10 @@ function setStatus(kind, text) {
   $("status-text").textContent = text;
 }
 
-function toast(message) {
+function toast(message, kind = "error") {
   const el = $("toast");
   el.textContent = message;
+  el.className = `toast ${kind === "info" ? "info" : ""}`;
   el.classList.remove("hidden");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => el.classList.add("hidden"), 6000);
@@ -113,6 +118,75 @@ function violations() {
     }
   }
   return { ids, messages };
+}
+
+// ----------------------------------------------------------------- history
+const history = new History();
+
+function snapshot() {
+  return JSON.stringify({ pkg: state.pkg, chiplets: state.chiplets, selectedId: state.selectedId });
+}
+
+// Call BEFORE changing the design. One entry per completed change: a drag
+// records the layout it started from, not every pixel along the way.
+function record() {
+  if (state.pkg) history.push(snapshot());
+}
+
+function restore(json) {
+  const s = JSON.parse(json);
+  state.pkg = s.pkg;
+  state.chiplets = s.chiplets;
+  state.selectedId = s.selectedId;
+  clearOptimization();
+  syncPackageControls();
+  renderAll();
+  requestSolve();
+}
+
+function undo() {
+  if (state.busy || state.animating) return;
+  const s = history.undo(snapshot());
+  if (s) restore(s);
+}
+
+function redo() {
+  if (state.busy || state.animating) return;
+  const s = history.redo(snapshot());
+  if (s) restore(s);
+}
+
+function updateHistoryButtons() {
+  $("btn-undo").disabled = !history.canUndo || state.busy;
+  $("btn-redo").disabled = !history.canRedo || state.busy;
+}
+
+// A yes/no question with an optional third answer. Resolves true, false or "alt".
+function ask({ title, body, ok = "Continue", alt = null, cancel = "Cancel" }) {
+  const overlay = $("ask-overlay");
+  $("ask-title").textContent = title;
+  $("ask-body").textContent = body;
+  $("ask-ok").textContent = ok;
+  $("ask-cancel").textContent = cancel;
+  const altBtn = $("ask-alt");
+  altBtn.textContent = alt || "";
+  altBtn.classList.toggle("hidden", !alt);
+  overlay.classList.remove("hidden");
+  return new Promise((resolve) => {
+    const done = (value) => {
+      overlay.classList.add("hidden");
+      $("ask-ok").onclick = $("ask-cancel").onclick = altBtn.onclick = overlay.onclick = null;
+      window.removeEventListener("keydown", onKey);
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === "Escape") done(false); };
+    $("ask-ok").onclick = () => done(true);
+    $("ask-alt").onclick = () => done("alt");
+    $("ask-cancel").onclick = () => done(false);
+    overlay.onclick = (e) => { if (e.target === overlay) done(false); };
+    window.addEventListener("keydown", onKey);
+    $("ask-ok").focus();
+  });
 }
 
 // ----------------------------------------------------------------- solving
@@ -302,6 +376,13 @@ function select(id) {
 function moveChiplet(id, x, y, dragging) {
   const c = state.chiplets.find((q) => q.id === id);
   if (!c) return;
+  if (dragging) {
+    if (!state.dragging) { record(); state.dragging = true; }
+  } else if (state.dragging) {
+    state.dragging = false;          // end of a drag: already recorded
+  } else {
+    record();                        // a discrete move (arrow key)
+  }
   c.x_mm = x;
   c.y_mm = y;
   renderFloorplan(violations().ids);
@@ -320,6 +401,7 @@ function fitInside(c) {
 function rotateSelected() {
   const c = state.chiplets.find((q) => q.id === state.selectedId);
   if (!c) return;
+  record();
   [c.w_mm, c.h_mm] = [c.h_mm, c.w_mm];
   fitInside(c);
   renderChipletList();
@@ -329,6 +411,7 @@ function rotateSelected() {
 function removeSelected() {
   const n = state.chiplets.findIndex((q) => q.id === state.selectedId);
   if (n < 0) return;
+  record();
   state.chiplets.splice(n, 1);
   state.selectedId = null;
   renderChipletList();
@@ -355,9 +438,13 @@ function addChiplet(key) {
     for (let x = 0; x + c.w_mm <= size + 1e-9; x += step) {
       c.x_mm = x; c.y_mm = y;
       if (!overlapsAny(c)) {
+        record();
         state.chiplets.push(c);
         select(c.id);
         requestSolve();
+        const density = c.power_w / (c.w_mm * c.h_mm / 100);
+        toast(`${c.name} added: ${formatW(c.power_w)} W over ${c.w_mm} × ${c.h_mm} mm `
+          + `= ${density.toFixed(0)} W/cm². Set its power in the editor if that is not your part.`, "info");
         return;
       }
     }
@@ -387,12 +474,54 @@ function syncPackageControls() {
 
 function loadScenario(sc) {
   $("scenario").title = sc.summary || "";
+  state.scenarioId = sc.id;
   state.pkg = { ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
   state.shown = null;
+  history.clear();
   clearOptimization();
   syncPackageControls();
+  renderAll();
+  requestSolve();
+}
+
+function designTitle() {
+  if (state.opened && !state.scenarioId) return state.opened.title;
+  const sel = $("scenario");
+  return sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : "Custom design";
+}
+
+// An opened file becomes the entry the scenario list shows, so "Reset" has
+// something to go back to and the report knows what it is looking at.
+function showOpenedInScenarioList(title) {
+  const sel = $("scenario");
+  let option = sel.querySelector('option[value="__opened"]');
+  if (!option) {
+    option = document.createElement("option");
+    option.value = "__opened";
+    sel.appendChild(option);
+  }
+  option.textContent = title;
+  sel.value = "__opened";
+  sel.title = "Opened from a file";
+}
+
+function resetDesign() {
+  if (state.scenarioId) {
+    const sc = state.scenarios.find((s) => s.id === state.scenarioId);
+    if (sc) { loadScenario(sc); return; }
+  }
+  if (!state.opened) return;
+  const { pkg, chiplets, title } = state.opened;
+  state.pkg = { ...pkg };
+  state.chiplets = chiplets.map((c) => ({ ...c }));
+  state.selectedId = null;
+  state.shown = null;
+  history.clear();
+  clearOptimization();
+  syncPackageControls();
+  showOpenedInScenarioList(title);
   renderAll();
   requestSolve();
 }
@@ -407,8 +536,27 @@ function packageChanged(physics = true) {
 // ------------------------------------------------------------ optimization
 function setBusy(busy) {
   state.busy = busy;
-  for (const id of ["btn-simulate", "btn-optimize", "scenario", "btn-add"]) $(id).disabled = busy;
+  for (const id of ["btn-simulate", "btn-optimize", "scenario", "btn-add",
+                    "btn-open", "btn-reset", "ed-rotate", "ed-delete"]) $(id).disabled = busy;
+  updateHistoryButtons();
   renderFloorplan();
+}
+
+// Rough cost of the proof, from the work it must do: one solve per
+// (chiplet, grid position), measured at ~17 ms per solve on a 19,200-cell
+// model. The search after that is not predictable, which the warning says.
+function estimateProof() {
+  const cell = cellMm(state.pkg), size = state.pkg.size_mm, pitch = state.pkg.pitch_mm;
+  const unknowns = Math.pow(size / cell, 2) * 12;
+  let solves = 0, combos = 1;
+  for (const c of state.chiplets) {
+    const nx = Math.floor((size - c.w_mm) / pitch) + 1;
+    const ny = Math.floor((size - c.h_mm) / pitch) + 1;
+    const n = Math.max(0, nx) * Math.max(0, ny);
+    solves += n;
+    combos *= Math.max(1, n);
+  }
+  return { solves, combos, precompute_s: solves * 0.017 * (unknowns / 19200) };
 }
 
 async function optimize() {
@@ -416,6 +564,28 @@ async function optimize() {
   const bad = violations();
   if (!state.chiplets.length) { toast("Add chiplets first"); return; }
   if (bad.messages.length) { toast(`Fix the placement first: ${bad.messages[0]}`); return; }
+
+  const cost = estimateProof();
+  if (cost.precompute_s > 10) {
+    const coarser = state.pkg.pitch_mm < 2;
+    const answer = await ask({
+      title: "This proof will take a while",
+      body: `A ${state.pkg.pitch_mm} mm placement grid means ${cost.solves.toLocaleString()} single-chiplet `
+        + `solves (about ${Math.round(cost.precompute_s)} s) before the search over `
+        + `${compact(cost.combos)} layouts even starts, and the search itself can take longer. `
+        + (coarser ? "A 2 mm grid answers in a few seconds." : ""),
+      ok: "Run it anyway",
+      alt: coarser ? "Use the 2 mm grid" : null,
+    });
+    if (!answer) return;
+    if (answer === "alt") {
+      record();
+      state.pkg.pitch_mm = 2;
+      syncPackageControls();
+      clearOptimization();
+      renderFloorplan();
+    }
+  }
   setBusy(true);
   for (const id of ["opt-best", "opt-combos", "opt-leaves", "opt-elapsed"]) $(id).textContent = "–";
   $("opt-stage").textContent = "Starting…";
@@ -727,35 +897,38 @@ function wire() {
   $("btn-show-initial").addEventListener("click", () => showPlacement("initial"));
   $("btn-show-optimized").addEventListener("click", () => showPlacement("optimized"));
 
-  $("pkg-size").addEventListener("change", () => { state.pkg.size_mm = Number($("pkg-size").value); packageChanged(); });
+  $("pkg-size").addEventListener("change", () => { record(); state.pkg.size_mm = Number($("pkg-size").value); packageChanged(); });
   $("pkg-ambient").addEventListener("change", () => {
     const v = Number($("pkg-ambient").value);
-    if (Number.isFinite(v)) { state.pkg.ambient_c = Math.max(-40, Math.min(125, v)); packageChanged(); }
+    if (Number.isFinite(v)) { record(); state.pkg.ambient_c = Math.max(-40, Math.min(125, v)); packageChanged(); }
   });
   $("pkg-cooling").addEventListener("change", () => {
     const v = $("pkg-cooling").value;
     $("pkg-h-wrap").classList.toggle("hidden", v !== "custom");
-    if (v !== "custom") { state.pkg.h_w_m2k = Number(v); packageChanged(); }
+    if (v !== "custom") { record(); state.pkg.h_w_m2k = Number(v); packageChanged(); }
     else $("pkg-h").focus();
   });
   $("pkg-h").addEventListener("change", () => {
     const v = Number($("pkg-h").value);
-    if (Number.isFinite(v) && v >= 10) { state.pkg.h_w_m2k = v; packageChanged(); }
+    if (Number.isFinite(v) && v >= 10) { record(); state.pkg.h_w_m2k = v; packageChanged(); }
   });
   $("pkg-pitch").addEventListener("change", () => {
+    record();
     state.pkg.pitch_mm = Number($("pkg-pitch").value);
     clearOptimization();
     renderFloorplan();
   });
 
   $("library").innerHTML = LIBRARY.map((l) =>
-    `<option value="${l.key}">${l.name} · ${l.w_mm} × ${l.h_mm} mm · ${l.power_w} W</option>`).join("");
+    `<option value="${l.key}">${l.name} · ${l.w_mm} × ${l.h_mm} mm · ${l.power_w} W · `
+    + `${(l.power_w / (l.w_mm * l.h_mm / 100)).toFixed(0)} W/cm²</option>`).join("");
   $("btn-add").addEventListener("click", () => addChiplet($("library").value));
 
   const editNumber = (id, apply) => $(id).addEventListener("change", () => {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
     const v = Number($(id).value);
     if (!c || !Number.isFinite(v)) return;
+    record();
     apply(c, v);
     fitInside(c);
     renderChipletList();
@@ -766,7 +939,7 @@ function wire() {
   editNumber("ed-p", (c, v) => { c.power_w = Math.max(0, Math.min(2000, v)); });
   $("ed-name").addEventListener("change", () => {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
-    if (c && $("ed-name").value.trim()) { c.name = $("ed-name").value.trim(); renderChipletList(); renderFloorplan(); }
+    if (c && $("ed-name").value.trim()) { record(); c.name = $("ed-name").value.trim(); renderChipletList(); renderFloorplan(); }
   });
   $("ed-rotate").addEventListener("click", rotateSelected);
   $("ed-delete").addEventListener("click", removeSelected);
@@ -823,6 +996,7 @@ function wire() {
     const steps = { ArrowLeft: [-cell, 0], ArrowRight: [cell, 0], ArrowUp: [0, cell], ArrowDown: [0, -cell] };
     if (steps[e.key]) {
       e.preventDefault();
+      record();
       c.x_mm = +(c.x_mm + steps[e.key][0]).toFixed(6);
       c.y_mm = +(c.y_mm + steps[e.key][1]).toFixed(6);
       fitInside(c);
@@ -833,6 +1007,55 @@ function wire() {
     } else if (e.key === "Delete") {
       removeSelected();
     }
+  });
+  // ---- designs on disk, undo and redo
+  history.onChange = updateHistoryButtons;
+  $("btn-undo").addEventListener("click", undo);
+  $("btn-redo").addEventListener("click", redo);
+  $("btn-save").addEventListener("click", () => {
+    const design = saveDesign(state.pkg, state.chiplets, designTitle());
+    toast(`Saved ${design.chiplets.length} chiplets as a RISC3D design file.`, "info");
+  });
+  $("btn-open").addEventListener("click", async () => {
+    try {
+      const design = await openDesign($("file-open"));
+      if (!design) return;
+      record();
+      state.opened = design;
+      state.scenarioId = null;
+      state.pkg = design.pkg;
+      state.chiplets = design.chiplets;
+      state.selectedId = null;
+      state.shown = null;
+      for (const c of state.chiplets) fitInside(c);
+      clearOptimization();
+      syncPackageControls();
+      showOpenedInScenarioList(design.title);
+      renderAll();
+      requestSolve();
+      toast(`Opened "${design.title}".`, "info");
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $("btn-reset").addEventListener("click", async () => {
+    const target = state.opened && !state.scenarioId ? `"${state.opened.title}"` : "this scenario";
+    const yes = await ask({
+      title: "Reset the design?",
+      body: `Everything changed since ${target} was loaded is discarded. Save it first if you want to keep it.`,
+      ok: "Reset",
+    });
+    if (yes === true) resetDesign();
+  });
+  window.addEventListener("keydown", (e) => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((key === "z" && e.shiftKey) || key === "y") { e.preventDefault(); redo(); }
+    else if (key === "s") { e.preventDefault(); $("btn-save").click(); }
+    else if (key === "o") { e.preventDefault(); $("btn-open").click(); }
   });
   window.addEventListener("resize", () => drawColorbar($("fp-colorbar"), "temp"));
   // Redraw the comparison whenever its maps change size (window resize or the banner/tables reflowing).

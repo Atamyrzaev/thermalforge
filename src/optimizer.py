@@ -483,6 +483,10 @@ class OptimizationResult:
 # Optimizer
 # ---------------------------------------------------------------------------
 
+# Device-layer thickness in mesh cells; see power_z_start below.
+POWER_PLANE_CELLS = 1
+
+
 class ChipletPlacementOptimizer:
     """
     Simulated-annealing search over non-overlapping chiplet XY placements,
@@ -550,6 +554,14 @@ class ChipletPlacementOptimizer:
         self.realized_layers_um = self.stack.realized_thicknesses_um(self.nz, self.dz)
 
         self.die_z_start, self.die_z_end = z_bump_end, self.nz
+        # Where the heat is GENERATED inside that die: the device layer at the
+        # bumped face, one cell thick (see src.experiment.power_z_range). A
+        # flip-chip die makes its heat in a sub-micron layer against the bumps,
+        # with the sink on the opposite face, so the path to the sink runs
+        # through the die -- spreading power through the whole die thickness
+        # would shorten that path and under-report the junction temperature.
+        self.power_z_start = self.die_z_start
+        self.power_z_end = min(self.die_z_start + POWER_PLANE_CELLS, self.nz)
         if self.die_z_start >= self.die_z_end:
             raise OptimizerError(
                 f"Degenerate die layer z[{self.die_z_start}:{self.die_z_end}] for nz={self.nz} "
@@ -674,6 +686,7 @@ class ChipletPlacementOptimizer:
 
         self._cell_volume = self.dx * self.dy * self.dz
         self._die_thickness_vox = self.die_z_end - self.die_z_start
+        self._power_thickness_vox = self.power_z_end - self.power_z_start
 
         # Elitist best-tracker state, reset at the start of every optimize().
         self._best_cost: float = math.inf
@@ -899,13 +912,13 @@ class ChipletPlacementOptimizer:
         chiplet moves, and solve_steady_state() re-reads q_map on every call.
         """
         self.solver.q_map[:] = 0.0
-        zs = slice(self.die_z_start, self.die_z_end)
+        zs = slice(self.power_z_start, self.power_z_end)
         for spec, (nvx, nvy), (x0, y0) in zip(self.catalog, self._extents, layout):
             # Total power is conserved exactly: the block's watts are spread
             # over the voxels it actually occupies on this mesh. Rounding the
             # footprint up therefore lowers the modelled volumetric density
             # slightly rather than inventing or losing power.
-            n_cells = nvx * nvy * self._die_thickness_vox
+            n_cells = nvx * nvy * self._power_thickness_vox
             q_density = spec.power_w / (n_cells * self._cell_volume)
             self.solver.q_map[x0:x0 + nvx, y0:y0 + nvy, zs] += q_density
 

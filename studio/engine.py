@@ -48,8 +48,8 @@ from src.config_loader import (
     SolverSection, StackSection, VisualizationSection,
 )
 from src.experiment import (
-    ChipletDef, Placement, build_stack, package_from_config, solve_placement,
-    validate_placement,
+    ChipletDef, Placement, build_stack, package_from_config, power_z_range,
+    solve_placement, validate_placement,
 )
 from src.surrogate import spreading_length_m
 from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
@@ -271,14 +271,16 @@ class ThermalModel:
         self.solver._steady_lu = self.factor                    # used by every solve
         self.solver.solve_steady_state(apply_result=False)      # verifies the factor
         n_cells = self.package.nx * self.package.ny * self.package.nz
-        z0, z1 = self.package.die_z
+        z0, z1 = power_z_range(self.package)
+        self.power_z = (z0, z1)
         flat = np.arange(n_cells).reshape(self.package.nx, self.package.ny, self.package.nz)
-        # Cells of the die layer, where all power is deposited. By the discrete
-        # maximum principle the peak of any layout lies in a powered cell, so
-        # the search needs only these; the full re-solve checks it every time.
-        # Layer-major, bottom die layer first: the search computes interior
-        # bounds over the leading layers (where peaks sit) and scores complete
-        # layouts over all of them.
+        # The cells that carry power -- the device layer at the bumped face of
+        # the die. By the discrete maximum principle the peak of any layout
+        # lies in a powered cell (every source is non-negative and the sink can
+        # only cool), so the search needs only these; the full re-solve, which
+        # takes its peak over the WHOLE field, checks that on every run.
+        # Layer-major, bottom layer first: interior bounds use the leading
+        # layers, complete layouts are scored over all of them.
         self.die_cells = np.ascontiguousarray(
             np.concatenate([flat[:, :, k].reshape(-1) for k in range(z0, z1)]))
         self.bound_cells = int(min(3, z1 - z0) * self.package.nx * self.package.ny)
@@ -399,7 +401,7 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
     """
     pkg = model.package
     n_cells = pkg.nx * pkg.ny * pkg.nz
-    z0, z1 = pkg.die_z
+    z0, z1 = model.power_z
     fields: List[np.ndarray] = []
     block = np.zeros((pkg.nx, pkg.ny, pkg.nz))
     # The rise is linear in power, so chiplets with the same footprint share

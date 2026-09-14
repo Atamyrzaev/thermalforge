@@ -29,6 +29,15 @@
 
 <main class="layout">
   <aside class="panel left">
+    <div class="panel-toolbar">
+      <button id="btn-open" class="btn btn-small">Open…</button>
+      <button id="btn-save" class="btn btn-small">Save</button>
+      <button id="btn-reset" class="btn btn-small" title="Reload the design as it started">Reset</button>
+      <span class="toolbar-gap"></span>
+      <button id="btn-undo" class="btn btn-small btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>&#8630;</button>
+      <button id="btn-redo" class="btn btn-small btn-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>&#8631;</button>
+    </div>
+    <input type="file" id="file-open" accept=".json,application/json" hidden>
     <section class="card">
       <h2>Package</h2>
       <div class="field-grid">
@@ -241,6 +250,18 @@
       die backside; uniform power inside each chiplet. The solver is verified numerically; the model has not
       yet been validated against measurements of real hardware.</p>
     <button class="btn btn-primary" id="btn-help-close">Got it</button>
+  </div>
+</div>
+
+<div id="ask-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+  <div class="overlay-card ask-card">
+    <h3 id="ask-title"></h3>
+    <p class="muted" id="ask-body"></p>
+    <div class="ask-buttons">
+      <button class="btn" id="ask-cancel">Cancel</button>
+      <button class="btn" id="ask-alt"></button>
+      <button class="btn btn-primary" id="ask-ok">Continue</button>
+    </div>
   </div>
 </div>
 
