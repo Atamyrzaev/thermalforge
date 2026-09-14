@@ -245,6 +245,13 @@
         the cooled face.</li>
       <li><b>Live floorplanning.</b> Drag a chiplet and the whole package is solved again in milliseconds:
         the expensive matrix factorization is computed once per package and reused.</li>
+      <li><b>Chiplets are not uniform heaters.</b> An NPU's MAC array, a GPU's engines and a CPU's core
+        complex carry most of the power over part of the die, and the junction follows the hot region.
+        Pick what is inside each part in the editor: on an 8&nbsp;W NPU, assuming uniform power
+        under-reports the junction by 13&nbsp;K.</li>
+      <li><b>Only buildable layouts.</b> Chiplets must clear each other by the assembly keep-out
+        (100&nbsp;µm by default) so underfill can flow and the bump dispense has room, so the optimizer
+        cannot win by packing parts wall to wall.</li>
       <li><b>Exact optimization, not guessing.</b> Heat adds up linearly, so any layout's temperature is the
         sum of what each chiplet causes on its own. The optimizer covers every layout on the placement grid
         and skips only branches it can <em>prove</em> are hotter than the best one found &mdash; a chiplet can

@@ -19,6 +19,14 @@ JavaScript in the browser.
   silicon interposer, the microbump/underfill layer and the die, cooled through
   the die backside. Every solve checks its own residual and energy balance and
   raises rather than reporting a number it cannot defend.
+- **Models what is inside a chiplet.** A part is not a uniform heater: an NPU's MAC
+  array, a GPU's engines and a CPU's core complex carry most of the power over part
+  of the die. On an 8 W, 5 × 5 mm NPU, assuming uniform power under-reports the
+  junction by **13.2 K**.
+- **Returns layouts that can be built.** A minimum chiplet-to-chiplet clearance
+  (default 100 µm, for underfill flow and bump dispense tolerance) constrains the
+  search, so the proven optimum is the coolest *manufacturable* layout — including
+  refusing corner-to-corner contact.
 - **Re-solves as you drag.** The expensive matrix factorization is computed once
   per package and reused, so moving a chiplet costs milliseconds.
 - **Proves the optimum.** Heat adds up linearly, so a layout's temperature is the
@@ -40,8 +48,10 @@ JavaScript in the browser.
 Known limitations are printed on the reports themselves, not hidden here: power
 enters at the active plane but is spread over one mesh cell (20 µm) rather than a
 sub-micron device layer, silicon is homogeneous (no BEOL, device layer or TSVs),
-cooling is one effective coefficient on the die backside, and the stack is three
-editable layers (interposer / bumps / die) rather than an arbitrary one.
+cooling is one effective coefficient on the die backside, the stack is three
+editable layers (interposer / bumps / die) rather than an arbitrary one, and the
+keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
+0.5 mm mesh — stricter than asked, never looser.
 
 ## Layout
 
@@ -52,7 +62,7 @@ editable layers (interposer / bumps / die) rather than an arbitrary one.
 | `main.py` | Command-line pipeline (Stage 1 single die, Stage 2 placement) |
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
 | `validation/` | Measured verification artifacts, versioned as evidence |
-| `tests/` | 255 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 270 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 
