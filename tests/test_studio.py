@@ -419,6 +419,70 @@ class TestCoolingPath:
         assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
 
 
+class TestSearchAtScale:
+    """The search runs its root branches on every core and its batched solves
+    across threads. Neither may change the answer."""
+
+    def test_sixteen_chiplets_are_allowed_and_solve(self, cache):
+        pkg = spec(size_mm=20.0, pitch_mm=4.0)
+        # 2 mm parts on a 5 mm pitch: clear of each other by the keep-out.
+        raw = [chip(f"c{n}", 2, 2, 1.0 + n * 0.1, (n % 4) * 5, (n // 4) * 5) for n in range(16)]
+        out = E.solve(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["ok"], out.get("violations")
+        assert len(out["chiplets"]) == 16
+        with pytest.raises(E.StudioError, match="at most 16 chiplets"):
+            E.parse_chiplets(raw + [chip("c16", 2, 2, 1.0, 16, 16)], pkg)
+
+    def test_threading_the_search_does_not_move_the_optimum(self, cache, monkeypatch):
+        """The same instance, searched on one core and on many, must return
+        the same value AND the same layout -- ties are broken by the choice,
+        not by which thread arrived first."""
+        pkg = spec()
+        raw = [chip("hot", 2, 2, 6.0, 0, 0), chip("mid", 4, 2, 3.0, 4, 0),
+               chip("big", 4, 4, 2.0, 0, 4)]
+        chiplets = E.parse_chiplets(raw, pkg)
+        many = E.optimize(cache, pkg, chiplets)
+        monkeypatch.setattr(E, "MAX_SEARCH_THREADS", 1)
+        one = E.optimize(cache, pkg, chiplets)
+        assert one["certificate"]["lattice_optimum_c"] == pytest.approx(
+            many["certificate"]["lattice_optimum_c"], abs=1e-12)
+        assert [m["to_mm"] for m in one["moves"]] == [m["to_mm"] for m in many["moves"]]
+
+    def test_a_threaded_batch_is_checked_against_the_system_it_solved(self, cache):
+        """The guard that makes the threading safe to ship. Not a sample of
+        one column -- every column is substituted back into S theta = q, so a
+        race that corrupted any part of the batch is caught."""
+        model, _ = cache.get(spec())
+        n = model.package.nx * model.package.ny * model.package.nz
+        rhs = np.asfortranarray(np.random.default_rng(3).random((n, 4 * E.SOLVE_CHUNK)))
+        serial = model.factor.rise_for_power(rhs, workers=1)
+        threaded = model.factor.rise_for_power(rhs, workers=4)
+        assert np.max(np.abs(serial - threaded)) <= 1e-9 * max(1.0, float(np.max(np.abs(serial))))
+
+        class Drifting:
+            """Corrupts one chunk, the way a race would: not the first, not
+            the last, and only once. The chunk is chosen with itertools.count,
+            which is atomic -- a plain `self.calls += 1` races between the
+            threads and can miss its own target."""
+
+            def __init__(self, lu):
+                self.lu = lu
+                self.ticket = itertools.count(1)
+
+            def solve(self, block):
+                n = next(self.ticket)
+                out = self.lu.solve(block)
+                return out + 1e-3 if n == 3 else out
+
+        original = model.factor._lu
+        model.factor._lu = Drifting(original)
+        try:
+            with pytest.raises(E.StudioError, match="does not satisfy the system"):
+                model.factor.rise_for_power(rhs, workers=4)
+        finally:
+            model.factor._lu = original
+
+
 class TestInternalPowerMap:
     """A chiplet is not a uniform heater. An NPU's MAC array, a GPU's engines
     and a CPU's core complex draw most of the current over part of the die,

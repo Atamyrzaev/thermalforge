@@ -6,7 +6,7 @@
 // message that says what to fix.
 
 export const DESIGN_FORMAT = "risc3d.design/1";
-const MAX_CHIPLETS = 12;
+const MAX_CHIPLETS = 16;          // matches studio/engine.py
 
 export class History {
   constructor(limit = 60) {

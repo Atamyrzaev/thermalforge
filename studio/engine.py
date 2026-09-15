@@ -36,7 +36,9 @@ import math
 import threading
 import time
 import json
+import os
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Tuple
@@ -140,7 +142,19 @@ MAX_COOLING_CELLS = 10
 # fill-reducing ordering: measured 1.3 s at 19,200 and 4.2 s at 32,000.
 STUDIO_MAX_UNKNOWNS = 36_000
 CELL_CHOICES_MM = (0.5, 1.0, 2.0)
-MAX_CHIPLETS = 12
+MAX_CHIPLETS = 16
+# Root branches are searched on several cores. NumPy releases the GIL for the
+# array work each node does, so threads overlap; the cap keeps a laptop
+# responsive while its browser is drawing the progress overlay.
+MAX_SEARCH_THREADS = 8
+# Columns per thread when solving a batch of single-chiplet fields. Smaller
+# chunks balance better; too small and the per-call overhead dominates.
+SOLVE_CHUNK = 24
+# Every threaded batch is checked by substituting it back into the system it
+# claims to solve: max |S theta - q| over ALL columns. SciPy's SuperLU object
+# is not documented as thread-safe, and this product does not report numbers
+# it has not checked. One sparse product over the batch costs a few per cent.
+THREADED_SOLVE_TOL = 1e-9
 
 # The re-solved winner must match the superposed value to this many kelvin.
 RESOLVE_TOL_K = 1e-6
@@ -525,6 +539,9 @@ class SymmetricFactor:
         self.rho_cp = solver._rho_cp.reshape(n)
         spd = (-(sparse.diags(self.rho_cp) @ solver._conduction_operator)).tocsc()
         spd = ((spd + spd.T) * 0.5).tocsc()
+        # Kept so a batch of solves can be checked against the system it
+        # claims to have solved, rather than against one sample of itself.
+        self._spd = spd.tocsr()
         self._lu = sparse_linalg.splu(spd, permc_spec="MMD_AT_PLUS_A",
                                       diag_pivot_thresh=0.0,
                                       options={"SymmetricMode": True})
@@ -535,9 +552,36 @@ class SymmetricFactor:
         scale = self.rho_cp[:, None] if rhs.ndim == 2 else self.rho_cp
         return self._lu.solve(-(scale * rhs))
 
-    def rise_for_power(self, q_w_m3: np.ndarray) -> np.ndarray:
-        """Temperature rise theta with S theta = q, columns of q in W/m^3."""
-        return self._lu.solve(np.asarray(q_w_m3, dtype=np.float64))
+    def rise_for_power(self, q_w_m3: np.ndarray, workers: int = 1) -> np.ndarray:
+        """Temperature rise theta with S theta = q, columns of q in W/m^3.
+
+        A batch of columns is split across threads when `workers` > 1: the
+        factorization is read-only and SuperLU releases the GIL, so this
+        scales (measured 2x on a 28,800-cell model). Because that object is
+        not documented as thread-safe, the whole batch is then substituted
+        back into S theta = q; a batch that does not satisfy the system it
+        solved is refused rather than reported.
+        """
+        q = np.asarray(q_w_m3, dtype=np.float64)
+        if q.ndim != 2 or workers <= 1 or q.shape[1] < 2 * SOLVE_CHUNK:
+            return self._lu.solve(q)
+
+        bounds = list(range(0, q.shape[1], SOLVE_CHUNK))
+        chunks = [slice(lo, min(lo + SOLVE_CHUNK, q.shape[1])) for lo in bounds]
+        with ThreadPoolExecutor(max_workers=min(workers, len(chunks)),
+                                thread_name_prefix="risc3d-solve") as pool:
+            parts = list(pool.map(lambda c: self._lu.solve(np.asfortranarray(q[:, c])), chunks))
+        out = np.concatenate(parts, axis=1)
+
+        # Substitution, not a sample: every column must satisfy S theta = q.
+        scale = max(1.0, float(np.max(np.abs(q))))
+        residual = float(np.max(np.abs(self._spd @ out - q)))
+        if residual > THREADED_SOLVE_TOL * scale:
+            raise StudioError(
+                f"a threaded batch of solves does not satisfy the system it solved "
+                f"(residual {residual:.2e} against a limit of {THREADED_SOLVE_TOL * scale:.2e}); "
+                f"refusing to use it")
+        return out
 
 def _apply_cooling_materials(grid_builder, spec: PackageSpec) -> None:
     """Writes the compact cooling layers over the cells build_stack filled
@@ -826,6 +870,11 @@ def _check_cancel(cancel: Optional[threading.Event]) -> None:
         raise SearchCancelled()
 
 
+def solve_workers() -> int:
+    """Threads to spread a batch of solves over: every core, within reason."""
+    return max(1, min(MAX_SEARCH_THREADS, os.cpu_count() or 1))
+
+
 def unit_fields(model: ThermalModel, chiplets, positions, sizes,
                 cancel: Optional[threading.Event] = None,
                 on_chiplet: Optional[Callable[[int], None]] = None) -> List[np.ndarray]:
@@ -872,7 +921,7 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
                         share / (bw * bh * nk * pkg.cell_volume_m3))
             rhs[:, col] = block.reshape(n_cells)
         # S theta = q: the rise above ambient; the boundary forcing cancels.
-        full = model.factor.rise_for_power(rhs)
+        full = model.factor.rise_for_power(rhs, workers=solve_workers())
         if full.size and float(full.min()) < -NEGATIVE_FIELD_TOL * max(1.0, float(full.max())):
             raise StudioError("a single-chiplet rise went negative; the exactness bound "
                               "would not hold, so the search refuses to run")
@@ -1001,74 +1050,135 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
     for d in range(k - 1, -1, -1):
         rest[d] = rest[d + 1] + minima[order[d]]
 
-    stats = SearchStats()
-    best_value, best_choice = incumbent
-    chosen: List[Optional[int]] = [None] * k
-    last = [time.perf_counter()]
     widest = max(len(p) for p in positions)
-    sums = [np.empty((widest, nb)) for _ in range(k)]
-    scratch = [np.empty((widest, nb)) for _ in range(k)]
+    last = [time.perf_counter()]
 
-    def descend(d: int, run_full: np.ndarray, run_part: np.ndarray) -> None:
-        nonlocal best_value, best_choice
-        ci = order[d]
-        count = len(positions[ci])
-        allowed = np.ones(count, dtype=bool)
-        for e in range(d):
-            cj = order[e]
-            allowed &= compat[(cj, ci)][chosen[cj]]
-        stats.pruned_overlap += count - int(allowed.sum())
-        if d > 0 and signatures[order[d - 1]] == signatures[ci]:
-            before = int(allowed.sum())
-            allowed[:chosen[order[d - 1]] + 1] = False
-            stats.pruned_symmetry += before - int(allowed.sum())
-        idx = np.flatnonzero(allowed)
-        if idx.size == 0:
-            return
-        stats.nodes += 1
-        now = time.perf_counter()
-        if now - last[0] > 0.2:
-            last[0] = now
-            _check_cancel(cancel)
-            if on_progress is not None:
-                on_progress(stats, best_value)
+    # The incumbent is shared: any thread may improve it, and every thread
+    # reads it to prune. Ties are broken by the CHOICE, not by who got there
+    # first, so the answer does not depend on how the work was divided.
+    best_lock = threading.Lock()
+    best = {"value": incumbent[0], "choice": incumbent[1]}
 
-        m = int(idx.size)
-        partial = sums[d][:m]
-        np.take(part[ci], idx, axis=0, out=partial)
-        partial += run_part
+    def offer(value: float, choice: List[int]) -> None:
+        with best_lock:
+            if value < best["value"] - 1e-12 or (
+                    abs(value - best["value"]) <= 1e-12
+                    and (best["choice"] is None or choice < best["choice"])):
+                best["value"], best["choice"] = value, list(choice)
 
-        if d == k - 1:
-            stats.leaves += m
-            # The subset maximum is a lower bound on each layout's peak, so only
-            # layouts whose subset maximum beats the best can beat it in full.
-            contenders = idx[partial.max(axis=1) < best_value]
-            if contenders.size:
-                peaks = (full[ci][contenders] + run_full).max(axis=1)
-                j = int(np.argmin(peaks))
-                if peaks[j] < best_value:
-                    best_value = float(peaks[j])
-                    chosen[ci] = int(contenders[j])
-                    best_choice = list(chosen)
+    class Worker:
+        """One thread's search state: its own buffers and its own counters,
+        merged into the shared stats when it finishes."""
+
+        def __init__(self) -> None:
+            self.stats = SearchStats()
+            self.chosen: List[Optional[int]] = [None] * k
+            self.sums = [np.empty((widest, nb)) for _ in range(k)]
+            self.scratch = [np.empty((widest, nb)) for _ in range(k)]
+
+        def descend(self, d: int, run_full: np.ndarray, run_part: np.ndarray) -> None:
+            chosen, stats = self.chosen, self.stats
+            ci = order[d]
+            count = len(positions[ci])
+            allowed = np.ones(count, dtype=bool)
+            for e in range(d):
+                cj = order[e]
+                allowed &= compat[(cj, ci)][chosen[cj]]
+            stats.pruned_overlap += count - int(allowed.sum())
+            if d > 0 and signatures[order[d - 1]] == signatures[ci]:
+                before = int(allowed.sum())
+                allowed[:chosen[order[d - 1]] + 1] = False
+                stats.pruned_symmetry += before - int(allowed.sum())
+            idx = np.flatnonzero(allowed)
+            if idx.size == 0:
+                return
+            stats.nodes += 1
+            now = time.perf_counter()
+            if now - last[0] > 0.2:
+                last[0] = now
+                _check_cancel(cancel)
+                if on_progress is not None:
+                    on_progress(stats, best["value"])
+
+            m = int(idx.size)
+            partial = self.sums[d][:m]
+            np.take(part[ci], idx, axis=0, out=partial)
+            partial += run_part
+
+            if d == k - 1:
+                stats.leaves += m
+                # The subset maximum is a lower bound on each layout's peak, so
+                # only layouts whose subset maximum beats the best can beat it
+                # in full.
+                ceiling = best["value"]
+                contenders = idx[partial.max(axis=1) < ceiling]
+                if contenders.size:
+                    peaks = (full[ci][contenders] + run_full).max(axis=1)
+                    j = int(np.argmin(peaks))
+                    if peaks[j] < ceiling:
+                        chosen[ci] = int(contenders[j])
+                        offer(float(peaks[j]), list(chosen))
+                chosen[ci] = None
+                return
+
+            bound_rows = self.scratch[d][:m]
+            np.add(partial, rest[d + 1], out=bound_rows)
+            bound = bound_rows.max(axis=1)
+            ranked = np.argsort(bound, kind="stable")
+            for rank, j in enumerate(ranked):
+                if bound[j] >= best["value"]:
+                    stats.pruned_bound += int(ranked.size - rank)
+                    break
+                chosen[ci] = int(idx[j])
+                self.descend(d + 1, run_full + full[ci][idx[j]], partial[j])
             chosen[ci] = None
-            return
 
-        bound_rows = scratch[d][:m]
-        np.add(partial, rest[d + 1], out=bound_rows)
-        bound = bound_rows.max(axis=1)
-        ranked = np.argsort(bound, kind="stable")
-        for rank, j in enumerate(ranked):
-            if bound[j] >= best_value:
-                stats.pruned_bound += int(ranked.size - rank)
-                break
-            chosen[ci] = int(idx[j])
-            descend(d + 1, run_full + full[ci][idx[j]], partial[j])
-        chosen[ci] = None
+    stats = SearchStats()
 
-    descend(0, np.zeros(n_cells), np.zeros(nb))
+    def merge(worker: "Worker") -> None:
+        stats.nodes += worker.stats.nodes
+        stats.leaves += worker.stats.leaves
+        stats.pruned_overlap += worker.stats.pruned_overlap
+        stats.pruned_symmetry += worker.stats.pruned_symmetry
+        stats.pruned_bound += worker.stats.pruned_bound
+
+    # The root's children are independent subtrees, so they are what gets
+    # spread across cores. Everything they share is read-only (the fields, the
+    # compatibility masks, the bounds) except the incumbent, which only ever
+    # improves -- a thread reading a stale one prunes less, never wrong.
+    root = order[0]
+    root_allowed = np.flatnonzero(np.ones(len(positions[root]), dtype=bool))
+    root_bound = (part[root][root_allowed] + rest[1]).max(axis=1)
+    root_order = [int(root_allowed[j]) for j in np.argsort(root_bound, kind="stable")]
+    bound_by_index = {int(root_allowed[n]): float(root_bound[n]) for n in range(len(root_allowed))}
+
+    workers = min(MAX_SEARCH_THREADS, max(1, os.cpu_count() or 1), len(root_order))
+    if k < 2:
+        workers = 1
+
+    def run_root(child: int) -> "Worker":
+        worker = Worker()
+        if bound_by_index[child] >= best["value"]:
+            worker.stats.pruned_bound += 1
+            return worker
+        worker.stats.nodes += 1
+        worker.chosen[root] = child
+        worker.descend(1, full[root][child].copy(), part[root][child].copy())
+        worker.chosen[root] = None
+        return worker
+
+    if workers <= 1:
+        single = Worker()
+        single.descend(0, np.zeros(n_cells), np.zeros(nb))
+        merge(single)
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="risc3d-search") as pool:
+            for worker in pool.map(run_root, root_order):
+                merge(worker)
+
     if on_progress is not None:
-        on_progress(stats, best_value)
-    return best_value, best_choice, stats
+        on_progress(stats, best["value"])
+    return best["value"], best["choice"], stats
 
 
 def optimize(cache: ModelCache, spec: PackageSpec, chiplets,

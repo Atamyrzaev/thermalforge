@@ -58,6 +58,9 @@ a code change.
   is *proven* (a chiplet can only add heat) covers every layout on the placement
   grid and skips only branches that cannot contain a better one. The winner is
   re-solved from scratch and refused if the two disagree by more than 1e-6 K.
+  The search runs its root branches on every core and splits its batched solves
+  across threads — with ties broken by the layout rather than by which thread
+  arrived first, so the answer never depends on how the work was divided.
 - **Shows its work.** Before/after maps on one scale, every chiplet's move, the
   proof figures, the solver checks, and a self-contained HTML report.
 
@@ -88,7 +91,7 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
 | `validation/` | Measured verification artifacts, versioned as evidence |
 | `examples/` | Power maps to import: one matrix form, one region table |
-| `tests/` | 295 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 298 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 

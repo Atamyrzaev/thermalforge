@@ -20,6 +20,7 @@ const LIBRARY = [
   { key: "serdes", name: "SerDes", w_mm: 2, h_mm: 4, power_w: 1.5, color: "#ff7aa8", power_pattern: "uniform" },
   { key: "sram", name: "SRAM", w_mm: 6, h_mm: 6, power_w: 2, color: "#c38cff", power_pattern: "uniform" },
 ];
+const MAX_CHIPLETS = 16;          // matches studio/engine.py
 const COOLING_PRESETS = ["1000", "2500", "5000", "25000"];
 
 const PATTERN_LABELS = {
@@ -565,7 +566,7 @@ function overlapsAny(c) {
 function addChiplet(key) {
   const tpl = LIBRARY.find((l) => l.key === key);
   if (!tpl) return;
-  if (state.chiplets.length >= 12) { toast("At most 12 chiplets"); return; }
+  if (state.chiplets.length >= MAX_CHIPLETS) { toast(`At most ${MAX_CHIPLETS} chiplets`); return; }
   const size = state.pkg.size_mm;
   let n = 1;
   while (state.chiplets.some((c) => c.id === `${key}${n}`)) n++;
