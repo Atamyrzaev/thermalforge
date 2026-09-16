@@ -25,6 +25,13 @@ measurement.
 **Packaging.** The built folder carries a README_FIRST that explains the
 unsigned-binary warning, and `--zip` packs it into one file to hand over.
 
+**Fixed: a leak the burst left behind.** Each burst installed a second
+factorization of a package-sized system into a cached, shared solver and
+never released it — 20 to 80 MB per run, 563 MB after four cooling paths.
+It showed up as a test suite that was fast per file (51 s, 96 s, 11 s) and
+took 43 minutes for the three together, through paging. Released at the end
+of the run: the suite is back to 162 s and repeated bursts hold flat.
+
 ## 0.3.0 — 15–16 September 2026
 
 **Buildable layouts.** A minimum chiplet-to-chiplet clearance (default 100 µm,
