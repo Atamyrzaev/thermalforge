@@ -1012,6 +1012,13 @@ def transient(cache: ModelCache, spec: PackageSpec, chiplets, profile: dict,
         steady = solver.solve_steady_state(apply_result=False)
         steady_peak_c = float(steady.max()) - 273.15
         burst_peak_c = max(peaks[:burst_steps + 1]) if burst_steps else start_peak_c
+
+        # The step's factorization is scratch for THIS run: it is a second
+        # factorization of a package-sized system, hundreds of megabytes on a
+        # meshed cooling path, and the model it hangs off is cached and shared.
+        # Keeping it would leak that much per burst -- measured 20 to 80 MB a
+        # run before this line existed, on top of an already cached model.
+        solver._cn_solver_cache.clear()
         solver.T[:] = pkg.t_ambient_k
         solver.time_s = 0.0
 

@@ -644,13 +644,22 @@ class TestOverTime:
             E.parse_profile(profile)
 
     def test_the_model_is_left_as_it_was_found(self, cache):
-        """The model is cached and shared: a burst must not leave its field
-        or its clock behind for the next solve."""
+        """The model is cached and shared: a burst must not leave its field,
+        its clock, or its scratch factorization behind for the next solve.
+
+        The factorization matters most. It is a second decomposition of a
+        package-sized system -- tens to hundreds of megabytes -- and the model
+        it hangs off outlives the burst. Leaving it there leaked that much per
+        run: measured, it turned a 162-second test suite into a 43-minute one
+        through sheer paging, and it would have done the same to a laptop at a
+        trade show after a few demos.
+        """
         pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
         self.run(cache, pkg, burst_s=0.5, cool_s=0.0)
         model, _ = cache.get(pkg)
         assert model.solver.time_s == 0.0
         assert float(model.solver.T.max()) == pytest.approx(model.package.t_ambient_k)
+        assert not model.solver._cn_solver_cache, "the burst left its factorization behind"
         # ... and the steady path still answers exactly as before.
         out = E.solve(cache, pkg, E.parse_chiplets(self.CHIPLET, pkg))
         assert out["ok"] and out["verification"]["residual"] < 1e-8
