@@ -21,7 +21,8 @@ python packaging/build.py --check
 
 builds `dist/RISC3D Studio/` — about 125 MB holding Python, NumPy, SciPy, the
 solver, the UI and the measured validation artifacts. Copy that folder anywhere and
-double-click **RISC3D Studio.exe**. `--check` then starts the built app and makes it
+double-click **RISC3D Studio.exe**. Add `--zip` for one 52 MB file to hand over;
+the folder carries a `README_FIRST.txt` explaining the first-launch warning. `--check` then starts the built app and makes it
 solve a scenario over HTTP, because a build that imports cleanly can still be missing
 a file it only reads at runtime.
 
@@ -61,6 +62,11 @@ a code change.
   The search runs its root branches on every core and splits its batched solves
   across threads — with ties broken by the layout rather than by which thread
   arrived first, so the answer never depends on how the work was divided.
+- **Answers over time, not just at rest.** A burst — idle, full power, idle —
+  time-stepped through the same solver, with the steady-state asymptote, the
+  limit line and the moment it was crossed. A part that settles at 86 °C can
+  still cross 80 °C **592 ms** into a one-second burst, and a lid's thermal mass
+  can carry another through it entirely.
 - **Shows its work.** Before/after maps on one scale, every chiplet's move, the
   proof figures, the solver checks, and a self-contained HTML report.
 
@@ -70,6 +76,7 @@ a code change.
 |---|---|
 | **Verified** | Residual and energy balance on every solve. The optimizer agrees with an independent brute force. The solver reproduces closed-form solutions for a uniformly heated slab (second order, with the predicted coefficient) and a rectangular flux channel (`tests/test_benchmarks.py`). |
 | **Not validated** | No result has been compared with a measured package. Until that happens, every reported temperature is labelled *verified, not validated* (`src/validation_status.py`). |
+| **Ready for measurements** | `tools/correlate.py` takes a case file — a package plus the temperatures somebody measured on it — and reports agreement against two bands: the instrument's uncertainty and the model's error budget. A synthetic example ships so the process can be rehearsed today; everything derived from it is stamped SYNTHETIC. |
 | **Error budget** | Two measured sensitivities, added in quadrature and printed beside every peak: mesh refinement (`tools/mesh_convergence.py`: ±0.43 K passive, ±1.76 K cold plate) and conductivity perturbations (`tools/material_sensitivity.py`: silicon ±10 %, bump composite ±30 %). On the demo scenarios that is **±2.1 to ±2.6 K, about 3.5 % of the rise** — dominated by the silicon conductivity, not by the mesh. Results are versioned in `validation/`. |
 
 Known limitations are printed on the reports themselves, not hidden here: power
@@ -88,8 +95,8 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `src/` | The core: `thermal_solver.py`, `grid_builder.py`, `composite_materials.py`, `experiment.py`, `exhaustive.py`, `optimizer.py`, `surrogate.py` |
 | `main.py` | Command-line pipeline (Stage 1 single die, Stage 2 placement) |
 | `packaging/` | The standalone build: `build.py` and the PyInstaller spec |
-| `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `smoke.py` (does a build start and answer?) |
-| `validation/` | Measured verification artifacts, versioned as evidence |
+| `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
+| `validation/` | Verification artifacts, versioned as evidence: the studies, plus `cases/` and `correlation/` |
 | `examples/` | Power maps to import: one matrix form, one region table |
 | `tests/` | 298 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 

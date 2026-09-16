@@ -26,7 +26,11 @@ import pytest
 import scipy.sparse as sparse
 import scipy.sparse.linalg as spla
 
+import pathlib
+
 from studio import engine as E
+from tools import correlate as correlate_module
+from tools.correlate import CaseError, correlate, load_case, render
 from studio.scenarios import scenarios
 from studio.server import serve
 
@@ -418,6 +422,108 @@ class TestCoolingPath:
         out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
         assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
         assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
+
+
+class TestCorrelationHarness:
+    """The product's standing limitation is that nothing has been compared
+    with a measured package. That is a missing input, not a missing
+    capability -- so the harness that consumes measurements is tested now,
+    with synthetic data that is stamped as synthetic everywhere it appears."""
+
+    @staticmethod
+    def case(sensors, kind="measured", **package):
+        pkg = {"size_mm": 20.0, "h_w_m2k": 2500.0, "ambient_c": 35.0, "pitch_mm": 2.0}
+        pkg.update(package)
+        return {
+            "case": "unit-test",
+            "provenance": {"kind": kind, "source": "tests"},
+            "package": pkg,
+            "chiplets": [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                          "x_mm": 12, "y_mm": 12, "power_pattern": "mac_array"}],
+            "sensors": sensors,
+        }
+
+    def modelled_at(self, x_mm, y_mm):
+        """What the model says at a point, so a case can be built around it."""
+        case = self.case([{"id": "probe", "x_mm": x_mm, "y_mm": y_mm, "measured_c": 0.0}])
+        return correlate(case)["sensors"][0]["modelled_c"]
+
+    def test_it_recovers_a_bias_that_was_put_in(self, cache):
+        """The harness's own calibration: feed it measurements that are the
+        model's answer plus a known offset, and it must report that offset."""
+        probes = [(14.5, 14.5), (4.0, 14.0), (6.0, 6.0)]
+        sensors = [{"id": f"p{n}", "x_mm": x, "y_mm": y, "uncertainty_k": 1.0,
+                    "measured_c": round(self.modelled_at(x, y) - 2.5, 4)}
+                   for n, (x, y) in enumerate(probes)]
+        report = correlate(self.case(sensors))
+        assert report["summary"]["bias_k"] == pytest.approx(2.5, abs=1e-3)
+        assert report["summary"]["rms_k"] == pytest.approx(2.5, abs=1e-3)
+
+    def test_a_sensor_beyond_both_bands_is_called_out(self):
+        near = self.modelled_at(14.5, 14.5)
+        sensors = [
+            {"id": "agrees", "x_mm": 14.5, "y_mm": 14.5, "uncertainty_k": 1.0,
+             "measured_c": round(near - 0.2, 4)},
+            {"id": "disagrees", "x_mm": 4.0, "y_mm": 14.0, "uncertainty_k": 1.0,
+             "measured_c": round(self.modelled_at(4.0, 14.0) - 25.0, 4)},
+        ]
+        report = correlate(self.case(sensors))
+        by_id = {s["id"]: s for s in report["sensors"]}
+        assert by_id["agrees"]["inside_band"] is True
+        assert by_id["disagrees"]["inside_band"] is False
+        assert report["summary"]["inside_band"] == 1
+        text = render(report)
+        assert "OUTSIDE" in text
+        assert "check the case" in text          # the honest first suspect
+
+    def test_the_band_combines_the_instrument_and_the_model(self):
+        sensors = [{"id": "p", "x_mm": 14.5, "y_mm": 14.5, "uncertainty_k": 3.0,
+                    "measured_c": 60.0}]
+        report = correlate(self.case(sensors))
+        point = report["sensors"][0]
+        assert point["band_k"] == pytest.approx(math.hypot(3.0, report["model_band_k"]))
+        assert point["band_k"] > report["model_band_k"]      # the instrument widens it
+
+    def test_synthetic_data_is_stamped_everywhere_it_appears(self):
+        sensors = [{"id": "p", "x_mm": 14.5, "y_mm": 14.5, "uncertainty_k": 1.0,
+                    "measured_c": round(self.modelled_at(14.5, 14.5), 4)}]
+        synthetic = render(correlate(self.case(sensors, kind="synthetic")))
+        assert "SYNTHETIC" in synthetic
+        assert "says nothing about real hardware" in synthetic
+        measured = render(correlate(self.case(sensors, kind="measured")))
+        assert "SYNTHETIC" not in measured
+        # Even a perfect measured case claims only what was compared.
+        assert "evidence about THIS package" in measured
+
+    def test_a_case_that_cannot_say_where_its_numbers_came_from_is_refused(self, tmp_path):
+        bad = tmp_path / "nameless.json"
+        bad.write_text(json.dumps({"package": {}, "chiplets": [], "sensors": [{}]}), encoding="utf-8")
+        with pytest.raises(CaseError, match="provenance"):
+            load_case(bad)
+        worse = tmp_path / "lying.json"
+        worse.write_text(json.dumps({"provenance": {"kind": "vibes"}, "package": {},
+                                     "chiplets": [], "sensors": [{}]}), encoding="utf-8")
+        with pytest.raises(CaseError, match="measured' or 'synthetic'"):
+            load_case(worse)
+
+    def test_a_sensor_off_the_package_is_refused_not_clamped(self):
+        """Clamping would compare the wrong place and report agreement for it."""
+        with pytest.raises(CaseError, match="outside the 20.0 x 20.0 mm package"):
+            correlate(self.case([{"id": "stray", "x_mm": 44.0, "y_mm": 2.0, "measured_c": 50.0}]))
+        with pytest.raises(CaseError, match="outside the .* um stack"):
+            correlate(self.case([{"id": "floating", "x_mm": 4.0, "y_mm": 4.0, "z_um": 9000.0,
+                                  "measured_c": 50.0}]))
+
+    def test_the_shipped_example_runs_and_is_synthetic(self):
+        """The example exists so the harness can be demonstrated before any
+        hardware arrives -- and can never be mistaken for evidence."""
+        path = pathlib.Path(correlate_module.CASES_DIR) / "example_synthetic.json"
+        if not path.exists():
+            pytest.skip("run tools/correlate.py --make-example")
+        report = correlate(load_case(path))
+        assert report["synthetic"] is True
+        assert report["summary"]["count"] >= 3
+        assert "SYNTHETIC" in render(report)
 
 
 class TestOverTime:

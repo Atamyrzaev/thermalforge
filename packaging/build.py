@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +32,61 @@ SPEC = ROOT / "packaging" / "risc3d_studio.spec"
 BUNDLE = ROOT / "dist" / "RISC3D Studio"
 EXE = BUNDLE / "RISC3D Studio.exe"
 CHECK_PORT = 8799
+
+
+README_FIRST = """RISC3D Studio
+=============
+
+Double-click "RISC3D Studio.exe". Your browser opens the app; the console
+window that appears IS the program -- closing it stops the app.
+
+The first launch takes a few seconds while Windows reads the files. After
+that it starts in about a second. Starting it twice just reopens the window.
+
+"Windows protected your PC"
+---------------------------
+This build is not code-signed, so Windows shows that warning the first time.
+Click "More info", then "Run anyway". Nothing here reaches the network: the
+app serves itself to your own browser on 127.0.0.1 and solves everything on
+this machine.
+
+What it is
+----------
+Thermal co-optimization for 3D-IC chiplet packages. Drag chiplets and the
+whole package is re-solved in milliseconds; press "Optimize placement" and it
+returns the provably coolest buildable layout on the placement grid, with the
+proof beside it.
+
+Every temperature carries a measured error budget (mesh refinement plus
+conductivity sensitivity). The model is VERIFIED -- its equations are solved
+correctly and it reproduces closed-form solutions -- but NOT VALIDATED: no
+result here has yet been compared with a measured package. The app says so on
+its own reports, and it should stay said until real measurements exist.
+
+Version {version}
+"""
+
+
+def write_readme(version: str) -> None:
+    (BUNDLE / "README_FIRST.txt").write_text(README_FIRST.format(version=version),
+                                             encoding="utf-8")
+
+
+def project_version() -> str:
+    for line in (ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("version"):
+            return line.split("=", 1)[1].strip().strip('"')
+    return "0.0.0"
+
+
+def make_zip(version: str) -> Path:
+    """One file to hand to somebody, with the folder inside it."""
+    target = ROOT / "dist" / f"RISC3D-Studio-{version}-windows.zip"
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path in sorted(BUNDLE.rglob("*")):
+            if path.is_file():
+                archive.write(path, Path("RISC3D Studio") / path.relative_to(BUNDLE))
+    return target
 
 
 def build() -> None:
@@ -45,6 +101,7 @@ def build() -> None:
     subprocess.run([sys.executable, "-m", "PyInstaller", str(SPEC), "--noconfirm",
                     "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build")],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+    write_readme(project_version())
     size_mb = sum(f.stat().st_size for f in BUNDLE.rglob("*") if f.is_file()) / 1e6
     print(f"Built {BUNDLE} -- {size_mb:.0f} MB in {time.perf_counter() - t0:.0f} s")
 
@@ -117,6 +174,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="after building, run the exe and solve through it")
     parser.add_argument("--clean", action="store_true", help="remove build/ and dist/ first")
+    parser.add_argument("--zip", action="store_true",
+                        help="also pack the folder into one file to hand over")
     args = parser.parse_args()
     if args.clean:
         for directory in (ROOT / "build", ROOT / "dist"):
@@ -124,6 +183,9 @@ def main() -> int:
     build()
     if args.check:
         check()
+    if args.zip:
+        target = make_zip(project_version())
+        print(f"packed: {target} ({target.stat().st_size / 1e6:.0f} MB)")
     return 0
 
 
