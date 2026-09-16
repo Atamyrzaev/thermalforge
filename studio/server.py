@@ -9,6 +9,7 @@ project's Python environment: no framework, no CDN, no build step.
     GET  /api/scenarios         built-in demo scenarios
     POST /api/solve             solve one placement (fast: cached factorization)
     POST /api/optimize          start an exact optimization job -> {job_id}
+    POST /api/transient         start a time-stepped burst -> {job_id}
     GET  /api/jobs/<id>         job progress and, when done, the result
     POST /api/jobs/<id>/cancel  stop a running job
 """
@@ -71,7 +72,11 @@ class Studio:
         self.jobs: Dict[str, Job] = {}
         self.jobs_lock = threading.Lock()
 
-    def start_optimization(self, spec, chiplets) -> Job:
+    def _start(self, name: str, work) -> Job:
+        """Runs one long job on its own thread, reporting progress and
+        honouring a stop. Shared by the optimizer and the time stepper: both
+        take seconds, both must be cancellable, and neither may take the
+        server down with it."""
         job = Job()
         with self.jobs_lock:
             if len(self.jobs) >= MAX_JOBS:
@@ -87,13 +92,12 @@ class Studio:
 
         def run() -> None:
             try:
-                result = engine.optimize(self.cache, spec, chiplets,
-                                         on_progress=progress, cancel=job.cancel)
+                result = work(progress, job.cancel)
                 with job.lock:
                     job.result, job.state = result, "done"
             except engine.SearchCancelled:
                 with job.lock:
-                    job.state, job.error = "cancelled", "optimization stopped"
+                    job.state, job.error = "cancelled", f"{name} stopped"
             except engine.StudioError as exc:
                 with job.lock:
                     job.state, job.error = "error", str(exc)
@@ -102,8 +106,16 @@ class Studio:
                 with job.lock:
                     job.state, job.error = "error", f"internal error: {exc}"
 
-        threading.Thread(target=run, name=f"optimize-{job.id}", daemon=True).start()
+        threading.Thread(target=run, name=f"{name}-{job.id}", daemon=True).start()
         return job
+
+    def start_optimization(self, spec, chiplets) -> Job:
+        return self._start("optimization", lambda progress, cancel: engine.optimize(
+            self.cache, spec, chiplets, on_progress=progress, cancel=cancel))
+
+    def start_transient(self, spec, chiplets, profile) -> Job:
+        return self._start("transient", lambda progress, cancel: engine.transient(
+            self.cache, spec, chiplets, profile, on_progress=progress, cancel=cancel))
 
 
 def make_handler(studio: Studio):
@@ -204,6 +216,13 @@ def make_handler(studio: Studio):
                 elif path == "/api/optimize":
                     spec, chiplets = self._parse_problem()
                     job = studio.start_optimization(spec, chiplets)
+                    self._send_json({"ok": True, "job_id": job.id})
+                elif path == "/api/transient":
+                    data = self._read_json()
+                    spec = engine.PackageSpec.parse(data.get("package"))
+                    chiplets = engine.parse_chiplets(data.get("chiplets"), spec)
+                    profile = engine.parse_profile(data.get("transient"))
+                    job = studio.start_transient(spec, chiplets, profile)
                     self._send_json({"ok": True, "job_id": job.id})
                 elif path == "/api/debug/snapshot" and studio.debug:
                     # Developer aid (python run_studio.py --debug): saves a canvas

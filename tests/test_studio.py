@@ -23,6 +23,7 @@ import urllib.request
 
 import numpy as np
 import pytest
+import scipy.sparse as sparse
 import scipy.sparse.linalg as spla
 
 from studio import engine as E
@@ -417,6 +418,136 @@ class TestCoolingPath:
         out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
         assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
         assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
+
+
+class TestOverTime:
+    """A steady-state answer says where a package ends up. This says how it
+    gets there -- which is the question that decides whether a part trips its
+    limit inside a workload that only lasts a second."""
+
+    CHIPLET = [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8,
+                "x_mm": 7, "y_mm": 7, "power_pattern": "mac_array"}]
+
+    def run(self, cache, pkg, **profile):
+        parsed = E.parse_chiplets(self.CHIPLET, pkg)
+        out = E.transient(cache, pkg, parsed, E.parse_profile(profile))
+        assert out["ok"], out.get("violations")
+        return out
+
+    def test_a_long_enough_burst_arrives_at_the_steady_answer(self, cache):
+        """The check the whole mode rests on: time stepping and the steady
+        solve are the same physics, so one must converge to the other."""
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        out = self.run(cache, pkg, burst_s=3.0, cool_s=0.0)
+        assert out["burst_peak_c"] == pytest.approx(out["steady_peak_c"], abs=0.05)
+        assert out["reached_fraction"] > 0.99
+
+    def test_it_starts_at_idle_rises_under_power_and_falls_after(self, cache):
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        out = self.run(cache, pkg, burst_s=1.0, cool_s=1.0, idle_fraction=0.2)
+        peaks = out["peak_c"]
+        assert peaks[0] == pytest.approx(out["idle_peak_c"], abs=1e-9)
+        assert peaks[0] < out["steady_peak_c"]
+        burst_steps = int(round(out["profile"]["burst_s"] / out["dt_s"]))
+        during = peaks[:burst_steps + 1]
+        assert during[-1] > during[0] + 1.0            # it heated up under power
+        after = peaks[burst_steps + 2:]
+        assert after[-1] < during[-1] - 1.0            # and cooled down after it
+        # Neither phase is perfectly monotone -- see the time-step artefact
+        # test below -- but nothing may move against the trend by more than
+        # that measured wobble.
+        wobble = out["step_artefact_k"]
+        assert all(b <= a + wobble + 1e-9 for a, b in zip(after, after[1:]))
+
+    def test_the_time_step_artefact_is_measured_small_and_shrinks_with_dt(self, cache):
+        """Crank-Nicolson is unconditionally stable but not monotone: a step
+        change in power makes the hottest point wobble slightly before it
+        settles. The product measures that wobble instead of pretending the
+        curve is perfect, and it must stay far below the error budget."""
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        coarse = self.run(cache, pkg, burst_s=0.5, cool_s=0.0)
+        rise = coarse["steady_peak_c"] - coarse["idle_peak_c"]
+        assert 0 <= coarse["step_artefact_k"] < 0.1
+        assert coarse["step_artefact_k"] < 0.005 * rise      # under half a per cent of the rise
+
+        original = E.MAX_TRANSIENT_DT_S
+        try:
+            E.MAX_TRANSIENT_DT_S = coarse["dt_s"] / 2.0
+            fine = self.run(cache, pkg, burst_s=0.5, cool_s=0.0)
+        finally:
+            E.MAX_TRANSIENT_DT_S = original
+        assert fine["dt_s"] < coarse["dt_s"]
+        assert fine["step_artefact_k"] < coarse["step_artefact_k"]
+
+    def test_thermal_mass_is_what_makes_a_lid_slow(self, cache):
+        """A copper lid does not only spread heat, it stores it: the same
+        burst covers less of its rise. That is the number a burst workload
+        actually cares about."""
+        bare = self.run(cache, spec(size_mm=20.0, h_w_m2k=2500.0, cooling="direct"),
+                        burst_s=1.0, cool_s=0.0)
+        lidded = self.run(cache, spec(size_mm=20.0, h_w_m2k=2500.0, cooling="lid"),
+                          burst_s=1.0, cool_s=0.0)
+        assert lidded["tau_package_s"] > bare["tau_package_s"] * 2
+        assert lidded["reached_fraction"] < bare["reached_fraction"]
+        assert lidded["burst_peak_c"] < bare["burst_peak_c"]
+
+    def test_the_limit_is_reported_with_the_time_it_was_crossed(self, cache):
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        hot = self.run(cache, pkg, burst_s=1.0, cool_s=0.0, limit_c=60.0)
+        assert hot["time_to_limit_s"] is not None
+        assert 0 < hot["time_to_limit_s"] < 1.0
+        # ... and a limit above the steady state is never crossed.
+        cool = self.run(cache, pkg, burst_s=1.0, cool_s=0.0, limit_c=500.0)
+        assert cool["time_to_limit_s"] is None
+
+    def test_the_two_time_constants_are_told_apart(self, cache):
+        """The hotspot answers in milliseconds; the package takes far longer.
+        Reporting one as the other would mislead about both."""
+        out = self.run(cache, spec(size_mm=20.0, h_w_m2k=2500.0), burst_s=1.0, cool_s=0.0)
+        assert out["t63_peak_s"] < out["tau_package_s"]
+        assert out["t63_peak_s"] > 0
+
+    def test_the_step_is_factorized_symmetrically_like_the_steady_solve(self, cache):
+        """Above the protected solver's threshold the implicit step falls to
+        an iterative backend at 20x the cost. The studio installs its own
+        factorization of the same system; this checks it solves it."""
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        model, _ = cache.get(pkg)
+        dt = 0.01
+        factor = E.CrankNicolsonFactor(model.factor, dt)
+        n = model.package.nx * model.package.ny * model.package.nz
+        rhs = np.random.default_rng(5).random(n)
+        x = factor.solve(rhs)
+        lhs = (sparse.identity(n, format="csr")
+               - (dt / 2.0) * model.solver._conduction_operator).tocsr()
+        assert np.max(np.abs(lhs @ x - rhs)) <= 1e-9 * max(1.0, float(np.max(np.abs(rhs))))
+
+    def test_an_invalid_placement_is_reported_not_stepped(self, cache):
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        touching = E.parse_chiplets([chip("a", 2, 2, 3.0, 0, 0), chip("b", 2, 2, 3.0, 2, 0)], pkg)
+        out = E.transient(cache, pkg, touching, E.parse_profile({}))
+        assert out["ok"] is False and any("keep-out" in v for v in out["violations"])
+
+    @pytest.mark.parametrize("profile, message", [
+        ({"burst_s": 0.0}, "between"),
+        ({"idle_fraction": 2.0}, "between"),
+        ("soon", "must be an object"),
+    ])
+    def test_an_impossible_profile_is_refused(self, profile, message):
+        with pytest.raises(E.StudioError, match=message):
+            E.parse_profile(profile)
+
+    def test_the_model_is_left_as_it_was_found(self, cache):
+        """The model is cached and shared: a burst must not leave its field
+        or its clock behind for the next solve."""
+        pkg = spec(size_mm=20.0, h_w_m2k=2500.0)
+        self.run(cache, pkg, burst_s=0.5, cool_s=0.0)
+        model, _ = cache.get(pkg)
+        assert model.solver.time_s == 0.0
+        assert float(model.solver.T.max()) == pytest.approx(model.package.t_ambient_k)
+        # ... and the steady path still answers exactly as before.
+        out = E.solve(cache, pkg, E.parse_chiplets(self.CHIPLET, pkg))
+        assert out["ok"] and out["verification"]["residual"] < 1e-8
 
 
 class TestSearchAtScale:

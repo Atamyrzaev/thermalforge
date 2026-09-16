@@ -6,6 +6,7 @@ import { FloorplanView, escapeHtml } from "./floorplan.js";
 import { columnMax, drawPackageMap, formatW, setupCanvas } from "./mapdraw.js";
 import { History, openDesign, saveDesign } from "./design.js";
 import { drawPowerMap, readPowerMapFile } from "./powermap.js";
+import { drawTimeline } from "./timeline.js";
 import { downloadReport } from "./report.js";
 import { Viewer3D } from "./viewer3d.js";
 
@@ -47,6 +48,8 @@ const state = {
   jobId: null,
   tab: "floorplan",
   focus: false,
+  burst: null,          // the last time-stepped run
+  burstJob: null,
   scenarioId: null,     // what "Reset" goes back to
   opened: null,         // design opened from a file, if any
   dragging: false,
@@ -594,6 +597,8 @@ function addChiplet(key) {
 
 function clearOptimization() {
   state.opt = null;
+  state.burst = null;          // a different design means a different curve
+  if (state.tab === "timeline") renderTimeline();
   $("opt-card").classList.add("hidden");
   $("tab-compare-btn").disabled = true;
   for (const b of document.querySelectorAll("#gl-mode button")) b.disabled = b.dataset.mode !== "current";
@@ -1030,6 +1035,120 @@ function update3D() {
   });
 }
 
+// --------------------------------------------------------------- over time
+function renderTimeline() {
+  const canvas = $("timeline");
+  if (!state.burst) {
+    const { ctx, width, height } = setupCanvas(canvas);
+    ctx.clearRect(0, 0, width, height);
+    return;
+  }
+  const colours = new Map(state.chiplets.map((c) => [c.id, { color: c.color, name: c.name }]));
+  drawTimeline(canvas, state.burst, colours);
+  renderBurstStats();
+}
+
+function renderBurstStats() {
+  const r = state.burst;
+  if (!r) { $("tr-stats").innerHTML = ""; return; }
+  const ms = (seconds) => (seconds == null ? "–"
+    : seconds < 1 ? `${Math.round(seconds * 1000)} ms` : `${seconds.toFixed(2)} s`);
+  const reached = Math.round((r.reached_fraction || 0) * 100);
+  const limitCell = r.limit_c == null ? ["Limit", "not set", ""]
+    : r.time_to_limit_s == null
+      ? [`Stays under ${r.limit_c} °C`, "for this burst", "good-value"]
+      : [`Reaches ${r.limit_c} °C`, ms(r.time_to_limit_s), "warn-value"];
+  const stat = (label, value, cls = "") =>
+    `<div><span>${label}</span><b class="${cls}">${value}</b></div>`;
+  $("tr-stats").innerHTML =
+    stat("Idle", `${r.idle_peak_c.toFixed(1)} °C`)
+    + stat("Peak in the burst", `${r.burst_peak_c.toFixed(1)} °C`)
+    + stat("Steady state would be", `${r.steady_peak_c.toFixed(1)} °C`)
+    + stat("Of that rise, reached", `${reached} %`)
+    + stat(limitCell[0], limitCell[1], limitCell[2])
+    + stat("Hottest point, 63 % of its rise", ms(r.t63_peak_s))
+    + stat("Package time constant", ms(r.tau_package_s))
+    + stat("Time step", `${(r.dt_s * 1000).toFixed(1)} ms · ${r.t_s.length} points`)
+    + stat("Time-step artefact", `≤ ${(r.step_artefact_k * 1000).toFixed(0)} mK`);
+}
+
+async function runBurst() {
+  if (state.busy || state.animating) return;
+  const bad = violations();
+  if (!state.chiplets.length) { toast("Add chiplets first"); return; }
+  if (bad.messages.length) { toast(`Fix the placement first: ${bad.messages[0]}`); return; }
+  const limit = Number($("tr-limit").value);
+  const profile = {
+    burst_s: Number($("tr-burst").value),
+    cool_s: Number($("tr-burst").value),
+    idle_fraction: Number($("tr-idle").value),
+    limit_c: Number.isFinite(limit) ? limit : null,
+  };
+  setBusy(true);
+  $("btn-burst").disabled = true;
+  $("tr-status").textContent = "Stepping…";
+  setStatus("busy", "Stepping through the burst…");
+  try {
+    const res = await postJSON("/api/transient", {
+      package: packageRequest(), chiplets: chipletRequest(), transient: profile,
+    });
+    if (!res.ok) throw new Error(res.error || "could not start");
+    state.burstJob = res.job_id;
+    pollBurst();
+  } catch (err) {
+    setBusy(false);
+    $("btn-burst").disabled = false;
+    $("tr-status").textContent = "";
+    toast(`Could not run the burst: ${err.message}`);
+    setStatus("error", "Burst failed");
+  }
+}
+
+async function pollBurst() {
+  const id = state.burstJob;
+  if (!id) return;
+  let job;
+  try {
+    const res = await getJSON(`/api/jobs/${id}`);
+    if (!res.ok) throw new Error(res.error || "job lost");
+    job = res.job;
+  } catch (err) {
+    state.burstJob = null;
+    setBusy(false);
+    $("btn-burst").disabled = false;
+    $("tr-status").textContent = "";
+    toast(`Burst failed: ${err.message}`);
+    return;
+  }
+  const p = job.progress || {};
+  if (job.state === "running") {
+    if (p.steps) {
+      $("tr-status").textContent =
+        `Stepping… ${p.step} of ${p.steps} · t = ${(p.t_s || 0).toFixed(2)} s · ${(p.peak_c || 0).toFixed(1)} °C`;
+    }
+    setTimeout(pollBurst, 200);
+    return;
+  }
+  state.burstJob = null;
+  setBusy(false);
+  $("btn-burst").disabled = false;
+  if (job.state === "done" && job.result && job.result.ok) {
+    state.burst = job.result;
+    $("tr-status").textContent = `Stepped ${job.result.t_s.length} points in ${job.result.solve_s.toFixed(1)} s`;
+    setStatus("ok", `Burst: ${job.result.burst_peak_c.toFixed(1)} °C peak`);
+    renderTimeline();
+  } else if (job.state === "done" && job.result && job.result.violations) {
+    $("tr-status").textContent = "";
+    toast(job.result.violations[0]);
+    setStatus("error", "Placement not valid");
+  } else {
+    $("tr-status").textContent = "";
+    toast(job.error || "Burst stopped");
+    setStatus(job.state === "cancelled" ? "ok" : "error",
+              job.state === "cancelled" ? "Burst stopped" : "Burst failed");
+  }
+}
+
 // -------------------------------------------------------------------- tabs
 // The comparison always gets the full width; other tabs follow "Full view".
 function applyLayout() {
@@ -1045,11 +1164,13 @@ function switchTab(name) {
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
   $("tab-floorplan").classList.toggle("active", name === "floorplan");
   $("tab-view3d").classList.toggle("active", name === "view3d");
+  $("tab-timeline").classList.toggle("active", name === "timeline");
   $("tab-compare").classList.toggle("active", name === "compare");
   requestAnimationFrame(() => {
     if (name === "floorplan") { drawColorbar($("fp-colorbar"), "temp"); renderFloorplan(violations().ids); }
     if (name === "view3d") update3D();
     if (name === "compare") renderCompare();
+    if (name === "timeline") renderTimeline();
   });
 }
 
@@ -1217,6 +1338,11 @@ function wire() {
   for (const b of document.querySelectorAll("#gl-mode button")) b.addEventListener("click", () => { if (!b.disabled) setGlMode(b.dataset.mode); });
   for (const b of document.querySelectorAll("#gl-views button[data-view]")) b.addEventListener("click", () => { const v = ensureViewer(); if (v) v.setView(b.dataset.view); });
   $("gl-spin").addEventListener("click", () => { const v = ensureViewer(); if (v) v.setSpin(!v.spinning); });
+  $("btn-burst").addEventListener("click", runBurst);
+  for (const id of ["tr-burst", "tr-idle", "tr-limit"]) {
+    $(id).addEventListener("change", () => { if (state.burst) renderTimeline(); });
+  }
+  new ResizeObserver(() => { if (state.tab === "timeline") renderTimeline(); }).observe($("timeline"));
   $("btn-report").addEventListener("click", () => {
     if (!state.opt) return;
     const sel = $("scenario");

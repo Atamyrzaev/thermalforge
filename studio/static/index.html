@@ -117,6 +117,7 @@
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="floorplan">Floorplan &amp; heat map</button>
       <button class="tab" data-tab="view3d">3D thermal view</button>
+      <button class="tab" data-tab="timeline">Over time</button>
       <button class="tab" data-tab="compare" id="tab-compare-btn" disabled>Before / after</button>
       <span class="tabs-spacer"></span>
       <button class="tab-tool" id="btn-focus" title="Hide the side panels to give the view the whole screen">Full view</button>
@@ -170,6 +171,28 @@
         <span id="gl-cb-max"></span>
         <span id="gl-cb-label" class="muted cb-label">Temperature (°C) · height exaggerated for visibility</span>
       </div>
+    </div>
+
+    <div class="tab-panel" id="tab-timeline">
+      <div class="burst-bar">
+        <label>Burst<select id="tr-burst">
+          <option value="0.5">0.5 s</option>
+          <option value="1" selected>1 s</option>
+          <option value="2">2 s</option>
+          <option value="5">5 s</option></select></label>
+        <label>Idle level<select id="tr-idle">
+          <option value="0">0 %</option>
+          <option value="0.2" selected>20 %</option>
+          <option value="0.5">50 %</option></select></label>
+        <label>Limit<span class="input-unit"><input id="tr-limit" type="number" step="5" min="-40" max="500" value="85"><em>°C</em></span></label>
+        <button id="btn-burst" class="btn btn-primary">Run the burst</button>
+        <span id="tr-status" class="muted"></span>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="timeline"></canvas>
+        <div class="hint" id="tr-hint">Idle → full power → idle, time-stepped through the same solver. Every point is a full 3-D solve.</div>
+      </div>
+      <div class="burst-stats" id="tr-stats"></div>
     </div>
 
     <div class="tab-panel" id="tab-compare">
