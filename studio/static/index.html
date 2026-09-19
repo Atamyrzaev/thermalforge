@@ -58,6 +58,9 @@
           <option value="25000">Liquid · h = 25,000 W/m²K</option>
           <option value="custom">Custom h…</option></select></label>
         <label id="pkg-h-wrap" class="span2 hidden">Heat-transfer coefficient<span class="input-unit"><input id="pkg-h" type="number" step="100" min="10"><em>W/m²K</em></span></label>
+        <label class="span2">Mesh<select id="pkg-mesh">
+          <option value="standard">Standard · answers in under a second</option>
+          <option value="fine">Fine · 4× the cells, 4–25 s to build, smaller error</option></select></label>
         <label>Keep-out<span class="input-unit"><input id="pkg-keepout" type="number" step="50" min="0" max="2000"><em>µm</em></span></label>
         <label>Optimizer grid<select id="pkg-pitch">
           <option value="1">1 mm (finest, slowest proof)</option>
@@ -251,6 +254,8 @@
     <section class="card">
       <h2>Solver checks</h2>
       <ul id="checks" class="checks"></ul>
+      <button id="mesh-check" class="btn btn-small" type="button">Measure this design&rsquo;s mesh error</button>
+      <p id="mesh-check-note" class="muted hidden"></p>
     </section>
   </aside>
 </main>

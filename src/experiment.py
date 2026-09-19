@@ -480,23 +480,54 @@ def grid_weights(nvx: int, nvy: int, grid: PowerGrid) -> np.ndarray:
     return cells / cells_sum
 
 
-def block_cells(nvx: int, nvy: int, blocks: Tuple[PowerBlock, ...]
-                ) -> Tuple[Tuple[int, int, int, int, float], ...]:
-    """Internal blocks as whole cells: (i, j, cells_x, cells_y, share).
+def _overlap(n: int, lo: float, hi: float) -> np.ndarray:
+    """How much of each of n equal cells the span [lo, hi] covers, in cells.
 
-    A block is rounded to the cells it covers and never rounds away to
-    nothing -- a MAC array smaller than one cell still has to go somewhere,
-    and dropping it would quietly move its power back into the uniform part.
-    The cells are relative to the chiplet's own origin.
+    Cell i spans [i/n, (i+1)/n] of the footprint. The return is the length of
+    the intersection times n, so a fully covered cell is 1.0 and a cell the
+    span crosses halfway is 0.5.
     """
-    out = []
+    edges = np.arange(n + 1, dtype=np.float64) / n
+    left = np.clip(edges[:-1], lo, hi)
+    right = np.clip(edges[1:], lo, hi)
+    return (right - left) * n
+
+
+def block_weights(nvx: int, nvy: int, blocks: Tuple[PowerBlock, ...]) -> np.ndarray:
+    """Internal blocks as a per-cell share of the chiplet's power, summing to 1.
+
+    Each cell takes the fraction of each block that geometrically OVERLAPS it,
+    rather than the block being rounded to the cells it mostly covers. The
+    difference is not cosmetic. Rounding changes the block's modelled AREA
+    with the mesh while its power stays fixed, so its power DENSITY -- the
+    thing that sets the peak -- changes with the mesh too. Measured on the
+    reference package with its compute parts patterned, rounding gave peaks of
+    181.5, 139.2, 149.3 and 153.6 degC at 2, 1, 0.5 and 0.25 mm: not
+    converging, just moving. Overlap weighting models the same physical block
+    at every mesh, so refining converges instead of wandering.
+
+    A block smaller than a cell is spread into the cells it touches and keeps
+    all of its power. Its peak is then averaged down, which is honest -- a
+    mesh cannot resolve a source finer than a cell -- and refining raises it
+    monotonically toward the true value, which is what a convergence study
+    needs in order to mean anything.
+    """
+    weights = np.zeros((nvx, nvy), dtype=np.float64)
     for b in blocks:
-        i0 = min(nvx - 1, max(0, int(round(b.x_frac * nvx))))
-        j0 = min(nvy - 1, max(0, int(round(b.y_frac * nvy))))
-        w = max(1, min(nvx - i0, int(round(b.w_frac * nvx))))
-        h = max(1, min(nvy - j0, int(round(b.h_frac * nvy))))
-        out.append((i0, j0, w, h, b.share))
-    return tuple(out)
+        x0 = min(max(b.x_frac, 0.0), 1.0)
+        y0 = min(max(b.y_frac, 0.0), 1.0)
+        x1 = min(max(b.x_frac + b.w_frac, 0.0), 1.0)
+        y1 = min(max(b.y_frac + b.h_frac, 0.0), 1.0)
+        ox, oy = _overlap(nvx, x0, x1), _overlap(nvy, y0, y1)
+        covered = float(ox.sum() * oy.sum())
+        if covered <= 0.0:
+            # Clipped away entirely by the footprint: put its power back into
+            # the uniform part rather than losing watts.
+            weights += b.share / (nvx * nvy)
+            continue
+        weights += b.share * np.outer(ox, oy) / covered
+    weights += uniform_share(blocks) / (nvx * nvy)
+    return weights
 
 
 def uniform_share(blocks: Tuple[PowerBlock, ...]) -> float:
@@ -536,19 +567,16 @@ def build_power_map(package: Package, catalog: Tuple[ChipletDef, ...],
                 c.power_w * weights[:, :, None] / (nk * package.cell_volume_m3))
             blocks.append((c.id, i0, j0, nvx, nvy))
             continue
-        # The part of the power that is spread over the whole footprint...
         rest = uniform_share(c.blocks)
         if rest < -1e-9:
             raise ExperimentError(
                 f"{c.id}: internal blocks claim {1.0 - rest:.3f} of the power, which is "
                 f"more than the chiplet has")
-        n_cells = nvx * nvy * nk
-        q[i0:i0 + nvx, j0:j0 + nvy, z0:z1] += c.power_w * rest / (n_cells * package.cell_volume_m3)
-        # ... and each internal block's own share, over its own cells.
-        for bi, bj, bw, bh, share in block_cells(nvx, nvy, c.blocks):
-            cells = bw * bh * nk
-            q[i0 + bi:i0 + bi + bw, j0 + bj:j0 + bj + bh, z0:z1] += (
-                c.power_w * share / (cells * package.cell_volume_m3))
+        # Uniform part and blocks together, each cell taking the share of the
+        # footprint it actually covers (block_weights sums to 1).
+        weights = block_weights(nvx, nvy, c.blocks)
+        q[i0:i0 + nvx, j0:j0 + nvy, z0:z1] += (
+            c.power_w * weights[:, :, None] / (nk * package.cell_volume_m3))
         blocks.append((c.id, i0, j0, nvx, nvy))
 
     per_chiplet = tuple(

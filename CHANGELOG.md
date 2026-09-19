@@ -3,6 +3,89 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.5.0 — 20 September 2026
+
+**The mesh error is measured, not extrapolated.** The convergence study now
+refines to 0.25 mm — affordable since the app installs its own fill-reducing
+factorization — so the error at the shipped mesh is compared against a finer
+solution instead of estimated from coarser ones. On the reference package that
+made the old figure look pessimistic: 0.5 mm sits 0.038 K (passive) and
+0.240 K (cold plate) from the 0.25 mm answer, against published GCI estimates
+of 0.43 K and 1.76 K. Observed order is clamped to the scheme's formal second
+order, because an apparent 3.3 means the differences are near the noise floor,
+not that the method improved.
+
+**Then the band got wider, not narrower, because the narrow one was wrong.**
+Measuring the reference package more precisely says nothing about designs
+unlike it, and the band is scaled to whatever design is on screen. Two things
+came out of checking that, both below: internal hotspots were changing size
+with the mesh, and the reference set did not span the concentrated designs the
+app permits. The band quoted for a uniform design is now 1.34 % of the rise
+where it was 0.38 %, and 2.14 % with internal power patterns. Every band takes
+the worst reference case in its family, and says on its face that it is an
+estimate from reference packages.
+
+**Internal hotspots stopped changing size with the mesh.** A chiplet's power
+blocks are fractions of its footprint, and they were being rounded to the whole
+cells they mostly covered. That kept the watts but changed the block's modelled
+AREA with the mesh, so its power density — the thing that sets the peak —
+changed too. Refining did not converge, it wandered: the patterned reference
+package read 181.5, 139.2, 149.3 and 153.6 °C at 2, 1, 0.5 and 0.25 mm.
+Rounding also misplaced a sub-cell block by a whole cell (a block at 0.45–0.47
+of the footprint landed in the cell spanning 0.50–0.75). Blocks now take the
+cells they geometrically overlap, so the same physical hotspot is modelled at
+every mesh. The reference package now reads 120.5, 144.8, 150.1 and 152.3 °C —
+converging from below, as an under-resolved hotspot should. On the shipped
+RISC-V scenario the difference between 0.5 mm and 0.25 mm fell from **1.008 K
+to 0.013 K**. Power is conserved to 1e-12 either way, which is why no test
+caught this: nothing was lost, it was in the wrong place.
+
+This supersedes the pattern temperatures quoted in 0.3.x and 0.4.0, which were
+measured with the old deposition.
+
+**The band knows which kind of design it is describing.** The convergence study
+now runs four reference cases — uniform and patterned chiplets, passive and
+under a cold plate — because the uniform cases understate a patterned design by
+more than an order of magnitude (measured on the RISC-V scenario before the fix
+above: 0.004 K uniform against 1.008 K patterned). A design is banded by the
+family it belongs to, taking the worst case in that family.
+
+**The band is audited now, not asserted.** `tools/band_check.py` solves
+fourteen designs at both mesh levels and compares the difference it measures
+against the band the app quoted them. Run against the reference set as it
+stood, four exceeded their band — the worst by 2.85× — and every one was a
+uniform design whose heat came from one small part, which the reference cases
+(4 to 10 mm chiplets) did not represent. Two concentrated reference cases were
+added and all fourteen now come in under, worst ratio 0.81 on the design that
+used to break it. The band is 1.34 % of the rise for uniform chiplets and
+2.14 % with internal patterns, against 0.38 % before — wider because the
+narrow one was wrong, which is the only good reason to widen a band.
+
+**Measure this design's mesh error.** A button, and `POST /api/mesh-check`:
+solve the design on screen at both mesh levels and subtract. That is a
+measurement of this design rather than an estimate scaled from a reference
+package, and it is what to quote when a design sits near its limit. Measured on
+the three demo scenarios: 0.062, 0.046 and 0.013 K, against estimates of 1.30,
+1.09 and 0.75 K.
+
+**A finer mesh is a choice now.** Each level takes the finest cell that fits
+its unknown budget: Standard 36,000, Fine 120,000. On a 20 mm package that is
+0.5 mm against 0.25 mm — under a second against 4–25 s, depending on the
+cooling stack. Exact at either size — residuals near 1e-11 — so it costs time
+and memory, not correctness. The model cache evicts by size as well as count,
+because a fine model carries roughly 640 MB of factorization.
+
+Small packages gain for free: a 10 mm package now meshes at 0.25 mm inside the
+same 36,000-unknown standard budget, which also halves how much the assembly
+keep-out is over-enforced — 250 µm applied for a 100 µm rule, where it was
+500 µm.
+
+Measured budgets after all of it: edge-AI **85.76 ± 2.47 K**, cold plate
+**75.71 ± 1.68 K**, RISC-V **69.76 ± 1.41 K** — about 4 % of the rise. The
+mesh half of that is a conservative estimate; measured on these three designs
+it is 0.062, 0.046 and 0.013 K, and the button that measures it ships with
+them.
+
 ## 0.4.0 — 17 September 2026
 
 **Over time.** A burst, time-stepped: idle → full power → idle, every step a

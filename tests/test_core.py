@@ -2734,9 +2734,24 @@ class TestExperimentPowerMap:
 
     def test_matches_the_optimizers_own_power_map(self):
         """Two independent implementations of one physical statement: this
-        module's power map and the protected optimizer's must agree exactly
-        for the same layout, or a before/after comparison is meaningless."""
+        module's power map and the protected optimizer's must agree for the
+        same layout, or a before/after comparison is meaningless.
+
+        Agreement is to floating-point round-off rather than bit-for-bit.
+        The two arrive at the same density by different arithmetic -- this
+        module now builds a per-cell weight array (so internal blocks can take
+        the cells they overlap) and divides once, while the optimizer divides
+        by the cell count directly -- and those differ in the last bit. One
+        ulp is agreement; anything a discretization could hide is not, hence
+        the 1e-12 relative tolerance rather than a loose one.
+        """
         exp = make_experiment()
+        assert not any(c.blocks or c.power_grid for c in exp.catalog), (
+            "ChipletSpec carries a footprint and a total power and nothing "
+            "inside it, so the protected optimizer models every chiplet as a "
+            "uniform heater. This comparison is therefore only meaningful for "
+            "uniform chiplets -- which is all the CLI pipeline can express, "
+            "since internal blocks reach the solver through the studio alone.")
         optimizer = ChipletPlacementOptimizer(
             nx=exp.package.nx, ny=exp.package.ny, nz=exp.package.nz,
             dx=exp.package.dx, dy=exp.package.dy, dz=exp.package.dz,
@@ -2746,7 +2761,12 @@ class TestExperimentPowerMap:
         optimizer._apply_layout_to_q_map(exp.layout_of(exp.initial_placement))
         mine = experiment_module.build_power_map(exp.package, exp.catalog,
                                                  exp.initial_placement)
-        assert np.array_equal(np.asarray(optimizer.solver.q_map), np.asarray(mine.q_w_m3))
+        theirs, ours = np.asarray(optimizer.solver.q_map), np.asarray(mine.q_w_m3)
+        assert theirs.shape == ours.shape
+        # Same cells carry power, and the same watts land in them.
+        assert np.array_equal(theirs > 0, ours > 0)
+        assert np.allclose(theirs, ours, rtol=1e-12, atol=0.0)
+        assert float(theirs.sum()) == pytest.approx(float(ours.sum()), rel=1e-12)
 
 
 class TestExperimentBaseline:

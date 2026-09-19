@@ -31,12 +31,13 @@ more than RESOLVE_TOL_K.
 from __future__ import annotations
 
 import base64
+import dataclasses
+import json
 import logging
 import math
+import os
 import threading
 import time
-import json
-import os
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -52,7 +53,8 @@ from src.config_loader import (
     SolverSection, StackSection, VisualizationSection,
 )
 from src.experiment import (
-    ChipletDef, Placement, PowerBlock, PowerGrid, block_cells, build_power_map, build_stack,
+    ChipletDef, Placement, PowerBlock, PowerGrid, block_weights,
+    build_power_map, build_stack,
     grid_weights, package_from_config, power_z_range, solve_placement, uniform_share,
     validate_placement,
 )
@@ -138,11 +140,34 @@ COOLING_STACKS: Dict[str, Tuple[Tuple[str, float, float, int], ...]] = {
     "coldplate": (("TIM", 25.0, 8.0, 1), ("Cold plate base", 1500.0, 390.0, 2)),
 }
 MAX_COOLING_CELLS = 10
-# Unknowns the app is willing to factorize. Above the protected solver's own
-# threshold because the studio factorizes the symmetric form with a
-# fill-reducing ordering: measured 1.3 s at 19,200 and 4.2 s at 32,000.
-STUDIO_MAX_UNKNOWNS = 36_000
-CELL_CHOICES_MM = (0.5, 1.0, 2.0)
+# Unknowns the app is willing to factorize, per mesh level. Above the
+# protected solver's own threshold because the studio factorizes the symmetric
+# form with a fill-reducing ordering.
+#
+# The finer level is not a different method and not an approximation: the
+# factorization is exact at either size and the residual is the same 1e-12.
+# What changes is cost and discretization error, both MEASURED on a 20 mm
+# package (tools/mesh_convergence.py, validation/mesh_convergence.json):
+#
+#   0.5  mm    19,200 unknowns    0.4 s    123 MB   error 0.04-0.24 K
+#   0.25 mm    76,800 unknowns    4.1 s    346 MB   error 0.005-0.10 K
+#   0.25 mm    96,000 unknowns   22.9 s    493 MB   (with a cold plate meshed)
+#   0.25 mm   115,200 unknowns   25.0 s    783 MB   (with a lid and heatsink)
+#
+# Standard is the default because a trade-show laptop should answer in under a
+# second. Fine exists because "we cannot go finer" would be false: the answer
+# is exact at either size -- residuals stay at 1e-11 -- and somebody checking
+# a marginal design should be able to spend the seconds and get the smaller
+# discretization error instead of being told no. The fine cap is set so that
+# every stack the app can build reaches 0.25 mm on a 20 mm package.
+MESH_LEVELS = {"standard": 36_000, "fine": 120_000}
+DEFAULT_MESH = "standard"
+STUDIO_MAX_UNKNOWNS = MESH_LEVELS[DEFAULT_MESH]
+# Cells the model cache will hold across all models before evicting the
+# oldest. One fine model is 76,800 cells and about 640 MB of factorization,
+# so a fixed count of six would reach four gigabytes.
+MAX_CACHED_CELLS = 200_000
+CELL_CHOICES_MM = (0.25, 0.5, 1.0, 2.0)
 MAX_CHIPLETS = 16
 # Root branches are searched on several cores. NumPy releases the GIL for the
 # array work each node does, so threads overlap; the cap keeps a laptop
@@ -201,6 +226,7 @@ class PackageSpec:
     keepout_um: float = DEFAULT_KEEPOUT_UM            # minimum chiplet-to-chiplet clearance
     cooling: str = "direct"                           # which path above the die
     cooling_layers: Tuple[Tuple[str, float, float, int], ...] = ()
+    mesh: str = DEFAULT_MESH                          # how fine the app may go
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -223,6 +249,9 @@ class PackageSpec:
                 raise StudioError(f"the stack totals {sum(layers):g} um; "
                                   f"at most {MAX_STACK_UM:g} um is supported")
         cooling, cooling_layers = PackageSpec._parse_cooling(raw)
+        mesh = raw.get("mesh", DEFAULT_MESH)
+        if not isinstance(mesh, str) or mesh not in MESH_LEVELS:
+            raise StudioError(f"mesh must be one of {', '.join(sorted(MESH_LEVELS))}")
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
             h_w_m2k=_number(raw, "h_w_m2k", 10.0, 1e6, "package"),
@@ -233,6 +262,7 @@ class PackageSpec:
                         else _number(raw, "keepout_um", 0.0, MAX_KEEPOUT_UM, "package")),
             cooling=cooling,
             cooling_layers=cooling_layers,
+            mesh=mesh,
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -314,7 +344,7 @@ class PackageSpec:
         it can force a coarser lateral mesh -- which the app then says."""
         for cell in CELL_CHOICES_MM:
             n = _whole(self.size_mm, cell)
-            if n is not None and n >= 8 and n * n * self.nz <= STUDIO_MAX_UNKNOWNS:
+            if n is not None and n >= 8 and n * n * self.nz <= MESH_LEVELS[self.mesh]:
                 return cell
         raise StudioError(f"a {self.size_mm:g} mm package does not fit a supported mesh; "
                           f"use a whole number of millimetres")
@@ -336,7 +366,13 @@ class PackageSpec:
         return self.keepout_cells * self.cell_mm * 1e3
 
     @property
+    def unknowns(self) -> int:
+        return self.n_cells * self.n_cells * self.nz
+
+    @property
     def model_key(self) -> Tuple:
+        # The mesh level is not in the key: two levels that land on the same
+        # cell size are the same model, and should share one factorization.
         return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um,
                 self.cooling_layers)
 
@@ -379,12 +415,15 @@ class ChipletIn:
                 return average
             # Weight of the busiest tile relative to an even share of them.
             return average * max(self.power_grid.weights) / total * tiles
-        best = uniform_share(self.blocks) if self.blocks else 1.0
-        for b in self.blocks:
-            area_frac = b.w_frac * b.h_frac
-            if area_frac > 0:
-                best = max(best, b.share / area_frac)
-        return average * best
+        if not self.blocks:
+            return average
+        # The background power is spread over the WHOLE footprint, so it flows
+        # through the block's area too: the busiest region carries its own
+        # share plus that background, which is what block_weights deposits.
+        background = uniform_share(self.blocks)
+        densest = max((b.share / (b.w_frac * b.h_frac)
+                       for b in self.blocks if b.w_frac * b.h_frac > 0), default=0.0)
+        return average * (background + densest)
 
 
 def _parse_power_grid(item: dict, where: str) -> Optional[PowerGrid]:
@@ -690,10 +729,22 @@ class ThermalModel:
 
 
 class ModelCache:
-    def __init__(self, capacity: int = 6):
+    """Built models, kept while they are cheap to keep.
+
+    Eviction is by SIZE as well as count: a 0.25 mm model carries a
+    factorization of about 640 MB, so holding six of them would cost four
+    gigabytes and push the machine into paging -- which is exactly how a
+    fast app becomes a slow one without any single operation looking slow.
+    """
+
+    def __init__(self, capacity: int = 6, max_cells: int = MAX_CACHED_CELLS):
         self._models: "OrderedDict[tuple, ThermalModel]" = OrderedDict()
         self._lock = threading.Lock()
         self.capacity = capacity
+        self.max_cells = max_cells
+
+    def _cells(self) -> int:
+        return sum(m.package.nx * m.package.ny * m.package.nz for m in self._models.values())
 
     def get(self, spec: PackageSpec) -> Tuple[ThermalModel, bool]:
         with self._lock:
@@ -703,7 +754,8 @@ class ModelCache:
                 return self._models[key], False
             model = ThermalModel(spec)
             self._models[key] = model
-            while len(self._models) > self.capacity:
+            while len(self._models) > self.capacity or (
+                    len(self._models) > 1 and self._cells() > self.max_cells):
                 self._models.popitem(last=False)
             return model, True
 
@@ -723,6 +775,68 @@ _MESH_STUDY = _load_study(MESH_STUDY_PATH)
 _MATERIAL_STUDY = _load_study(MATERIAL_STUDY_PATH)
 
 
+def mesh_check(cache: "ModelCache", spec: PackageSpec, chiplets) -> dict:
+    """Solve THIS design at both mesh levels and report the difference.
+
+    The band on every other result is an estimate: it is measured on reference
+    packages and scaled, so it describes designs like them rather than the one
+    on screen. This does not estimate anything. It solves the same design at
+    0.5 mm and again at 0.25 mm and subtracts, which is the discretization
+    error of this design, measured.
+
+    It costs seconds rather than milliseconds, which is why it is a thing the
+    user asks for rather than something every solve does. What it is for: a
+    design close enough to its limit that the estimate is the difference
+    between passing and failing.
+    """
+    levels: Dict[str, dict] = {}
+    for level in MESH_LEVELS:
+        at = dataclasses.replace(spec, mesh=level)
+        started = time.perf_counter()
+        out = solve(cache, at, chiplets)
+        if not out["ok"]:
+            raise StudioError("the design must be valid before its mesh error can be "
+                              f"measured: {'; '.join(out['violations'])}")
+        levels[level] = {
+            "mesh": level,
+            "cell_mm": at.cell_mm,
+            "unknowns": at.unknowns,
+            "peak_c": out["peak"]["t_c"],
+            "residual": out["verification"]["residual"],
+            "estimated_band_k": (out["metrics"]["uncertainty"] or {}).get("mesh_k"),
+            "solve_s": time.perf_counter() - started,
+        }
+    ordered = sorted(levels.values(), key=lambda row: -row["cell_mm"])
+    coarse, fine = ordered[0], ordered[-1]
+    measured = abs(fine["peak_c"] - coarse["peak_c"])
+    estimated = coarse["estimated_band_k"]
+    same_mesh = coarse["cell_mm"] == fine["cell_mm"]
+    return {
+        "ok": True,
+        "levels": ordered,
+        "same_mesh": same_mesh,
+        "measured_k": None if same_mesh else measured,
+        "estimated_k": estimated,
+        "covered": None if same_mesh or estimated is None else bool(measured <= estimated),
+        "use_peak_c": fine["peak_c"],
+        "note": ("this package already meshes at the finest cell the app builds, so "
+                 "both levels are the same solve and there is nothing to compare"
+                 if same_mesh else
+                 "measured on this design: the difference between solving it at "
+                 f"{coarse['cell_mm']:g} mm and at {fine['cell_mm']:g} mm"),
+    }
+
+
+def any_internal_power(chiplets) -> bool:
+    """Does any part carry structure inside its footprint?
+
+    Blocks and imported maps both put power somewhere other than everywhere,
+    and both are resolved by the mesh rather than by the chiplet outline. That
+    is what decides which measured band applies.
+    """
+    return any(c.blocks or c.power_grid is not None for c in chiplets)
+
+
 def _case_for(h_w_m2k: float, cases: dict) -> Optional[str]:
     """Which measured case this design resembles. Harder cooling means
     steeper gradients, and both studies were run for both regimes."""
@@ -734,7 +848,8 @@ def _case_for(h_w_m2k: float, cases: dict) -> Optional[str]:
 
 def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
                  mesh_study: Optional[dict] = None,
-                 material_study: Optional[dict] = None) -> Optional[dict]:
+                 material_study: Optional[dict] = None,
+                 concentrated: bool = False) -> Optional[dict]:
     """What is known about how wrong the peak could be, in kelvin.
 
     Two measured, independent contributions, added in quadrature:
@@ -748,7 +863,7 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
     moves when the model's own inputs move, and nothing about whether the
     model matches hardware. Returns None when the studies have not been run.
     """
-    mesh = mesh_band(cell_mm, rise_k, h_w_m2k, mesh_study)
+    mesh = mesh_band(cell_mm, rise_k, h_w_m2k, mesh_study, concentrated)
     material_study = _MATERIAL_STUDY if material_study is None else material_study
     material_k = None
     if material_study and rise_k > 0:
@@ -769,43 +884,86 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
         "cell_mm": mesh["cell_mm"] if mesh else cell_mm,
         "measured_on": mesh["measured_on"] if mesh else _case_for(h_w_m2k, (material_study or {}).get("cases") or {}),
         "observed_order": mesh["observed_order"] if mesh else None,
+        "concentrated": concentrated,
     }
 
 
 def mesh_band(cell_mm: float, rise_k: float, h_w_m2k: float,
-              study: Optional[dict] = None) -> Optional[dict]:
+              study: Optional[dict] = None, concentrated: bool = False) -> Optional[dict]:
     """How much the peak still moves with the mesh, in kelvin.
 
-    Taken from a three-mesh convergence study on a reference package (2, 1
-    and 0.5 mm cells) and scaled to THIS design's rise above ambient. It is a
-    discretization band, not a validation bound: it says how much of the
-    answer is the mesh, and says nothing about whether the model matches
-    hardware. Returns None when no study has been run.
+    Measured by refining reference packages to 0.25 mm and comparing, then
+    scaled to THIS design's rise above ambient. It is a discretization band,
+    not a validation bound: it says how much of the answer is the mesh, and
+    nothing about whether the model matches hardware.
+
+    Two things pick the band, in this order.
+
+    FIRST, whether this design has internal power patterns, because that is
+    what dominates the error. A chiplet outline lands on a cell boundary; the
+    blocks inside it are fractions of the footprint and do not. Measured on
+    the shipped RISC-V scenario, 0.5 mm against 0.25 mm:
+
+        every part uniform               0.004 K
+        the same design, MAC-array NPU   1.008 K
+        that NPU alone on a bare die     2.693 K
+
+    So the uniform reference cases understate a patterned design by a factor
+    of twenty, and patterns are exactly the feature that makes the answer
+    realistic. The study measures both families (tools/mesh_convergence.py)
+    and this picks the family the design belongs to.
+
+    SECOND, within that family, the WORST case rather than the one whose
+    cooling matches -- error tracks how concentrated the sources are, not only
+    the rise, and a band that flatters is worse than no band because somebody
+    spends it.
+
+    Both rules were forced by measurement, not chosen. tools/band_check.py
+    solves fourteen designs at both mesh levels and compares what it sees
+    against what this function quoted them; four exceeded their band, the
+    worst by 2.85x, until the study gained reference cases as concentrated as
+    the designs the app permits. All fourteen now come in under, the closest
+    at 0.81 of its band.
+
+    It remains an ESTIMATE from reference packages, and it is conservative for
+    most designs because it has to hold for the worst. The design in hand can
+    be measured exactly instead -- see mesh_check(). Returns None when no
+    study has been run.
     """
     study = _MESH_STUDY if study is None else study
     if not study or rise_k <= 0:
         return None
     cases = study.get("cases") or {}
-    # The band depends on how hard the package is being cooled: under a cold
-    # plate the gradients are steeper and the mesh matters more.
-    name = "coldplate" if h_w_m2k >= 10000.0 and "coldplate" in cases else "passive"
-    case = cases.get(name)
-    if not case:
-        return None
-    table = case.get("band_pct_of_rise_by_cell_mm") or {}
-    key = f"{cell_mm:g}"
-    if key not in table:
-        # Fall back to the coarsest measured mesh, which bands no tighter.
-        key = max(table, key=lambda k: float(k)) if table else None
+    # The family this design belongs to. A study written before the patterned
+    # cases existed has none of them, so an unlabelled case counts as uniform
+    # and a patterned design falls back to every case there is.
+    family = {n: c for n, c in cases.items() if bool(c.get("concentrated")) == concentrated}
+    if not family:
+        family = cases
+    key, pct, worst = None, 0.0, None
+    for name, case in family.items():
+        table = case.get("band_pct_of_rise_by_cell_mm") or {}
+        if not table:
+            continue
+        cell_key = f"{cell_mm:g}"
+        if cell_key not in table:
+            # Fall back to the coarsest measured mesh, which bands no tighter.
+            cell_key = max(table, key=lambda k: float(k))
+        value = float(table[cell_key])
+        if value > pct:
+            key, pct, worst = cell_key, value, name
     if key is None:
         return None
-    pct = float(table[key])
     return {
         "band_k": pct / 100.0 * rise_k,
         "band_pct_of_rise": pct,
         "cell_mm": float(key),
-        "measured_on": name,
-        "observed_order": case.get("order_p"),
+        "measured_on": (f"worst of {len(family)} reference cases ({worst})"
+                        + (" with internal power patterns" if concentrated
+                           else " with uniform chiplet power")),
+        "observed_order": (family.get(worst) or {}).get("order_p"),
+        "concentrated": concentrated,
+        "estimated": True,
     }
 
 
@@ -836,6 +994,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
                  "layers": [dict(layer_) for layer_ in spec.layers],
                  "stack_um": list(spec.stack_um),
                  "die_k0": spec.die_z[0], "die_k1": spec.die_z[1],
+                 "mesh": spec.mesh, "unknowns": spec.unknowns,
                  "cooling": spec.cooling,
                  "cooling_layers": [list(layer_) for layer_ in spec.cooling_layers]},
         "field_b64": base64.b64encode(field_c.astype("<f4").tobytes(order="C")).decode("ascii"),
@@ -857,7 +1016,8 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
             "flux_package_w_cm2": total_w / (area_mm2 / 100.0),
             "flux_chiplets_w_cm2": total_w / (chip_mm2 / 100.0) if chip_mm2 > 0 else None,
             "lambda_mm": model.lambda_mm, "h_w_m2k": spec.h_w_m2k,
-            "uncertainty": error_budget(spec.cell_mm, rise_k, spec.h_w_m2k),
+            "uncertainty": error_budget(spec.cell_mm, rise_k, spec.h_w_m2k,
+                                        concentrated=any_internal_power(chiplets)),
         },
         "verification": {
             "residual": float(result.residual),
@@ -1098,32 +1258,31 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
     per_watt: Dict[tuple, np.ndarray] = {}
     for index, (chiplet, (wc, hc), pos) in enumerate(zip(chiplets, sizes, positions)):
         _check_cancel(cancel)
-        cells = block_cells(wc, hc, chiplet.blocks)
         grid = chiplet.power_grid
         # Chiplets share solves only when their internal map matches too: a
         # MAC array in the middle is a different heat source from a uniform
-        # block of the same size, and an imported map is its own thing.
-        key = (wc, hc, cells, None if grid is None else (grid.cols, grid.rows, grid.weights))
+        # block of the same size, and an imported map is its own thing. The
+        # blocks themselves key this, not the cells they round to -- they are
+        # no longer rounded.
+        key = (wc, hc, chiplet.blocks,
+               None if grid is None else (grid.cols, grid.rows, grid.weights))
         if key in per_watt:
             fields.append(per_watt[key] * chiplet.power_w)
             if on_chiplet is not None:
                 on_chiplet(index + 1)
             continue
         nk = z1 - z0
-        rest = uniform_share(chiplet.blocks)
-        q = rest / (wc * hc * nk * pkg.cell_volume_m3)
-        footprint = (grid_weights(wc, hc, grid)[:, :, None] / (nk * pkg.cell_volume_m3)
-                     if grid is not None else None)
+        # One weights array covers both: an imported map, or the blocks and
+        # whatever uniform power they leave. Blocks take the cells they
+        # overlap rather than the cells they round to, so the same physical
+        # hotspot is modelled at every mesh (see block_weights).
+        weights = (grid_weights(wc, hc, grid) if grid is not None
+                   else block_weights(wc, hc, chiplet.blocks))
+        footprint = weights[:, :, None] / (nk * pkg.cell_volume_m3)
         rhs = np.zeros((n_cells, len(pos)), dtype=np.float64, order="F")
         for col, (x, y) in enumerate(pos):
             block[:] = 0.0
-            if footprint is not None:
-                block[x:x + wc, y:y + hc, z0:z1] = footprint
-            else:
-                block[x:x + wc, y:y + hc, z0:z1] = q
-                for bi, bj, bw, bh, share in cells:
-                    block[x + bi:x + bi + bw, y + bj:y + bj + bh, z0:z1] += (
-                        share / (bw * bh * nk * pkg.cell_volume_m3))
+            block[x:x + wc, y:y + hc, z0:z1] = footprint
             rhs[:, col] = block.reshape(n_cells)
         # S theta = q: the rise above ambient; the boundary forcing cancels.
         full = model.factor.rise_for_power(rhs, workers=solve_workers())
@@ -1445,7 +1604,7 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
         incumbent_value, incumbent_choice = value, start_choice
 
     signatures = [(sizes[i], chiplets[i].power_w,
-                   block_cells(*sizes[i], chiplets[i].blocks),
+                   chiplets[i].blocks,
                    None if chiplets[i].power_grid is None
                    else (chiplets[i].power_grid.cols, chiplets[i].power_grid.rows,
                          chiplets[i].power_grid.weights))

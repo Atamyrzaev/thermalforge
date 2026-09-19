@@ -62,6 +62,10 @@ let floorplan = null;
 // ------------------------------------------------------------------ helpers
 const DEFAULT_STACK_UM = [100, 40, 100];
 const DEFAULT_KEEPOUT_UM = 100;
+// Mirrors MESH_LEVELS in studio/engine.py: how many unknowns each level will
+// factorize, and therefore how fine a cell it can afford.
+const MESH_CAPS = { standard: 36000, fine: 120000 };
+const CELL_CHOICES_MM = [0.25, 0.5, 1, 2];
 
 function stackOf(pkg) {
   return (pkg && pkg.stack_um) || DEFAULT_STACK_UM;
@@ -86,9 +90,10 @@ function keepoutMm(pkg) {
 
 function cellMm(pkg) {
   const nz = nzOf(pkg);
-  for (const cell of [0.5, 1, 2]) {
+  const cap = MESH_CAPS[(pkg && pkg.mesh) || "standard"] || MESH_CAPS.standard;
+  for (const cell of CELL_CHOICES_MM) {
     const n = pkg.size_mm / cell;
-    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= 36000) return cell;
+    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= cap) return cell;
   }
   return 1;
 }
@@ -118,7 +123,7 @@ function packageRequest() {
   const p = state.pkg;
   return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm,
            stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100,
-           cooling: p.cooling || "direct" };
+           cooling: p.cooling || "direct", mesh: p.mesh || "standard" };
 }
 
 function chipletRequest(list = state.chiplets) {
@@ -374,6 +379,40 @@ function renderBars() {
   }).join("");
 }
 
+// The band on every solve is scaled from reference packages, so it describes
+// designs LIKE this one. This solves the design itself at both mesh levels and
+// subtracts, which is the only way to state its discretization error rather
+// than estimate it. It costs seconds, which is why it is a button.
+async function measureMeshError() {
+  const button = $("mesh-check");
+  const note = $("mesh-check-note");
+  button.disabled = true;
+  button.textContent = "Solving at both mesh levels…";
+  note.classList.remove("hidden");
+  note.textContent = "This solves the design twice; the finer pass can take half a minute.";
+  try {
+    const out = await postJSON("/api/mesh-check", { package: packageRequest(), chiplets: chipletRequest() });
+    if (out.same_mesh) {
+      note.textContent = "This package already meshes at the finest cell the app builds, "
+        + "so both levels are the same solve — there is nothing to compare.";
+    } else {
+      const [coarse, fine] = out.levels;
+      note.innerHTML =
+        `<b>Measured on this design: ±${out.measured_k.toFixed(3)} K.</b> `
+        + `${coarse.cell_mm} mm gives ${coarse.peak_c.toFixed(3)} °C, `
+        + `${fine.cell_mm} mm gives ${fine.peak_c.toFixed(3)} °C `
+        + `(${coarse.unknowns.toLocaleString()} against ${fine.unknowns.toLocaleString()} unknowns). `
+        + `The estimate printed above was ±${out.estimated_k.toFixed(3)} K, `
+        + (out.covered ? "which holds." : "which this design exceeds — trust the measurement.");
+    }
+  } catch (err) {
+    note.textContent = `Could not measure it: ${err.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Measure this design's mesh error";
+  }
+}
+
 function renderChecks() {
   const box = $("checks");
   const res = state.shown;
@@ -393,7 +432,8 @@ function renderChecks() {
       `±${u.combined_k.toFixed(2)} K (${u.pct_of_rise.toFixed(1)} % of the rise): mesh ±${u.mesh_k.toFixed(2)} K `
       + `at ${u.cell_mm} mm cells`
       + (u.material_k === null ? "" : `, conductivities ±${u.material_k.toFixed(2)} K`)
-      + `. Measured, not assumed — and not a claim about real hardware.`]);
+      + `. Estimated from reference packages — press “Measure this design’s mesh error” `
+      + `to replace the mesh half with this design's own.`]);
   }
   box.innerHTML = items.map(([ok, title, detail]) =>
     `<li><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "✗"}</span><span>${title}<small>${detail}</small></span></li>`).join("")
@@ -611,6 +651,7 @@ function syncPackageControls() {
   $("pkg-size").value = String(p.size_mm);
   $("pkg-ambient").value = p.ambient_c;
   $("pkg-path").value = p.cooling || "direct";
+  $("pkg-mesh").value = p.mesh || "standard";
   const preset = COOLING_PRESETS.includes(String(p.h_w_m2k)) ? String(p.h_w_m2k) : "custom";
   $("pkg-cooling").value = preset;
   $("pkg-h-wrap").classList.toggle("hidden", preset !== "custom");
@@ -638,8 +679,10 @@ function renderStackStrip() {
   const keepoutNote = keepout > 0
     ? ` · keep-out ${requested} µm → ${(keepout * 1000).toFixed(0)} µm on this mesh`
     : " · no keep-out";
+  const band = state.shown && state.shown.metrics.uncertainty;
   $("stack-note").textContent =
     `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`
+    + (band ? ` · discretization ±${band.mesh_k.toFixed(2)} K, measured` : "")
     + keepoutNote;
 }
 
@@ -647,7 +690,7 @@ function loadScenario(sc) {
   $("scenario").title = sc.summary || "";
   state.scenarioId = sc.id;
   state.pkg = { stack_um: [...DEFAULT_STACK_UM], keepout_um: DEFAULT_KEEPOUT_UM,
-                cooling: "direct", ...sc.package };
+                cooling: "direct", mesh: "standard", ...sc.package };
   state.chiplets = sc.chiplets.map((c) => ({ ...c }));
   state.selectedId = null;
   state.shown = null;
@@ -1225,6 +1268,12 @@ function wire() {
     state.pkg.cooling = $("pkg-path").value;
     packageChanged();
   });
+  $("pkg-mesh").addEventListener("change", () => {
+    record();
+    state.pkg.mesh = $("pkg-mesh").value;
+    packageChanged();
+  });
+  $("mesh-check").addEventListener("click", measureMeshError);
   $("pkg-keepout").addEventListener("change", () => {
     const value = Number($("pkg-keepout").value);
     if (!Number.isFinite(value) || value < 0 || value > 2000) { syncPackageControls(); return; }

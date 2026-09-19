@@ -762,17 +762,60 @@ class TestInternalPowerMap:
         assert row["hottest_density_w_cm2"] > 50.0                  # 70 % over 40 % of it
         assert row["power_pattern"] == "mac_array"
 
-    def test_blocks_land_on_cells_and_never_round_away(self):
-        """A block smaller than one cell still has to go somewhere: rounding
-        it away would move its power back into the uniform part silently."""
-        from src.experiment import PowerBlock, block_cells, uniform_share
+    def test_the_density_on_screen_is_the_density_in_the_field(self):
+        """The editor prints the busiest region's power density. That number
+        and the field the solver actually builds are computed by different
+        code, and a reader has no way to tell if they drift -- so they are
+        pinned to each other here, for every shipped pattern."""
+        from src.experiment import block_weights
+        average = 8.0 / (5.0 * 5.0 / 100.0)          # 8 W over 25 mm^2
+        for name in E.POWER_PATTERNS:
+            blocks = tuple(E.PowerBlock(*b) for b in E.POWER_PATTERNS[name])
+            part = E.ChipletIn(id="x", name="X", w_mm=5.0, h_mm=5.0, power_w=8.0,
+                               x_mm=0.0, y_mm=0.0, power_pattern=name, blocks=blocks)
+            deposited = float(block_weights(40, 40, blocks).max()) * 40 * 40 * average
+            assert part.hottest_block_density_w_cm2 == pytest.approx(deposited, rel=1e-9), (
+                f"{name}: the editor says {part.hottest_block_density_w_cm2:.2f} W/cm2 "
+                f"and the solver deposits {deposited:.2f}")
+
+    def test_a_block_keeps_its_power_however_the_mesh_falls(self):
+        """Every cell takes the share of each block it overlaps, so the watts
+        are conserved whatever the mesh does -- including a block smaller than
+        a cell, and one that runs past the chiplet edge."""
+        from src.experiment import PowerBlock, block_weights, uniform_share
         tiny = (PowerBlock(0.45, 0.45, 0.02, 0.02, 0.5),)
-        assert block_cells(4, 4, tiny) == ((2, 2, 1, 1, 0.5),)
         assert uniform_share(tiny) == pytest.approx(0.5)
-        # A block that would run past the edge is clipped to the footprint.
+        for n in (1, 2, 3, 4, 7, 16, 37):
+            assert block_weights(n, n, tiny).sum() == pytest.approx(1.0, abs=1e-12)
+        # Sub-cell: all of its half goes into the one cell that contains it.
+        # The block spans 0.45 to 0.47 of the footprint, so on a 4-cell side
+        # that is cell 1 (0.25 to 0.50). Rounding its corner to the nearest
+        # cell -- what this replaced -- gave round(0.45 * 4) = 2, placing the
+        # hotspot a whole cell away from where it physically sits.
+        weights = block_weights(4, 4, tiny)
+        assert weights[1, 1] == pytest.approx(0.5 + 0.5 / 16)
+        assert weights[2, 2] == pytest.approx(0.5 / 16)
+        # A block running past the edge is clipped, and keeps its power.
         wide = (PowerBlock(0.75, 0.0, 0.5, 1.0, 0.4),)
-        i0, j0, w, h, share = block_cells(4, 4, wide)[0]
-        assert i0 + w <= 4 and j0 + h <= 4 and share == 0.4
+        clipped = block_weights(4, 4, wide)
+        assert clipped.sum() == pytest.approx(1.0, abs=1e-12)
+        assert clipped[3, :].sum() == pytest.approx(0.4 + 0.6 / 4)   # all of it in the last column
+
+    def test_the_modelled_hotspot_does_not_change_with_the_mesh(self):
+        """The defect this replaced: a block rounded to whole cells changes
+        AREA with the mesh while its power stays fixed, so its density -- what
+        sets the peak -- changed with the mesh too. Measured, that made the
+        patterned reference package report 181.5, 139.2, 149.3 and 153.6 degC
+        at 2, 1, 0.5 and 0.25 mm: wandering, not converging."""
+        from src.experiment import block_weights
+        mac = E.POWER_PATTERNS["mac_array"]
+        blocks = tuple(E.PowerBlock(*b) for b in mac)
+        # 0.70 of the power over 0.63^2 of the area, plus the 0.30 spread out.
+        exact = 0.70 / (0.63 ** 2) + 0.30
+        for n in (4, 8, 16, 20, 32, 40):
+            peak = float(block_weights(n, n, blocks).max()) * n * n
+            assert peak == pytest.approx(exact, rel=0.02), (
+                f"a {n}x{n} mesh models the hotspot at {peak:.3f}x uniform, not {exact:.3f}x")
 
     def test_two_chiplets_of_one_size_but_different_maps_are_solved_apart(self, cache):
         """The optimizer shares single-chiplet solves between identical
@@ -848,6 +891,12 @@ class TestAssemblyKeepOut:
         assert (fine.keepout_cells, fine.keepout_enforced_um) == (1, 500.0)
         assert spec(size_mm=20.0, keepout_um=600.0).keepout_cells == 2
         assert spec(size_mm=30.0, keepout_um=100.0).keepout_enforced_um == 1000.0   # 1 mm mesh
+        # How much the rule is over-enforced is set by the mesh, so a package
+        # small enough to afford 0.25 mm inside the standard unknown budget
+        # gets closer to the 100 um actually asked for.
+        small = spec(size_mm=10.0, keepout_um=100.0)
+        assert (small.cell_mm, small.keepout_enforced_um) == (0.25, 250.0)
+        assert small.unknowns <= E.MESH_LEVELS["standard"]
 
     def test_touching_and_corner_touching_are_both_refused(self, cache):
         pkg = spec(keepout_um=100.0)
@@ -871,7 +920,13 @@ class TestAssemblyKeepOut:
         ok, offender = self.pairs_clear(out["optimized"]["placement"], pkg.keepout_enforced_um * 1e-3)
         assert ok, f"optimizer returned an unbuildable layout: {offender}"
         cert = out["certificate"]
-        assert cert["keepout_um"] == 100.0 and cert["keepout_enforced_um"] == 500.0
+        assert cert["keepout_um"] == 100.0
+        # Rounded up to the mesh, and never below what was asked. On this
+        # 0.25 mm grid that is 250 um; it was 500 um while 0.5 mm was the
+        # finest cell the app would build, so the finer standard mesh halved
+        # how much the rule is over-enforced.
+        assert cert["keepout_enforced_um"] == 250.0 == pkg.cell_mm * 1e3
+        assert cert["keepout_enforced_um"] >= cert["keepout_um"]
 
     def test_the_rule_costs_temperature_and_the_engine_says_so(self, cache):
         """The constrained optimum cannot be cooler than the unconstrained
@@ -951,6 +1006,200 @@ class TestStackEditor:
         assert out["peak"]["layer"] == "Die (Si)"
 
 
+class TestBandFollowsTheDesign:
+    """What actually drives discretization error is how concentrated the heat
+    is, and the sharpest concentration the app can express is a power pattern
+    INSIDE a chiplet. A chiplet outline lands on a cell boundary; the blocks
+    inside it do not. A band measured on uniform reference packages therefore
+    describes a class of design the app no longer only produces."""
+
+    def patterned(self, pattern="mac_array"):
+        return {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                "x_mm": 7, "y_mm": 7, "power_pattern": pattern}
+
+    def test_a_patterned_design_is_banded_wider_than_a_uniform_one(self, cache):
+        pkg = spec(size_mm=20.0, pitch_mm=1.0)
+        flat = dict(self.patterned()); flat["power_pattern"] = "uniform"
+        uniform = E.solve(cache, pkg, E.parse_chiplets([flat], pkg))
+        shaped = E.solve(cache, pkg, E.parse_chiplets([self.patterned()], pkg))
+        loose = shaped["metrics"]["uncertainty"]
+        tight = uniform["metrics"]["uncertainty"]
+        # Measured 1.6x, not more: the uniform family now includes its own
+        # concentrated case (a 2 mm part), so the two families are closer than
+        # they were. That is the point -- what widens the band is concentrated
+        # heat, and an internal pattern is the sharpest way to concentrate it,
+        # not a separate phenomenon. The range guards both directions: the
+        # pattern must cost something, and it must not run away.
+        ratio = loose["mesh_k"] / tight["mesh_k"]
+        assert 1.2 < ratio < 4.0, (
+            f"a MAC array is banded at {loose['mesh_k']:.3f} K and a uniform part at "
+            f"{tight['mesh_k']:.3f} K, a ratio of {ratio:.2f}")
+        assert loose["concentrated"] is True and tight["concentrated"] is False
+        assert "internal power patterns" in loose["measured_on"]
+        assert "uniform chiplet power" in tight["measured_on"]
+
+    def test_an_imported_map_counts_as_a_pattern_too(self, cache):
+        pkg = spec(size_mm=20.0, pitch_mm=1.0)
+        imported = dict(self.patterned(), power_pattern="imported",
+                        power_grid={"cols": 2, "rows": 2, "weights": [1.0, 0.0, 0.0, 3.0]})
+        chiplets = E.parse_chiplets([imported], pkg)
+        assert E.any_internal_power(chiplets) is True
+        assert E.solve(cache, pkg, chiplets)["metrics"]["uncertainty"]["concentrated"] is True
+
+    def test_a_study_without_the_patterned_cases_still_answers(self):
+        """An older validation file has no patterned cases. Falling back to
+        every case there is beats reporting no band at all."""
+        old_study = {"cases": {"passive": {"band_pct_of_rise_by_cell_mm": {"0.5": 0.4},
+                                           "order_p": 2.0}}}
+        band = E.mesh_band(0.5, 50.0, 1000.0, old_study, concentrated=True)
+        assert band is not None and band["band_k"] == pytest.approx(0.2)
+
+
+class TestMeasuredNotEstimated:
+    """The band every solve carries is an estimate scaled from reference
+    packages. This measures the design in hand instead."""
+
+    def test_it_reports_both_levels_and_the_difference_between_them(self, cache):
+        pkg = spec(size_mm=20.0, pitch_mm=1.0)
+        raw = [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                "x_mm": 7, "y_mm": 7, "power_pattern": "mac_array"}]
+        out = E.mesh_check(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["ok"] and out["same_mesh"] is False
+        coarse, fine = out["levels"]
+        assert (coarse["cell_mm"], fine["cell_mm"]) == (0.5, 0.25)
+        assert (coarse["unknowns"], fine["unknowns"]) == (19_200, 76_800)
+        assert out["measured_k"] == pytest.approx(abs(fine["peak_c"] - coarse["peak_c"]))
+        assert out["use_peak_c"] == fine["peak_c"]
+        # Both solves are exact; the finer one is not a different method.
+        assert coarse["residual"] < 1e-8 and fine["residual"] < 1e-8
+
+    def test_the_measurement_lands_inside_the_estimate(self, cache):
+        """The estimate is allowed to be conservative. It is not allowed to be
+        wrong, which is the whole reason it takes the worst reference case."""
+        pkg = spec(size_mm=20.0, pitch_mm=1.0)
+        raw = [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                "x_mm": 7, "y_mm": 7, "power_pattern": "mac_array"},
+               {"id": "io", "name": "IO", "w_mm": 3, "h_mm": 3, "power_w": 2.0,
+                "x_mm": 1, "y_mm": 1}]
+        out = E.mesh_check(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["covered"] is True, (
+            f"measured {out['measured_k']:.3f} K against an estimate of "
+            f"{out['estimated_k']:.3f} K -- the estimate has to hold")
+
+    def test_the_estimate_covers_the_design_that_used_to_break_it(self, cache):
+        """One small dense part under a cold plate: the most concentrated
+        thing the app can build without an internal pattern, and the design
+        that exposed the band as too narrow.
+
+        tools/band_check.py sweeps fourteen designs against the band they are
+        quoted. Four exceeded it, this one by 2.85x, because every uniform
+        reference case had 4 to 10 mm parts -- a gentle spread of heat. The
+        reference set now includes a 2 mm part, so the band describes the
+        design space the app actually permits. This pins the worst of them.
+        """
+        pkg = E.PackageSpec.parse({"size_mm": 20.0, "h_w_m2k": 25000.0,
+                                   "ambient_c": 25.0, "pitch_mm": 1.0})
+        raw = [{"id": "hot", "name": "HOT", "w_mm": 2, "h_mm": 2, "power_w": 8.0,
+                "x_mm": 9, "y_mm": 9}]
+        out = E.mesh_check(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["covered"] is True, (
+            f"measured {out['measured_k']:.3f} K against an estimate of "
+            f"{out['estimated_k']:.3f} K; the reference cases do not span this design")
+
+    def test_a_design_that_cannot_be_built_is_refused_not_measured(self, cache):
+        pkg = spec(keepout_um=100.0)
+        touching = [chip("a", 2, 2, 3.0, 0, 0), chip("b", 2, 2, 3.0, 2, 0)]
+        with pytest.raises(E.StudioError, match="valid before its mesh error"):
+            E.mesh_check(cache, pkg, E.parse_chiplets(touching, pkg))
+
+    def test_a_package_already_at_the_finest_cell_says_so(self, cache):
+        """A 10 mm package meshes at 0.25 mm in both levels, so there is no
+        pair to compare -- and claiming a measured 0 K would be a lie."""
+        pkg = spec(size_mm=10.0)
+        assert pkg.cell_mm == 0.25
+        out = E.mesh_check(cache, pkg, E.parse_chiplets([chip("a", 2, 2, 3.0, 0, 0)], pkg))
+        assert out["same_mesh"] is True
+        assert out["measured_k"] is None and out["covered"] is None
+        assert "nothing to compare" in out["note"]
+
+
+class TestMeshLevels:
+    """"We cannot go finer" would be false: the factorization is exact at
+    either size. What a finer mesh costs is time and memory, and what it buys
+    is a smaller discretization error -- both measured, and both the user's
+    choice rather than a ceiling nobody explained."""
+
+    def test_fine_buys_a_finer_cell_on_the_same_package(self):
+        standard = spec(size_mm=20.0)
+        fine = spec(size_mm=20.0, mesh="fine")
+        assert (standard.cell_mm, standard.unknowns) == (0.5, 19_200)
+        assert (fine.cell_mm, fine.unknowns) == (0.25, 76_800)
+        # A 40 mm package gains too: 1 mm becomes 0.5 mm.
+        assert spec(size_mm=40.0, pitch_mm=4.0).cell_mm == 1.0
+        assert spec(size_mm=40.0, pitch_mm=4.0, mesh="fine").cell_mm == 0.5
+
+    def test_the_finer_answer_is_still_exactly_solved(self, cache):
+        """Finer is not a different method: same residual, same energy
+        balance, same refusal to report anything that fails them."""
+        pkg = spec(size_mm=20.0, mesh="fine")
+        out = E.solve(cache, pkg, E.parse_chiplets([chip("a", 4, 4, 6.0, 8, 8)], pkg))
+        assert out["ok"]
+        v = out["verification"]
+        assert v["residual"] < 1e-8
+        assert v["sink_heat_w"] == pytest.approx(v["specified_w"], rel=1e-9)
+        assert v["unknowns"] == 76_800
+
+    def test_the_two_levels_agree_inside_the_band_they_report(self, cache):
+        """The claim the band makes about itself: the coarser answer sits
+        within its own stated discretization error of the finer one."""
+        raw = [chip("a", 4, 4, 6.0, 2, 2), chip("b", 4, 4, 4.0, 12, 12)]
+        standard = E.solve(cache, spec(size_mm=20.0), E.parse_chiplets(raw, spec(size_mm=20.0)))
+        fine_pkg = spec(size_mm=20.0, mesh="fine")
+        fine = E.solve(cache, fine_pkg, E.parse_chiplets(raw, fine_pkg))
+        band = standard["metrics"]["uncertainty"]["mesh_k"]
+        difference = abs(standard["peak"]["t_c"] - fine["peak"]["t_c"])
+        assert difference <= max(band, 0.05) * 3, (
+            f"0.5 mm and 0.25 mm differ by {difference:.3f} K against a stated band of {band:.3f} K")
+        assert fine["metrics"]["uncertainty"]["mesh_k"] < band
+
+    def test_an_unknown_mesh_level_is_refused(self):
+        with pytest.raises(E.StudioError, match="mesh must be one of"):
+            E.PackageSpec.parse({"size_mm": 20.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                 "pitch_mm": 2.0, "mesh": "ludicrous"})
+
+    def test_the_cache_evicts_by_size_not_just_by_count(self):
+        """A fine model carries a factorization of about 640 MB. Holding six
+        of them would cost four gigabytes and push the machine into paging --
+        which is how a fast app becomes a slow one with no slow operation in
+        sight."""
+        small = ModelCacheProbe(cells=10_000)
+        assert small.holds(6) == 6, "small models should still fill the count"
+        big = ModelCacheProbe(cells=76_800)
+        assert big.holds(6) <= 3, "a cache of fine models must not grow unbounded"
+
+
+class ModelCacheProbe:
+    """Drives ModelCache's eviction without building real models."""
+
+    class FakeModel:
+        def __init__(self, cells):
+            side = int(cells ** 0.5)
+            self.package = type("P", (), {"nx": side, "ny": side, "nz": 1})()
+
+    def __init__(self, cells):
+        self.cells = cells
+
+    def holds(self, count):
+        cache = E.ModelCache()
+        for n in range(count):
+            with cache._lock:
+                cache._models[("case", n)] = self.FakeModel(self.cells)
+                while len(cache._models) > cache.capacity or (
+                        len(cache._models) > 1 and cache._cells() > cache.max_cells):
+                    cache._models.popitem(last=False)
+        return len(cache._models)
+
+
 class TestMeshErrorBar:
     """The band is measured (tools/mesh_convergence.py), scaled to the design
     in hand, and absent rather than invented when no study has been run."""
@@ -965,13 +1214,30 @@ class TestMeshErrorBar:
     def test_band_scales_with_the_rise_it_qualifies(self):
         small = E.mesh_band(0.5, 10.0, 1000.0, self.STUDY)
         large = E.mesh_band(0.5, 100.0, 1000.0, self.STUDY)
-        assert small["band_k"] == pytest.approx(0.083)
-        assert large["band_k"] == pytest.approx(0.83)
-        assert small["band_pct_of_rise"] == large["band_pct_of_rise"] == 0.83
+        assert small["band_k"] == pytest.approx(0.224)      # 2.24 % of 10 K
+        assert large["band_k"] == pytest.approx(2.24)
+        assert small["band_pct_of_rise"] == large["band_pct_of_rise"] == 2.24
 
-    def test_harder_cooling_uses_the_case_measured_for_it(self):
-        assert E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)["measured_on"] == "passive"
-        assert E.mesh_band(0.5, 50.0, 25000.0, self.STUDY)["measured_on"] == "coldplate"
+    def test_the_worst_reference_case_sets_the_band_whatever_the_cooling(self):
+        """It used to take the case whose cooling matched. That flattered
+        designs whose sources are more concentrated than the reference's:
+        measured, two 4 mm parts on a 20 mm package moved 0.19 K between
+        0.5 mm and 0.25 mm while the matching case implied 0.04 K. A band
+        that only holds for packages resembling the reference is not a band.
+        """
+        gentle = E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)
+        harsh = E.mesh_band(0.5, 50.0, 25000.0, self.STUDY)
+        assert gentle["band_k"] == harsh["band_k"]
+        assert "coldplate" in gentle["measured_on"]        # the worse of the two
+        assert gentle["estimated"] is True                 # from reference packages
+
+    def test_the_band_says_it_is_an_estimate_from_other_packages(self):
+        """The design in hand can be measured exactly by solving it at both
+        mesh levels. Until someone does, the number is an estimate, and it
+        says so rather than implying it was measured here."""
+        band = E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)
+        assert band["estimated"] is True
+        assert "reference" in band["measured_on"]
 
     def test_a_coarser_mesh_never_claims_a_tighter_band(self):
         fine = E.mesh_band(0.5, 50.0, 1000.0, self.STUDY)["band_k"]
@@ -994,7 +1260,7 @@ class TestMeshErrorBar:
         if budget is None:
             pytest.skip("no studies committed; run the tools in tools/")
         assert 0 < budget["combined_k"] < out["metrics"]["rise_k"]
-        assert budget["cell_mm"] in (0.5, 1.0, 2.0)
+        assert budget["cell_mm"] in (0.25, 0.5, 1.0, 2.0)
 
     def test_the_budget_adds_independent_sources_in_quadrature(self):
         mesh = {"cases": {"passive": {"order_p": 1.0, "band_pct_of_rise_by_cell_mm": {"0.5": 1.0}}}}
@@ -1074,11 +1340,18 @@ class TestExactOptimizer:
         With uniform chiplets and no keep-out the same case optimizes to
         70.2273 degC -- the difference is not noise, it is what those rules
         cost, and quoting the lower number would be quoting a package nobody
-        can build out of parts nobody makes."""
+        can build out of parts nobody makes.
+
+        This figure moved once, from 73.7656 degC, when internal blocks
+        stopped being rounded to whole cells. Rounding shrank a block while
+        keeping its watts, so it modelled a denser hotspot than the design
+        describes; the corrected deposition is 0.72 K cooler. A pinned
+        optimum is exactly the number that must not move quietly, so the
+        reason it moved is recorded here rather than in the diff alone."""
         sc = next(s for s in scenarios() if s["id"] == "edge-ai-soc")
         pkg = E.PackageSpec.parse(sc["package"])
         out = E.optimize(cache, pkg, E.parse_chiplets(sc["chiplets"], pkg))
-        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(73.7656, abs=5e-5)
+        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(73.0407, abs=5e-5)
         assert out["certificate"]["combinations"] == 8_294_400
 
     def test_an_optimal_start_is_kept(self, cache):

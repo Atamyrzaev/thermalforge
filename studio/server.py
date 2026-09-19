@@ -217,6 +217,10 @@ def make_handler(studio: Studio):
                     spec, chiplets = self._parse_problem()
                     job = studio.start_optimization(spec, chiplets)
                     self._send_json({"ok": True, "job_id": job.id})
+                elif path == "/api/mesh-check":
+                    # Seconds, not milliseconds: it solves the design twice.
+                    spec, chiplets = self._parse_problem()
+                    self._send_json(engine.mesh_check(studio.cache, spec, chiplets))
                 elif path == "/api/transient":
                     data = self._read_json()
                     spec = engine.PackageSpec.parse(data.get("package"))

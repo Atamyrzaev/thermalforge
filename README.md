@@ -43,8 +43,11 @@ a code change.
   raises rather than reporting a number it cannot defend.
 - **Models what is inside a chiplet.** A part is not a uniform heater: an NPU's MAC
   array, a GPU's engines and a CPU's core complex carry most of the power over part
-  of the die. On an 8 W, 5 × 5 mm NPU, assuming uniform power under-reports the
-  junction by **13.2 K**. Four built-in patterns cover the common shapes, and
+  of the die. On an 8 W, 5 × 5 mm NPU alone on a 20 mm package at h = 1,000, assuming
+  uniform power under-reports the junction by **12.5 K** (85.6 °C against 98.1 °C).
+  Each block takes the cells it geometrically overlaps rather than the cells it
+  rounds to, so the modelled hotspot is the same size at every mesh. Four built-in
+  patterns cover the common shapes, and
   **Import map…** reads a design team's own numbers from a CSV — either a matrix of
   tile values or a table of regions (see `examples/`). Values are relative, so watts,
   milliwatts, percentages or activity counts all work.
@@ -77,7 +80,10 @@ a code change.
 | **Verified** | Residual and energy balance on every solve. The optimizer agrees with an independent brute force. The solver reproduces closed-form solutions for a uniformly heated slab (second order, with the predicted coefficient) and a rectangular flux channel (`tests/test_benchmarks.py`). |
 | **Not validated** | No result has been compared with a measured package. Until that happens, every reported temperature is labelled *verified, not validated* (`src/validation_status.py`). |
 | **Ready for measurements** | `tools/correlate.py` takes a case file — a package plus the temperatures somebody measured on it — and reports agreement against two bands: the instrument's uncertainty and the model's error budget. A synthetic example ships so the process can be rehearsed today; everything derived from it is stamped SYNTHETIC. |
-| **Error budget** | Two measured sensitivities, added in quadrature and printed beside every peak: mesh refinement (`tools/mesh_convergence.py`: ±0.43 K passive, ±1.76 K cold plate) and conductivity perturbations (`tools/material_sensitivity.py`: silicon ±10 %, bump composite ±30 %). On the demo scenarios that is **±2.1 to ±2.6 K, about 3.5 % of the rise** — dominated by the silicon conductivity, not by the mesh. Results are versioned in `validation/`. |
+| **Error budget** | Two measured sensitivities, added in quadrature and printed beside every peak. **Mesh**: reference packages refined to 0.25 mm and compared directly, so the discretization error is measured rather than extrapolated. Six reference cases span what the app permits — spread-out, concentrated and internally patterned chiplets, each passively cooled and under a cold plate — because what drives the error is how concentrated the heat is. A design is banded by the worst case in the family it belongs to: 1.34 % of the rise for uniform chiplets, 2.14 % with internal patterns. **Materials**: silicon ±10 %, bump composite ±30 % (`tools/material_sensitivity.py`). On the demo scenarios: **±2.47, ±1.68 and ±1.41 K**. Results are versioned in `validation/`. |
+| **And the band is audited** | `tools/band_check.py` solves fourteen designs at both mesh levels and compares what it measures against the band the app quoted them. That is how the reference set was found wanting: four designs exceeded their band, the worst by 2.85×, every one of them a uniform design with a small dense part the reference cases did not represent. With those cases added, all fourteen come in under — worst ratio 0.81, on the design that used to break it. A band that flatters is worse than no band, because somebody spends it. |
+| **Finer when you want it** | The mesh is a choice, not a ceiling. Each level takes the finest cell that fits its unknown budget: **Standard** 36,000 (0.5 mm on a 20 mm package, 0.25 mm on a 10 mm one, answers in under a second) or **Fine** 120,000 (0.25 mm on a 20 mm package, 4–25 s to build depending on the cooling stack). The factorization is exact at either size — residuals stay near 1e-11 — so a finer mesh costs time and memory, not correctness. |
+| **Or stop estimating** | **Measure this design's mesh error** solves the design on screen at both mesh levels and subtracts. That is this design's discretization error, measured, rather than a figure scaled from a reference package. On the three demo scenarios it comes to 0.062, 0.046 and 0.013 K against estimates of 1.30, 1.09 and 0.75 K. The estimate has to hold for every design, so it is conservative for most; the measurement is what to quote when a design sits near its limit. |
 
 Known limitations are printed on the reports themselves, not hidden here: power
 enters at the active plane but is spread over one mesh cell (20 µm) rather than a
@@ -85,7 +91,7 @@ sub-micron device layer, silicon is homogeneous (no BEOL, device layer or TSVs),
 cooling is one effective coefficient on the die backside, the stack is three
 editable layers (interposer / bumps / die) rather than an arbitrary one, and the
 keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
-0.5 mm mesh — stricter than asked, never looser.
+0.5 mm mesh — stricter than asked, never looser, and halved by a finer one.
 
 ## Layout
 
@@ -95,10 +101,10 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `src/` | The core: `thermal_solver.py`, `grid_builder.py`, `composite_materials.py`, `experiment.py`, `exhaustive.py`, `optimizer.py`, `surrogate.py` |
 | `main.py` | Command-line pipeline (Stage 1 single die, Stage 2 placement) |
 | `packaging/` | The standalone build: `build.py` and the PyInstaller spec |
-| `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
+| `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `band_check.py` (is the band actually a bound?), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
 | `validation/` | Verification artifacts, versioned as evidence: the studies, plus `cases/` and `correlation/` |
 | `examples/` | Power maps to import: one matrix form, one region table |
-| `tests/` | 298 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 333 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 
