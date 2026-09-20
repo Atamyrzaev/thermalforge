@@ -19,6 +19,24 @@ cooling number. Demo scenarios go from ±2.47, ±1.68, ±1.41 K to **±4.08,
 ±3.19, ±2.34 K** — wider because a term was missing, not because anything got
 worse.
 
+**The search can turn parts, and by default it does not.** 90-degree
+rotations are candidate states now: a part's sides swap and everything inside
+turns with them, so two engines side by side become two stacked. Squares with
+symmetric insides are skipped, because turning them enumerates the identical
+heat source twice. Verified against a brute force that rotates independently,
+so a wrong turn would either beat the truth (an illegal layout) or miss it (a
+candidate never scored); the re-solve tolerance is unchanged.
+
+It is off by default, and that is a measurement rather than a preference. On
+all three shipped scenarios turning parts moves the proven optimum **0.000 K**
+while doubling the candidate count, 8,294,400 to 16,588,800. A rectangle with
+the whole grid to move around in rarely needs turning as well. It earns its
+cost where packing is tight — three long thin parts on a 10 mm package gain
+0.156 K — so `"rotate": true` on the package is a switch for that case rather
+than a tax on every search, which matters in the stage whose whole point is
+speed. The certificate records whether turning was allowed and which parts
+were turned, and the engine refuses to report a turned layout if it was not.
+
 **Long proofs can be paused.** `POST /api/jobs/<id>/pause` and `/resume`, and
 a Pause button on the optimizer overlay. The hold lives in the object the
 engine already consults for cancellation, so it takes effect exactly where

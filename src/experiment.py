@@ -480,6 +480,38 @@ def grid_weights(nvx: int, nvy: int, grid: PowerGrid) -> np.ndarray:
     return cells / cells_sum
 
 
+def rotate_blocks(blocks: Tuple[PowerBlock, ...]) -> Tuple[PowerBlock, ...]:
+    """Internal blocks turned a quarter turn counter-clockwise.
+
+    Fractions are of the footprint, and the footprint turns with them: a point
+    at (u, v) goes to (1 - v, u), so a rect [x, x+w] x [y, y+h] becomes
+    [1-y-h, 1-y] x [x, x+w]. Shares are untouched -- turning a die does not
+    change how its power is divided.
+    """
+    return tuple(PowerBlock(1.0 - b.y_frac - b.h_frac, b.x_frac,
+                            b.h_frac, b.w_frac, b.share)
+                 for b in blocks)
+
+
+def rotate_grid(grid: Optional[PowerGrid]) -> Optional[PowerGrid]:
+    """An imported map turned the same quarter turn.
+
+    weights[0] is the chiplet's TOP row, so the array's row index already runs
+    against y. Under the turn a tile at (row r, column c) lands at
+    (row cols-1-c, column r), and the map's shape transposes with it.
+    """
+    if grid is None:
+        return None
+    values = [list(grid.weights[r * grid.cols:(r + 1) * grid.cols])
+              for r in range(grid.rows)]
+    out = [[0.0] * grid.rows for _ in range(grid.cols)]
+    for r in range(grid.rows):
+        for c in range(grid.cols):
+            out[grid.cols - 1 - c][r] = values[r][c]
+    flat = tuple(v for row in out for v in row)
+    return PowerGrid(cols=grid.rows, rows=grid.cols, weights=flat)
+
+
 def _overlap(n: int, lo: float, hi: float) -> np.ndarray:
     """How much of each of n equal cells the span [lo, hi] covers, in cells.
 

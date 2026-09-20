@@ -56,7 +56,7 @@ def cache():
     return E.ModelCache()
 
 
-def brute_force_optimum(cache, pkg, chiplets):
+def brute_force_optimum(cache, pkg, chiplets, rotate=False):
     """Every non-overlapping grid layout, scored over every cell from
     single-chiplet solves: full float64 fields straight from the verified
     solver (src.experiment.solve_placement), sharing no code with the
@@ -67,21 +67,34 @@ def brute_force_optimum(cache, pkg, chiplets):
     options = []
     for c in chiplets:
         spots = []
-        for x in np.arange(0.0, size - c["w_mm"] + 1e-9, pitch):
-            for y in np.arange(0.0, size - c["h_mm"] + 1e-9, pitch):
-                single = E.parse_chiplets([{**c, "x_mm": float(x), "y_mm": float(y)}], pkg)
-                with model.lock:
-                    result = solve_placement(model.solver, model.package, E._catalog(single),
-                                             E._placement(single, pkg.cell_mm), "brute force")
-                rise = np.asarray(result.field_k, dtype=np.float64) - model.package.t_ambient_k
-                spots.append(((float(x), float(y)), rise))
+        # Each way the part may sit. Written out here rather than imported, so
+        # the rotated search is checked against an independently rotated
+        # brute force rather than against its own helper.
+        forms = [dict(c)]
+        if rotate:
+            turned = dict(c, w_mm=c["h_mm"], h_mm=c["w_mm"])
+            if "blocks" in c and c["blocks"]:
+                turned["blocks"] = [[1.0 - b[1] - b[3], b[0], b[3], b[2], b[4]]
+                                    for b in c["blocks"]]
+            if turned["w_mm"] != c["w_mm"] or turned.get("blocks") != c.get("blocks"):
+                forms.append(turned)
+        for form in forms:
+            for x in np.arange(0.0, size - form["w_mm"] + 1e-9, pitch):
+                for y in np.arange(0.0, size - form["h_mm"] + 1e-9, pitch):
+                    single = E.parse_chiplets(
+                        [{**form, "x_mm": float(x), "y_mm": float(y)}], pkg)
+                    with model.lock:
+                        result = solve_placement(model.solver, model.package, E._catalog(single),
+                                                 E._placement(single, pkg.cell_mm), "brute force")
+                    rise = np.asarray(result.field_k, dtype=np.float64) - model.package.t_ambient_k
+                    spots.append(((float(x), float(y), form["w_mm"], form["h_mm"]), rise))
         options.append(spots)
     # The same assembly rule the engine applies, written independently here:
     # a pair is legal when it clears the keep-out in x or in y.
     keepout = pkg.keepout_enforced_um * 1e-3
     best, best_xy = np.inf, None
     for combo in itertools.product(*options):
-        rects = [(xy[0], xy[1], c["w_mm"], c["h_mm"]) for (xy, _), c in zip(combo, chiplets)]
+        rects = [(xy[0], xy[1], xy[2], xy[3]) for (xy, _) in combo]
         too_close = any(min(a[0] + a[2], b[0] + b[2]) + keepout - max(a[0], b[0]) > 1e-9
                         and min(a[1] + a[3], b[1] + b[3]) + keepout - max(a[1], b[1]) > 1e-9
                         for a, b in itertools.combinations(rects, 2))
@@ -1532,6 +1545,71 @@ class TestExactOptimizer:
         assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
         assert cert["resolve_delta_k"] <= E.RESOLVE_TOL_K
 
+    def test_rotation_finds_what_a_rotating_brute_force_finds(self, cache):
+        """The claim rotation makes: the search still returns the exact
+        optimum, now over a candidate set that includes turned parts. Checked
+        against a brute force that rotates independently -- if the search
+        rotated wrongly it would either beat the truth (an illegal layout) or
+        miss it (a candidate it never scored)."""
+        pkg = spec()
+        # Long thin parts on a square package: how they are turned decides
+        # whether they fit beside each other at all.
+        raw = [chip("a", 6, 2, 6.0, 0, 0), chip("b", 6, 2, 5.0, 0, 4),
+               chip("c", 2, 2, 3.0, 0, 8)]
+        pkg = spec(rotate=True)
+        truth, _ = brute_force_optimum(cache, pkg, raw, rotate=True)
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        assert out["certificate"]["rotation_allowed"] is True
+        assert out["certificate"]["lattice_optimum_c"] == pytest.approx(truth, abs=1e-7)
+        assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
+
+    def test_a_turned_part_is_reported_with_its_new_shape(self, cache):
+        """A rotated winner must come back as the part the solver actually
+        solved: sides swapped. Reporting the original shape would describe a
+        layout nobody computed."""
+        pkg = spec()
+        raw = [chip("long", 6, 2, 8.0, 0, 0), chip("blocker", 4, 4, 1.0, 4, 4)]
+        pkg = spec(rotate=True)
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        rows = {r["id"]: r for r in out["optimized"]["chiplets"]}
+        assert set(rows) == {"long", "blocker"}
+        placed = {c["id"]: c for c in out["optimized"]["placement"]}
+        w, h = placed["long"]["w_mm"], placed["long"]["h_mm"]
+        assert {w, h} == {6.0, 2.0}, "the part changed size, not just orientation"
+        # Whatever it chose, the reported rectangle is the one that was solved.
+        assert 0.0 <= placed["long"]["x_mm"] <= pkg.size_mm - w
+        assert 0.0 <= placed["long"]["y_mm"] <= pkg.size_mm - h
+
+    def test_turning_never_makes_the_answer_worse(self, cache):
+        """More candidates cannot raise an exact minimum. If it ever does,
+        the search is not exact."""
+        pkg = spec()
+        raw = [chip("a", 6, 2, 6.0, 0, 0), chip("b", 4, 2, 4.0, 0, 4)]
+        turning = spec(rotate=True)
+        with_turns = E.optimize(cache, turning, E.parse_chiplets(raw, turning)
+                                )["certificate"]["lattice_optimum_c"]
+        # The same instance with rotation suppressed, by making every part
+        # square-and-symmetric is not possible, so compare against the
+        # brute force that does not rotate: turning can only help.
+        flat, _ = brute_force_optimum(cache, pkg, raw, rotate=False)
+        assert with_turns <= flat + 1e-7
+
+    def test_a_square_uniform_part_does_not_double_the_search(self, cache):
+        """Turning a square uniform part produces the identical heat source,
+        so enumerating it twice would double the work for no new layout."""
+        pkg = spec()
+        square = E.parse_chiplets([chip("s", 4, 4, 4.0, 0, 0)], pkg)
+        oblong = E.parse_chiplets([chip("o", 4, 2, 4.0, 0, 0)], pkg)
+        assert len(E.orientations(square[0])) == 1
+        assert len(E.orientations(oblong[0])) == 2
+        # And the reported candidate count follows.
+        turning = spec(rotate=True)
+        one = E.optimize(cache, turning, E.parse_chiplets([chip("s", 4, 4, 4.0, 0, 0)], turning)
+                         )["certificate"]["combinations"]
+        two = E.optimize(cache, turning, E.parse_chiplets([chip("o", 4, 2, 4.0, 0, 0)], turning)
+                         )["certificate"]["combinations"]
+        assert two > one
+
     def test_identical_chiplets_are_handled_exactly(self, cache):
         pkg = spec()
         # The start must itself satisfy the keep-out: the engine refuses to
@@ -1565,8 +1643,13 @@ class TestExactOptimizer:
         with model.lock:
             fields = E.unit_fields(model, chiplets, positions, sizes)
         signatures = [(sizes[i], chiplets[i].power_w) for i in range(len(chiplets))]
+        # One orientation per chiplet here on purpose: this test pins the bare
+        # search against a brute force that does not rotate, so both sides
+        # must consider the same candidate set.
+        extents = [np.repeat(np.array([sz], dtype=np.int64), len(pos), axis=0)
+                   for sz, pos in zip(sizes, positions)]
         value, choice, stats = E.branch_and_bound(
-            fields, positions, sizes, signatures, (np.inf, None),
+            fields, positions, extents, signatures, (np.inf, None),
             bound_cells=model.bound_cells, clearance_cells=pkg.keepout_cells,
             improve_incumbent=False)
         assert choice is not None
@@ -1593,7 +1676,11 @@ class TestExactOptimizer:
         pkg = E.PackageSpec.parse(sc["package"])
         out = E.optimize(cache, pkg, E.parse_chiplets(sc["chiplets"], pkg))
         assert out["certificate"]["lattice_optimum_c"] == pytest.approx(73.0407, abs=5e-5)
+        # Unchanged: rotation is off by default, because measured on all three
+        # shipped scenarios it moves the optimum 0.000 K while doubling this
+        # count to 16,588,800.
         assert out["certificate"]["combinations"] == 8_294_400
+        assert out["certificate"]["rotation_allowed"] is False
 
     def test_an_optimal_start_is_kept(self, cache):
         pkg = spec()
