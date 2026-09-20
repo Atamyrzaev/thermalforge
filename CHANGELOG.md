@@ -3,6 +3,48 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.5.1 — 20 September 2026
+
+**"Verified, not validated" is no longer the whole truth.** The spreading has
+now been compared with measured hardware. `tools/correlate.py` against the
+SAMOS 2019 open thermal-test-chip dataset (Terraneo et al., CC-BY): 16 on-die
+diodes, a single 7 W hot spot among fifteen 0.2 W cells under forced air.
+**28.95 K of measured spatial spread reproduced to 0.63 K RMS** — and the two
+inputs the source never published, silicon thickness and the convective
+coefficient, were fitted on a *different* power pattern and held fixed, so
+this one is a prediction.
+
+The level was not validated and the label says so. Every sensor reads 2.80 K
+above the model *together*, which is a series resistance outside this model,
+and `h` was fitted rather than measured. The status is now **"verified;
+spreading validated, absolute level not validated"**, stated as two separate
+claims because only one of them was earned.
+
+**The harness can tell those apart now.** `correlate.py` splits the
+disagreement into a common offset (an unmodelled contact, grease line or
+undisclosed heat sink — one number removes it) and shape (the conduction this
+solver computes). It also refuses to call a case validating when the case
+cannot discriminate: one measurement, or several agreeing within their own
+uncertainty, would be matched by a wrong model too. That guard caught an
+existing test which had been treating a single perfect sensor as evidence.
+
+**Two measured findings about this model's own assumptions.** From the same
+dataset, the effective `h` implied by 13 power patterns varies 4× under
+natural convection and 5× with an unpowered heat sink, but only ±9 % under
+forced convection — so one constant `h` is sound for forced convection and
+structurally wrong for natural convection. And on the uniform pattern the
+measurement varies 6.88 K across the die while the model varies 0.65 K:
+uniform power under a uniform `h` with adiabatic sides gives a flat field, and
+the residual is the fan, which no amount of conduction modelling will produce.
+
+**A second real case is recorded and deliberately not used.** The A*STAR 2.5-D
+interposer measurement (θ_JC = 0.83 K/W) is real and well documented, but
+decomposed with the paper's own figures it is 55–83 % grease and heat sink
+against ≈9 % silicon conduction. Agreement would be bought by choosing `h`.
+Run as-is the model reads 3.22 K low, close to the 3.80 K the unmodelled
+grease accounts for — a consistency check, not a validation. Both cases and
+the reasoning are in `validation/MEASURED_DATA.md`.
+
 ## 0.5.0 — 20 September 2026
 
 **The mesh error is measured, not extrapolated.** The convergence study now

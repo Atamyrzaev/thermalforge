@@ -1,0 +1,16 @@
+Case: astar-tsi-2p5d-bare-die  (H. Y. Zhang, X. W. Zhang, B. L. Lau, S. Lim, L. Ding and M. B. Yu, 'Thermal Characterization of Both Bare Die and Overmolded 2.5-D Packages on Through Silicon Interposers', IEEE Transactions on Components, Packaging and Manufacturing Technology, 2014. Open copy: https://oar.a-star.edu.sg/storage/6/6d1pjjxg5x/pub13-301-ipp-038-pp.pdf)
+Mesh 36 x 36 x 25 at 0.5 mm  ·  modelled peak 30.08 degC  ·  model band +/- 0.15 K
+
+sensor          measured  modelled    error    band  verdict
+tv3_diode         33.30C    30.08C   -3.22K   0.71K  OUTSIDE   junction at 10 W implied by the measured R_JC = 0.83 K/W above a 25 C coolant inlet; ONE lumped number, see why_this_case_is_here
+
+0 of 1 sensors inside the combined band  ·  bias -3.22 K  ·  RMS 3.22 K  ·  worst 3.22 K
+
+THIS CASE CANNOT VALIDATE THE MODEL.
+It carries one measurement. A single number fixes a level, and a level is
+what an unmodelled contact or an assumed boundary condition already sets,
+so any model can be made to agree with it by choosing one input. Such a
+case can CALIBRATE; it cannot confirm.
+A case earns its verdict by varying in space: sensors far apart, or a hotspot
+and a cold corner, at a known power. That is what conduction predicts and what
+an unmodelled interface resistance does not.

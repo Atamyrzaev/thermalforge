@@ -151,6 +151,32 @@ def correlate(case: dict) -> dict:
 
     errors = np.array([p["error_k"] for p in points], dtype=np.float64)
     inside = sum(1 for p in points if p["inside_band"])
+    bias = float(errors.mean())
+    # Split the disagreement in two, because the halves mean different things.
+    #
+    # A common OFFSET on every sensor is what an unmodelled series resistance
+    # looks like: a contact, a grease line, a heat sink whose performance was
+    # never disclosed. It says nothing about whether the conduction inside the
+    # package is right, and it can be removed by calibrating one number.
+    #
+    # What is left after removing that offset is SHAPE: how heat spreads from
+    # the sources across the die. That is the part this solver computes, and
+    # the only part a case can actually validate.
+    shape = errors - bias
+    for point, residual in zip(points, shape):
+        point["shape_error_k"] = float(residual)
+    measured = np.array([p["measured_c"] for p in points], dtype=np.float64)
+    modelled = np.array([p["modelled_c"] for p in points], dtype=np.float64)
+    measured_spread = float(measured.max() - measured.min()) if len(points) > 1 else 0.0
+    modelled_spread = float(modelled.max() - modelled.min()) if len(points) > 1 else 0.0
+    shape_rms = float(np.sqrt((shape ** 2).mean())) if len(points) > 1 else 0.0
+
+    # Can this case discriminate at all? If the spread the sensors actually
+    # see is no bigger than the uncertainty on each of them, then every model
+    # that gets the offset right will "agree", including a wrong one. Saying
+    # so is the difference between evidence and a rubber stamp.
+    worst_band = max((p["band_k"] for p in points), default=0.0)
+    discriminating = bool(len(points) > 1 and measured_spread > worst_band)
     return {
         "case": case.get("case", "unnamed"),
         "provenance": case["provenance"],
@@ -163,9 +189,16 @@ def correlate(case: dict) -> dict:
         "summary": {
             "count": len(points),
             "inside_band": inside,
-            "bias_k": float(errors.mean()),
+            "bias_k": bias,
             "rms_k": float(np.sqrt((errors ** 2).mean())),
             "max_abs_k": float(np.abs(errors).max()),
+            "shape_rms_k": shape_rms,
+            "shape_max_abs_k": float(np.abs(shape).max()) if len(points) > 1 else 0.0,
+            "measured_spread_k": measured_spread,
+            "modelled_spread_k": modelled_spread,
+            "spread_ratio": (modelled_spread / measured_spread) if measured_spread > 1e-12 else None,
+            "discriminating": discriminating,
+            "shape_inside_band": bool(len(points) > 1 and shape_rms <= worst_band),
         },
     }
 
@@ -191,17 +224,55 @@ def render(report: dict) -> str:
     lines.append(f"{s['inside_band']} of {s['count']} sensors inside the combined band  ·  "
                  f"bias {s['bias_k']:+.2f} K  ·  RMS {s['rms_k']:.2f} K  ·  "
                  f"worst {s['max_abs_k']:.2f} K")
+    if s["count"] > 1:
+        ratio = s["spread_ratio"]
+        lines.append(f"After removing the {s['bias_k']:+.2f} K common offset: "
+                     f"shape RMS {s['shape_rms_k']:.2f} K  ·  worst {s['shape_max_abs_k']:.2f} K")
+        lines.append(f"Spread across the sensors: measured {s['measured_spread_k']:.2f} K, "
+                     f"modelled {s['modelled_spread_k']:.2f} K"
+                     + (f"  ({ratio:.2f}x)" if ratio is not None else ""))
     lines.append("")
     if report["synthetic"]:
         lines.append("This case is SYNTHETIC. It says nothing about real hardware.")
-    elif s["inside_band"] == s["count"]:
+        return "\n".join(lines)
+
+    # What the two halves of the disagreement mean is not the same thing, so
+    # the verdict says which one held.
+    if not s["discriminating"]:
+        lines.append("THIS CASE CANNOT VALIDATE THE MODEL.")
+        if s["count"] < 2:
+            lines.append("It carries one measurement. A single number fixes a level, and a level is")
+            lines.append("what an unmodelled contact or an assumed boundary condition already sets,")
+            lines.append("so any model can be made to agree with it by choosing one input. Such a")
+            lines.append("case can CALIBRATE; it cannot confirm.")
+        else:
+            lines.append(f"The spread across its sensors ({s['measured_spread_k']:.2f} K) is no "
+                         "larger than the uncertainty on each")
+            lines.append("one, so every model that gets the overall offset right agrees with it,")
+            lines.append("including a wrong one.")
+        lines.append("A case earns its verdict by varying in space: sensors far apart, or a hotspot")
+        lines.append("and a cold corner, at a known power. That is what conduction predicts and what")
+        lines.append("an unmodelled interface resistance does not.")
+        return "\n".join(lines)
+
+    if s["inside_band"] == s["count"]:
         lines.append("Every sensor agrees within the measurement's uncertainty and the model's")
         lines.append("error budget. That is evidence about THIS package, under THESE conditions.")
         lines.append("The model's status changes only for what has actually been compared.")
+    elif s["count"] > 1 and s["shape_inside_band"]:
+        lines.append(f"The SHAPE agrees and the level does not: every sensor is off by about "
+                     f"{s['bias_k']:+.2f} K")
+        lines.append("together, while their differences from each other are reproduced. That is the")
+        lines.append("signature of a series resistance nobody modelled -- a contact, a grease line,")
+        lines.append("a heat sink whose real performance was never disclosed -- not of the")
+        lines.append("conduction inside the package. It is evidence FOR the solver and AGAINST the")
+        lines.append("boundary condition as given. Calibrating the boundary on this case and then")
+        lines.append("quoting the same case as validation would be circular; say which you did.")
     else:
-        lines.append("At least one sensor disagrees beyond both bands. Before adjusting anything,")
-        lines.append("check the case: sensor position, the power that was really drawn, and the")
-        lines.append("cooling that was really applied are wrong more often than the solver is.")
+        lines.append("At least one sensor disagrees beyond both bands, and removing a common offset")
+        lines.append("does not fix it, so the disagreement is in how heat spreads. Before adjusting")
+        lines.append("anything, check the case: sensor position, the power that was really drawn,")
+        lines.append("and the cooling that was really applied are wrong more often than the solver.")
     return "\n".join(lines)
 
 

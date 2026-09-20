@@ -1,0 +1,441 @@
+{
+  "case": "ttc-samos2019-hotspot",
+  "provenance": {
+    "kind": "measured",
+    "source": "F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796",
+    "date": "2019",
+    "measured_by": "Politecnico di Milano (not by this project)",
+    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 1 kHz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples at the end of the powered phase: the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
+    "geometry_note": "The dataset does not state the die size. It is pinned by cross-reference: the 3D-ICE 3.0 paper (IEEE TCAD 41(4), 2022) describes the uniform preheat on this same platform as 5 W/cm2, and this dataset's uniform baseline is 0.2 W per element, so each element is 0.04 cm2 -- 2 x 2 mm -- and the 4x4 array is 8 x 8 mm.",
+    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (60000 W/m2K) are NOT disclosed by the source. They were fitted once, on the 'one' power pattern alone, and then held fixed for every other pattern including this one. Two numbers fitted on one configuration and twelve others predicted from them is what validation looks like when the rig's own parameters were never published -- but the LEVEL of this model is calibrated, so only the SHAPE is evidence.",
+    "run": "heatsink_with_fan/hotspot_2",
+    "total_power_w": 10.139
+  },
+  "synthetic": false,
+  "model_band_k": 1.0265287902367615,
+  "peak_modelled_c": 64.56524211446617,
+  "grid": {
+    "nx": 32,
+    "ny": 32,
+    "nz": 13,
+    "cell_mm": 0.25,
+    "dz_um": 20.0,
+    "size_mm": 8.0,
+    "layers": [
+      {
+        "name": "Interposer (Si)",
+        "k0": 0,
+        "k1": 1,
+        "thickness_um": 20.0
+      },
+      {
+        "name": "Microbumps + underfill",
+        "k0": 1,
+        "k1": 2,
+        "thickness_um": 20.0
+      },
+      {
+        "name": "Die (Si)",
+        "k0": 2,
+        "k1": 7,
+        "thickness_um": 100.0
+      },
+      {
+        "name": "TIM 1",
+        "k0": 7,
+        "k1": 8,
+        "thickness_um": 50.0,
+        "k_w_mk": 5.0,
+        "compact": true
+      },
+      {
+        "name": "Copper lid",
+        "k0": 8,
+        "k1": 10,
+        "thickness_um": 1000.0,
+        "k_w_mk": 400.0,
+        "compact": true
+      },
+      {
+        "name": "TIM 2",
+        "k0": 10,
+        "k1": 11,
+        "thickness_um": 100.0,
+        "k_w_mk": 3.0,
+        "compact": true
+      },
+      {
+        "name": "Heatsink base",
+        "k0": 11,
+        "k1": 13,
+        "thickness_um": 2000.0,
+        "k_w_mk": 200.0,
+        "compact": true
+      }
+    ],
+    "stack_um": [
+      20.0,
+      20.0,
+      100.0
+    ],
+    "die_k0": 2,
+    "die_k1": 7,
+    "mesh": "standard",
+    "unknowns": 13312,
+    "cooling": "lid_heatsink",
+    "cooling_layers": [
+      [
+        "TIM 1",
+        50.0,
+        5.0,
+        1
+      ],
+      [
+        "Copper lid",
+        1000.0,
+        400.0,
+        2
+      ],
+      [
+        "TIM 2",
+        100.0,
+        3.0,
+        1
+      ],
+      [
+        "Heatsink base",
+        2000.0,
+        200.0,
+        2
+      ]
+    ]
+  },
+  "verification": {
+    "residual": 2.6200691788285e-12,
+    "energy_imbalance_k": 5.2101405461629243e-11,
+    "sink_heat_w": 10.13890000017397,
+    "deposited_w": 10.1389,
+    "specified_w": 10.1389,
+    "unknowns": 13312
+  },
+  "sensors": [
+    {
+      "id": "d0",
+      "note": "on-die diode, cell 0",
+      "x_mm": 1.0,
+      "y_mm": 1.0,
+      "cell": [
+        4,
+        4,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 65.016,
+      "uncertainty_k": 0.1,
+      "modelled_c": 60.40938186645508,
+      "error_k": -4.606618133544927,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -1.807759332656865
+    },
+    {
+      "id": "d1",
+      "note": "on-die diode, cell 1",
+      "x_mm": 3.0,
+      "y_mm": 1.0,
+      "cell": [
+        12,
+        4,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 40.807,
+      "uncertainty_k": 0.1,
+      "modelled_c": 38.6172981262207,
+      "error_k": -2.189701873779299,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.6091569271087631
+    },
+    {
+      "id": "d2",
+      "note": "on-die diode, cell 2",
+      "x_mm": 5.0,
+      "y_mm": 1.0,
+      "cell": [
+        20,
+        4,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.945,
+      "uncertainty_k": 0.1,
+      "modelled_c": 34.95451736450195,
+      "error_k": -1.9904826354980472,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.808376165390015
+    },
+    {
+      "id": "d3",
+      "note": "on-die diode, cell 3",
+      "x_mm": 7.0,
+      "y_mm": 1.0,
+      "cell": [
+        28,
+        4,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.174,
+      "uncertainty_k": 0.1,
+      "modelled_c": 33.7708740234375,
+      "error_k": -2.4031259765624995,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.39573282432556267
+    },
+    {
+      "id": "d4",
+      "note": "on-die diode, cell 4",
+      "x_mm": 1.0,
+      "y_mm": 3.0,
+      "cell": [
+        4,
+        12,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 40.904,
+      "uncertainty_k": 0.1,
+      "modelled_c": 38.651607513427734,
+      "error_k": -2.252392486572269,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.5464663143157931
+    },
+    {
+      "id": "d5",
+      "note": "on-die diode, cell 5",
+      "x_mm": 3.0,
+      "y_mm": 3.0,
+      "cell": [
+        12,
+        12,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 38.187,
+      "uncertainty_k": 0.1,
+      "modelled_c": 36.03403091430664,
+      "error_k": -2.152969085693357,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.6458897151947052
+    },
+    {
+      "id": "d6",
+      "note": "on-die diode, cell 6",
+      "x_mm": 5.0,
+      "y_mm": 3.0,
+      "cell": [
+        20,
+        12,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.789,
+      "uncertainty_k": 0.1,
+      "modelled_c": 34.216854095458984,
+      "error_k": -2.572145904541017,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.22671289634704506
+    },
+    {
+      "id": "d7",
+      "note": "on-die diode, cell 7",
+      "x_mm": 7.0,
+      "y_mm": 3.0,
+      "cell": [
+        28,
+        12,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.303,
+      "uncertainty_k": 0.1,
+      "modelled_c": 33.416622161865234,
+      "error_k": -2.886377838134763,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.08751903724670074
+    },
+    {
+      "id": "d8",
+      "note": "on-die diode, cell 8",
+      "x_mm": 1.0,
+      "y_mm": 5.0,
+      "cell": [
+        4,
+        20,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 37.312,
+      "uncertainty_k": 0.1,
+      "modelled_c": 34.971744537353516,
+      "error_k": -2.340255462646482,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.45860333824158017
+    },
+    {
+      "id": "d9",
+      "note": "on-die diode, cell 9",
+      "x_mm": 3.0,
+      "y_mm": 5.0,
+      "cell": [
+        12,
+        20,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.987,
+      "uncertainty_k": 0.1,
+      "modelled_c": 34.22919464111328,
+      "error_k": -2.7578053588867206,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.041053442001341534
+    },
+    {
+      "id": "d10",
+      "note": "on-die diode, cell 10",
+      "x_mm": 5.0,
+      "y_mm": 5.0,
+      "cell": [
+        20,
+        20,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.563,
+      "uncertainty_k": 0.1,
+      "modelled_c": 33.41178894042969,
+      "error_k": -3.151211059570315,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.35235225868225273
+    },
+    {
+      "id": "d11",
+      "note": "on-die diode, cell 11",
+      "x_mm": 7.0,
+      "y_mm": 5.0,
+      "cell": [
+        28,
+        20,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.358,
+      "uncertainty_k": 0.1,
+      "modelled_c": 32.96456527709961,
+      "error_k": -3.3934347229003876,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.5945759220123255
+    },
+    {
+      "id": "d12",
+      "note": "on-die diode, cell 12",
+      "x_mm": 1.0,
+      "y_mm": 7.0,
+      "cell": [
+        4,
+        28,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.417,
+      "uncertainty_k": 0.1,
+      "modelled_c": 33.80274963378906,
+      "error_k": -2.614250366210939,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": 0.18460843467712307
+    },
+    {
+      "id": "d13",
+      "note": "on-die diode, cell 13",
+      "x_mm": 3.0,
+      "y_mm": 7.0,
+      "cell": [
+        12,
+        28,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.324,
+      "uncertainty_k": 0.1,
+      "modelled_c": 33.428558349609375,
+      "error_k": -2.895441650390623,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.09658284950256091
+    },
+    {
+      "id": "d14",
+      "note": "on-die diode, cell 14",
+      "x_mm": 5.0,
+      "y_mm": 7.0,
+      "cell": [
+        20,
+        28,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.182,
+      "uncertainty_k": 0.1,
+      "modelled_c": 32.97516632080078,
+      "error_k": -3.206833679199221,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.40797487831115875
+    },
+    {
+      "id": "d15",
+      "note": "on-die diode, cell 15",
+      "x_mm": 7.0,
+      "y_mm": 7.0,
+      "cell": [
+        28,
+        28,
+        2
+      ],
+      "cell_mm": 0.25,
+      "measured_c": 36.063,
+      "uncertainty_k": 0.1,
+      "modelled_c": 32.694305419921875,
+      "error_k": -3.3686945800781274,
+      "band_k": 1.0313880730282607,
+      "inside_band": false,
+      "shape_error_k": -0.5698357791900652
+    }
+  ],
+  "summary": {
+    "count": 16,
+    "inside_band": 0,
+    "bias_k": -2.798858800888062,
+    "rms_k": 2.8699521883916863,
+    "max_abs_k": 4.606618133544927,
+    "shape_rms_k": 0.6348346055041951,
+    "shape_max_abs_k": 1.807759332656865,
+    "measured_spread_k": 28.953000000000003,
+    "modelled_spread_k": 27.715076446533203,
+    "spread_ratio": 0.9572436861994681,
+    "discriminating": true,
+    "shape_inside_band": true
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "case": "astar-tsi-2p5d-bare-die",
+  "provenance": {
+    "kind": "measured",
+    "source": "H. Y. Zhang, X. W. Zhang, B. L. Lau, S. Lim, L. Ding and M. B. Yu, 'Thermal Characterization of Both Bare Die and Overmolded 2.5-D Packages on Through Silicon Interposers', IEEE Transactions on Components, Packaging and Manufacturing Technology, 2014. Open copy: https://oar.a-star.edu.sg/storage/6/6d1pjjxg5x/pub13-301-ipp-038-pp.pdf",
+    "date": "2014",
+    "measured_by": "A*STAR Institute of Microelectronics (not by this project)",
+    "what_was_measured": "R_JC = (T_junction - T_water_inlet) / P = 0.83 K/W for the bare-die package, Run 2 (well-aligned heat sink). Power 8-20 W, chosen to give a junction rise of about 7 K or more. Measured with on-die diodes calibrated against an infrared camera; a minichannel copper/nickel cold plate on thermal grease removed the heat, with a ~0.1 mm plastic film insulating the sink from the interposer so that heat left through the test chip alone.",
+    "disclosed": [
+      "thermal test chip 5.08 x 5.08 mm, four equal heating cells, uniform heating",
+      "silicon interposer 18 x 18 x 0.1 mm, TSVs 10 um diameter, 100 um deep, large pitch",
+      "two dummy dies on the same interposer: 7.6 x 10.9 mm and 8.0 x 8.0 mm (unpowered in this test)",
+      "organic substrate 31 x 31 x 1 mm",
+      "thermal grease k = 3.2 W/mK, supplier interfacial resistance 0.098 K.cm2/W",
+      "minichannel heat sink 0.5 mm channel and fin widths"
+    ],
+    "not_disclosed": [
+      "test die thickness",
+      "microbump/underfill layer thickness and effective conductivity",
+      "the silicon conductivity used",
+      "the minichannel heat sink's thermal resistance (the authors EXTRACTED it by simulation: 0.076 K/W on a package-centre basis, 0.31 K/W on a chip basis)"
+    ]
+  },
+  "why_this_case_is_here": "It is a real, well-documented, independently measured 2.5-D package on a silicon interposer, and the geometry is close to what this app models natively. It is recorded so the work of finding it is not lost. It is NOT sufficient to drop 'verified, not validated', for the reason the harness prints: it is one lumped number. Decomposed with the paper's own figures, the 0.83 K/W is 55-83 % thermal grease and heat sink -- resistances this model does not compute -- against about 9 % silicon conduction, which is the part it does. Agreement would therefore be bought by choosing the convective coefficient, not earned by the solver. What is needed instead is a SPATIALLY RESOLVED measurement: several sensors at known positions on a die at a known power, where the differences between them are conduction and an unmodelled contact resistance cancels out.",
+  "package": {
+    "size_mm": 18.0,
+    "h_w_m2k": 40600.0,
+    "ambient_c": 25.0,
+    "pitch_mm": 1.0,
+    "cooling": "coldplate",
+    "stack_um": [100.0, 40.0, 300.0]
+  },
+  "chiplets": [
+    {
+      "id": "tv3",
+      "name": "Thermal test chip",
+      "w_mm": 5,
+      "h_mm": 5,
+      "power_w": 10.0,
+      "x_mm": 6,
+      "y_mm": 6
+    }
+  ],
+  "sensors": [
+    {
+      "id": "tv3_diode",
+      "x_mm": 8.5,
+      "y_mm": 8.5,
+      "z_um": null,
+      "measured_c": 33.3,
+      "uncertainty_k": 0.7,
+      "note": "junction at 10 W implied by the measured R_JC = 0.83 K/W above a 25 C coolant inlet; ONE lumped number, see why_this_case_is_here"
+    }
+  ]
+}

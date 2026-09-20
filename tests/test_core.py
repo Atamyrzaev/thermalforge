@@ -2044,10 +2044,11 @@ class TestCompositeMaterials:
 
 
 class TestValidationStatusOnReports:
-    """Standing rule of the validation plan: until step 5 passes, every
-    reported temperature says 'verified, not validated' on the report itself,
-    alongside the known limitations. Checked on each artifact that shows a
-    temperature, not on the helper that formats the text."""
+    """Standing rule: every reported temperature carries the validation status
+    on the report itself, alongside the known limitations, and that status says
+    exactly what has been compared with hardware -- currently the spreading but
+    not the absolute level. Checked on each artifact that shows a temperature,
+    not on the helper that formats the text."""
 
     NAMES = [name for name, _ in validation_module.LIMITATIONS]
 
@@ -2066,7 +2067,10 @@ class TestValidationStatusOnReports:
         }
         main_module.print_stage1_results(config, report)
         out = capsys.readouterr().out
-        assert "STATUS: VERIFIED, NOT VALIDATED." in out
+        assert f"STATUS: {validation_module.STATUS.upper()}." in out
+        # The two halves are stated separately, because they are different claims.
+        assert "Validated (spreading only): the spatial temperature distribution" in out
+        assert "Not validated (absolute level): the absolute level" in out
         for name in self.NAMES:
             assert name in out
 
@@ -2079,7 +2083,7 @@ class TestValidationStatusOnReports:
         steady = pathlib.Path(rep["html_path"]).read_text(encoding="utf-8")
         transient = pathlib.Path(rep["transient_html_path"]).read_text(encoding="utf-8")
         for html in (steady, transient):
-            assert "Verified, not validated." in html
+            assert f"{validation_module.STATUS.capitalize()}." in html
             for name in self.NAMES:
                 assert name in html
         # Only the transient view says the per-solve checks do not cover it.
@@ -2095,7 +2099,7 @@ class TestValidationStatusOnReports:
         path = optimizer_module.render_optimization_report(result, output_dir=str(tmp_path))
         html = pathlib.Path(path).read_text(encoding="utf-8")
         assert "__VALIDATION__" not in html
-        assert "Verified, not validated." in html
+        assert f"{validation_module.STATUS.capitalize()}." in html
         for name in self.NAMES:
             assert name in html
 
@@ -2300,7 +2304,7 @@ class TestStartupBanner:
         assert _re.search(r"die\s+100\.000 um -> 100\.000 um\s+\(5 cells\)", out)
         assert "240.000 um = nz*dz = 12 x 20.000 um" in out
         assert "20.000 x 20.000 mm" in out
-        assert "VERIFIED, NOT VALIDATED" in out
+        assert validation_module.STATUS.upper() in out
 
     def test_banner_prints_before_the_solve(self, tmp_path, capsys):
         rc = main_module.main(["--no-browser", "--output-dir", str(tmp_path)])
@@ -2525,12 +2529,18 @@ class TestLegacyReportArithmetic:
 
 
 class TestRemainingLimitations:
-    def test_remaining_limitations_name_the_missing_benchmark(self):
-        sentence = ("Validation step 5 requires the dac143 FFT benchmark source, which is "
-                    "not present. Status remains VERIFIED, NOT VALIDATED.")
-        assert "Remaining limitations:" in validation_module.text_block()
-        assert sentence in validation_module.text_block()
-        assert sentence in validation_module.html_block()
+    def test_remaining_limitations_say_what_has_and_has_not_been_compared(self):
+        """One measured case is not a validated model, and the limitations
+        have to say which parts of it count as evidence and which do not."""
+        assert "Remaining limitations" in validation_module.text_block()
+        for block in (validation_module.text_block(), validation_module.html_block()):
+            assert "One measured case, and only its shape" in block
+            # The half that is evidence, and the half that is calibration.
+            assert "0.63 K RMS against 28.95 K of spread" in block
+            assert "the boundary coefficient" in block and "calibrated" in block
+            # And the assumption the same dataset showed to be regime-dependent.
+            assert "A single constant cooling coefficient" in block
+            assert "structurally wrong for natural convection" in block
 
 
 # ---------------------------------------------------------------------------
@@ -2916,13 +2926,29 @@ class TestExperimentReport:
         assert f"{sanity['flux_over_chiplets_w_cm2']:.2f} W/cm²" in text
         assert f"{sanity['flux_over_package_w_cm2']:.2f} W/cm²" in text
 
-    def test_report_never_claims_the_model_is_validated(self, optimized_experiment,
-                                                        tmp_path):
+    def test_the_report_never_claims_validation_it_has_not_earned(self, optimized_experiment,
+                                                                  tmp_path):
+        """The bare word is the thing to guard against. The report may state
+        what HAS been compared with hardware -- currently the spreading -- but
+        every occurrence has to be qualified, and the half that has not been
+        validated has to appear too. Otherwise a reader skimming for the word
+        comes away with the opposite of the truth."""
         import re as _re
         text = self._text(optimized_experiment, tmp_path).lower()
-        for match in _re.finditer("validated", text):
-            context = text[max(0, match.start() - 12):match.end()]
-            assert "not validated" in context, context
+        # Every form the word is allowed to take, and each one limits the
+        # claim: it is denied, scoped to the spreading, or explicitly the
+        # thing the model did NOT earn.
+        allowed = ("not validated", "spreading validated",
+                   "validated (spreading only)", "rather than validated")
+        found = list(_re.finditer("validated", text))
+        assert found, "the report must carry the validation status at all"
+        for match in found:
+            # A qualifier can sit either side of the word: "not validated"
+            # before it, "validated (spreading only)" after it.
+            context = text[max(0, match.start() - 24):match.end() + 24]
+            assert any(q in context for q in allowed), context
+        # The unearned half is never silently dropped.
+        assert "not validated" in text
 
     def test_report_labels_the_method_that_actually_ran(self, optimized_experiment,
                                                         tmp_path):

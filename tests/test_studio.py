@@ -476,6 +476,69 @@ class TestCorrelationHarness:
         assert "OUTSIDE" in text
         assert "check the case" in text          # the honest first suspect
 
+    def test_an_offset_and_a_shape_error_are_not_the_same_finding(self):
+        """A constant offset on every sensor is what an unmodelled series
+        resistance looks like -- a contact, a grease line, a heat sink nobody
+        disclosed. It says nothing about whether the conduction inside the
+        package is right. What is left after removing it does."""
+        places = [(14.5, 14.5), (4.0, 14.0), (6.0, 6.0), (17.0, 3.0)]
+        truth = [self.modelled_at(x, y) for x, y in places]
+
+        # Every sensor reads 4 K hotter than the model: pure offset.
+        offset = [{"id": f"s{n}", "x_mm": x, "y_mm": y, "measured_c": t + 4.0,
+                   "uncertainty_k": 1.0}
+                  for n, ((x, y), t) in enumerate(zip(places, truth))]
+        report = correlate(self.case(offset))
+        summary = report["summary"]
+        assert summary["bias_k"] == pytest.approx(-4.0, abs=1e-3)
+        assert summary["shape_rms_k"] == pytest.approx(0.0, abs=1e-3)
+        assert summary["spread_ratio"] == pytest.approx(1.0, abs=1e-3)
+        assert summary["shape_inside_band"] is True
+        assert "SHAPE agrees and the level does not" in render(report)
+
+        # Now scramble the differences while keeping the mean: pure shape error.
+        shaped = [{"id": f"s{n}", "x_mm": x, "y_mm": y, "measured_c": t + d,
+                   "uncertainty_k": 1.0}
+                  for n, ((x, y), t, d) in enumerate(zip(places, truth, (5.0, -5.0, 5.0, -5.0)))]
+        report = correlate(self.case(shaped))
+        summary = report["summary"]
+        assert summary["bias_k"] == pytest.approx(0.0, abs=1e-3)
+        assert summary["shape_rms_k"] > 4.0
+        assert summary["shape_inside_band"] is False
+        assert "disagreement is in how heat spreads" in render(report)
+
+    def test_a_case_that_cannot_discriminate_says_so_instead_of_passing(self):
+        """The failure this guards against is a rubber stamp: a case whose
+        sensors barely differ agrees with any model that gets the level right,
+        including a wrong one."""
+        # One sensor: a single number fixes a level and nothing else.
+        one = [{"id": "solo", "x_mm": 14.5, "y_mm": 14.5, "uncertainty_k": 1.0,
+                "measured_c": round(self.modelled_at(14.5, 14.5), 4)}]
+        report = correlate(self.case(one))
+        assert report["summary"]["discriminating"] is False
+        text = render(report)
+        assert "CANNOT VALIDATE" in text and "can CALIBRATE; it cannot confirm" in text
+
+        # Several sensors reading almost the same: no spatial information, and
+        # generous instrument uncertainty on top.
+        flat = [{"id": f"s{n}", "x_mm": x, "y_mm": y, "measured_c": 60.0,
+                 "uncertainty_k": 5.0}
+                for n, (x, y) in enumerate([(14.5, 14.5), (14.0, 14.0), (13.5, 14.5)])]
+        report = correlate(self.case(flat))
+        assert report["summary"]["measured_spread_k"] == 0.0
+        assert report["summary"]["discriminating"] is False
+        assert "CANNOT VALIDATE" in render(report)
+
+    def test_a_case_that_does_discriminate_is_allowed_its_verdict(self):
+        places = [(14.5, 14.5), (4.0, 14.0), (6.0, 6.0), (17.0, 3.0)]
+        exact = [{"id": f"s{n}", "x_mm": x, "y_mm": y, "uncertainty_k": 1.0,
+                  "measured_c": round(self.modelled_at(x, y), 4)}
+                 for n, (x, y) in enumerate(places)]
+        report = correlate(self.case(exact))
+        assert report["summary"]["discriminating"] is True
+        assert report["summary"]["measured_spread_k"] > 1.0
+        assert "Every sensor agrees" in render(report)
+
     def test_the_band_combines_the_instrument_and_the_model(self):
         sensors = [{"id": "p", "x_mm": 14.5, "y_mm": 14.5, "uncertainty_k": 3.0,
                     "measured_c": 60.0}]
@@ -492,8 +555,16 @@ class TestCorrelationHarness:
         assert "says nothing about real hardware" in synthetic
         measured = render(correlate(self.case(sensors, kind="measured")))
         assert "SYNTHETIC" not in measured
-        # Even a perfect measured case claims only what was compared.
-        assert "evidence about THIS package" in measured
+        # This one sensor sits exactly on the model, and the report still
+        # refuses to call that validation: one number cannot confirm a field.
+        assert "CANNOT VALIDATE" in measured
+
+        # Give it somewhere to vary and the same perfect agreement counts.
+        places = [(14.5, 14.5), (4.0, 14.0), (6.0, 6.0), (17.0, 3.0)]
+        spread = [{"id": f"s{n}", "x_mm": x, "y_mm": y, "uncertainty_k": 1.0,
+                   "measured_c": round(self.modelled_at(x, y), 4)}
+                  for n, (x, y) in enumerate(places)]
+        assert "evidence about THIS package" in render(correlate(self.case(spread)))
 
     def test_a_case_that_cannot_say_where_its_numbers_came_from_is_refused(self, tmp_path):
         bad = tmp_path / "nameless.json"

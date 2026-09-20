@@ -1,0 +1,319 @@
+{
+  "case": "ttc-samos2019-uniform",
+  "provenance": {
+    "kind": "measured",
+    "source": "F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796",
+    "date": "2019",
+    "measured_by": "Politecnico di Milano (not by this project)",
+    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 1 kHz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples at the end of the powered phase: the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
+    "geometry_note": "The dataset does not state the die size. It is pinned by cross-reference: the 3D-ICE 3.0 paper (IEEE TCAD 41(4), 2022) describes the uniform preheat on this same platform as 5 W/cm2, and this dataset's uniform baseline is 0.2 W per element, so each element is 0.04 cm2 -- 2 x 2 mm -- and the 4x4 array is 8 x 8 mm.",
+    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (60000 W/m2K) are NOT disclosed by the source. They were fitted once, on the 'one' power pattern alone, and then held fixed for every other pattern including this one. Two numbers fitted on one configuration and twelve others predicted from them is what validation looks like when the rig's own parameters were never published -- but the LEVEL of this model is calibrated, so only the SHAPE is evidence.",
+    "run": "heatsink_with_fan/sixteen",
+    "total_power_w": 47.265
+  },
+  "package": {
+    "size_mm": 8.0,
+    "h_w_m2k": 60000.0,
+    "ambient_c": 23.4,
+    "pitch_mm": 1.0,
+    "cooling": "lid_heatsink",
+    "keepout_um": 0.0,
+    "stack_um": [
+      20.0,
+      20.0,
+      100.0
+    ]
+  },
+  "chiplets": [
+    {
+      "id": "h0",
+      "name": "Heater 0",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9861,
+      "x_mm": 0.0,
+      "y_mm": 0.0
+    },
+    {
+      "id": "h1",
+      "name": "Heater 1",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9873,
+      "x_mm": 2.0,
+      "y_mm": 0.0
+    },
+    {
+      "id": "h2",
+      "name": "Heater 2",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9498,
+      "x_mm": 4.0,
+      "y_mm": 0.0
+    },
+    {
+      "id": "h3",
+      "name": "Heater 3",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.8725,
+      "x_mm": 6.0,
+      "y_mm": 0.0
+    },
+    {
+      "id": "h4",
+      "name": "Heater 4",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 3.0204,
+      "x_mm": 0.0,
+      "y_mm": 2.0
+    },
+    {
+      "id": "h5",
+      "name": "Heater 5",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9528,
+      "x_mm": 2.0,
+      "y_mm": 2.0
+    },
+    {
+      "id": "h6",
+      "name": "Heater 6",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9041,
+      "x_mm": 4.0,
+      "y_mm": 2.0
+    },
+    {
+      "id": "h7",
+      "name": "Heater 7",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9405,
+      "x_mm": 6.0,
+      "y_mm": 2.0
+    },
+    {
+      "id": "h8",
+      "name": "Heater 8",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.8793,
+      "x_mm": 0.0,
+      "y_mm": 4.0
+    },
+    {
+      "id": "h9",
+      "name": "Heater 9",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9265,
+      "x_mm": 2.0,
+      "y_mm": 4.0
+    },
+    {
+      "id": "h10",
+      "name": "Heater 10",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9113,
+      "x_mm": 4.0,
+      "y_mm": 4.0
+    },
+    {
+      "id": "h11",
+      "name": "Heater 11",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9299,
+      "x_mm": 6.0,
+      "y_mm": 4.0
+    },
+    {
+      "id": "h12",
+      "name": "Heater 12",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9673,
+      "x_mm": 0.0,
+      "y_mm": 6.0
+    },
+    {
+      "id": "h13",
+      "name": "Heater 13",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 2.9732,
+      "x_mm": 2.0,
+      "y_mm": 6.0
+    },
+    {
+      "id": "h14",
+      "name": "Heater 14",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 3.0349,
+      "x_mm": 4.0,
+      "y_mm": 6.0
+    },
+    {
+      "id": "h15",
+      "name": "Heater 15",
+      "w_mm": 2.0,
+      "h_mm": 2.0,
+      "power_w": 3.0291,
+      "x_mm": 6.0,
+      "y_mm": 6.0
+    }
+  ],
+  "sensors": [
+    {
+      "id": "d0",
+      "x_mm": 1.0,
+      "y_mm": 1.0,
+      "z_um": null,
+      "measured_c": 86.67,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 0"
+    },
+    {
+      "id": "d1",
+      "x_mm": 3.0,
+      "y_mm": 1.0,
+      "z_um": null,
+      "measured_c": 87.932,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 1"
+    },
+    {
+      "id": "d2",
+      "x_mm": 5.0,
+      "y_mm": 1.0,
+      "z_um": null,
+      "measured_c": 88.055,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 2"
+    },
+    {
+      "id": "d3",
+      "x_mm": 7.0,
+      "y_mm": 1.0,
+      "z_um": null,
+      "measured_c": 86.993,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 3"
+    },
+    {
+      "id": "d4",
+      "x_mm": 1.0,
+      "y_mm": 3.0,
+      "z_um": null,
+      "measured_c": 88.763,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 4"
+    },
+    {
+      "id": "d5",
+      "x_mm": 3.0,
+      "y_mm": 3.0,
+      "z_um": null,
+      "measured_c": 89.857,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 5"
+    },
+    {
+      "id": "d6",
+      "x_mm": 5.0,
+      "y_mm": 3.0,
+      "z_um": null,
+      "measured_c": 90.043,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 6"
+    },
+    {
+      "id": "d7",
+      "x_mm": 7.0,
+      "y_mm": 3.0,
+      "z_um": null,
+      "measured_c": 89.225,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 7"
+    },
+    {
+      "id": "d8",
+      "x_mm": 1.0,
+      "y_mm": 5.0,
+      "z_um": null,
+      "measured_c": 93.041,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 8"
+    },
+    {
+      "id": "d9",
+      "x_mm": 3.0,
+      "y_mm": 5.0,
+      "z_um": null,
+      "measured_c": 92.847,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 9"
+    },
+    {
+      "id": "d10",
+      "x_mm": 5.0,
+      "y_mm": 5.0,
+      "z_um": null,
+      "measured_c": 93.548,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 10"
+    },
+    {
+      "id": "d11",
+      "x_mm": 7.0,
+      "y_mm": 5.0,
+      "z_um": null,
+      "measured_c": 93.255,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 11"
+    },
+    {
+      "id": "d12",
+      "x_mm": 1.0,
+      "y_mm": 7.0,
+      "z_um": null,
+      "measured_c": 89.632,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 12"
+    },
+    {
+      "id": "d13",
+      "x_mm": 3.0,
+      "y_mm": 7.0,
+      "z_um": null,
+      "measured_c": 89.97,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 13"
+    },
+    {
+      "id": "d14",
+      "x_mm": 5.0,
+      "y_mm": 7.0,
+      "z_um": null,
+      "measured_c": 90.503,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 14"
+    },
+    {
+      "id": "d15",
+      "x_mm": 7.0,
+      "y_mm": 7.0,
+      "z_um": null,
+      "measured_c": 91.538,
+      "uncertainty_k": 0.1,
+      "note": "on-die diode, cell 15"
+    }
+  ]
+}

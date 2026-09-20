@@ -1,0 +1,138 @@
+{
+  "case": "astar-tsi-2p5d-bare-die",
+  "provenance": {
+    "kind": "measured",
+    "source": "H. Y. Zhang, X. W. Zhang, B. L. Lau, S. Lim, L. Ding and M. B. Yu, 'Thermal Characterization of Both Bare Die and Overmolded 2.5-D Packages on Through Silicon Interposers', IEEE Transactions on Components, Packaging and Manufacturing Technology, 2014. Open copy: https://oar.a-star.edu.sg/storage/6/6d1pjjxg5x/pub13-301-ipp-038-pp.pdf",
+    "date": "2014",
+    "measured_by": "A*STAR Institute of Microelectronics (not by this project)",
+    "what_was_measured": "R_JC = (T_junction - T_water_inlet) / P = 0.83 K/W for the bare-die package, Run 2 (well-aligned heat sink). Power 8-20 W, chosen to give a junction rise of about 7 K or more. Measured with on-die diodes calibrated against an infrared camera; a minichannel copper/nickel cold plate on thermal grease removed the heat, with a ~0.1 mm plastic film insulating the sink from the interposer so that heat left through the test chip alone.",
+    "disclosed": [
+      "thermal test chip 5.08 x 5.08 mm, four equal heating cells, uniform heating",
+      "silicon interposer 18 x 18 x 0.1 mm, TSVs 10 um diameter, 100 um deep, large pitch",
+      "two dummy dies on the same interposer: 7.6 x 10.9 mm and 8.0 x 8.0 mm (unpowered in this test)",
+      "organic substrate 31 x 31 x 1 mm",
+      "thermal grease k = 3.2 W/mK, supplier interfacial resistance 0.098 K.cm2/W",
+      "minichannel heat sink 0.5 mm channel and fin widths"
+    ],
+    "not_disclosed": [
+      "test die thickness",
+      "microbump/underfill layer thickness and effective conductivity",
+      "the silicon conductivity used",
+      "the minichannel heat sink's thermal resistance (the authors EXTRACTED it by simulation: 0.076 K/W on a package-centre basis, 0.31 K/W on a chip basis)"
+    ]
+  },
+  "synthetic": false,
+  "model_band_k": 0.14524459425404326,
+  "peak_modelled_c": 30.07930759634195,
+  "grid": {
+    "nx": 36,
+    "ny": 36,
+    "nz": 25,
+    "cell_mm": 0.5,
+    "dz_um": 20.0,
+    "size_mm": 18.0,
+    "layers": [
+      {
+        "name": "Interposer (Si)",
+        "k0": 0,
+        "k1": 5,
+        "thickness_um": 100.0
+      },
+      {
+        "name": "Microbumps + underfill",
+        "k0": 5,
+        "k1": 7,
+        "thickness_um": 40.0
+      },
+      {
+        "name": "Die (Si)",
+        "k0": 7,
+        "k1": 22,
+        "thickness_um": 300.0
+      },
+      {
+        "name": "TIM",
+        "k0": 22,
+        "k1": 23,
+        "thickness_um": 25.0,
+        "k_w_mk": 8.0,
+        "compact": true
+      },
+      {
+        "name": "Cold plate base",
+        "k0": 23,
+        "k1": 25,
+        "thickness_um": 1500.0,
+        "k_w_mk": 390.0,
+        "compact": true
+      }
+    ],
+    "stack_um": [
+      100.0,
+      40.0,
+      300.0
+    ],
+    "die_k0": 7,
+    "die_k1": 22,
+    "mesh": "standard",
+    "unknowns": 32400,
+    "cooling": "coldplate",
+    "cooling_layers": [
+      [
+        "TIM",
+        25.0,
+        8.0,
+        1
+      ],
+      [
+        "Cold plate base",
+        1500.0,
+        390.0,
+        2
+      ]
+    ]
+  },
+  "verification": {
+    "residual": 9.69612525770898e-12,
+    "energy_imbalance_k": 2.495196206496762e-11,
+    "sink_heat_w": 9.999999999684105,
+    "deposited_w": 10.000000000000002,
+    "specified_w": 10.0,
+    "unknowns": 32400
+  },
+  "sensors": [
+    {
+      "id": "tv3_diode",
+      "note": "junction at 10 W implied by the measured R_JC = 0.83 K/W above a 25 C coolant inlet; ONE lumped number, see why_this_case_is_here",
+      "x_mm": 8.5,
+      "y_mm": 8.5,
+      "cell": [
+        17,
+        17,
+        7
+      ],
+      "cell_mm": 0.5,
+      "measured_c": 33.3,
+      "uncertainty_k": 0.7,
+      "modelled_c": 30.075855255126953,
+      "error_k": -3.224144744873044,
+      "band_k": 0.7149097790351042,
+      "inside_band": false,
+      "shape_error_k": 0.0
+    }
+  ],
+  "summary": {
+    "count": 1,
+    "inside_band": 0,
+    "bias_k": -3.224144744873044,
+    "rms_k": 3.224144744873044,
+    "max_abs_k": 3.224144744873044,
+    "shape_rms_k": 0.0,
+    "shape_max_abs_k": 0.0,
+    "measured_spread_k": 0.0,
+    "modelled_spread_k": 0.0,
+    "spread_ratio": null,
+    "discriminating": false,
+    "shape_inside_band": false
+  }
+}

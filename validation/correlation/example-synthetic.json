@@ -6,8 +6,8 @@
     "how": "the model's own field, plus a 0.4 K bias and 0.6 K of Gaussian noise (seed 20260915), so the harness has something to chew on before hardware exists"
   },
   "synthetic": true,
-  "model_band_k": 0.9366429002137455,
-  "peak_modelled_c": 61.30988499936723,
+  "model_band_k": 1.0484208587385018,
+  "peak_modelled_c": 60.75650882197988,
   "grid": {
     "nx": 40,
     "ny": 40,
@@ -58,6 +58,8 @@
     ],
     "die_k0": 7,
     "die_k1": 12,
+    "mesh": "standard",
+    "unknowns": 24000,
     "cooling": "lid",
     "cooling_layers": [
       [
@@ -75,10 +77,10 @@
     ]
   },
   "verification": {
-    "residual": 1.4793402340687025e-11,
-    "energy_imbalance_k": 1.6449490356445315e-10,
-    "sink_heat_w": 14.999999999835754,
-    "deposited_w": 14.999999999999996,
+    "residual": 1.5608980550165242e-11,
+    "energy_imbalance_k": 1.6448756790161135e-10,
+    "sink_heat_w": 14.999999999835769,
+    "deposited_w": 15.000000000000002,
     "specified_w": 15.0,
     "unknowns": 24000
   },
@@ -96,10 +98,11 @@
       "cell_mm": 0.5,
       "measured_c": 61.05,
       "uncertainty_k": 1.5,
-      "modelled_c": 61.30988311767578,
-      "error_k": 0.2598831176757841,
-      "band_k": 1.768417349643691,
-      "inside_band": true
+      "modelled_c": 60.756507873535156,
+      "error_k": -0.2934921264648409,
+      "band_k": 1.8300782215626679,
+      "inside_band": true,
+      "shape_error_k": 0.5739689636230494
     },
     {
       "id": "cpu_diode",
@@ -114,10 +117,11 @@
       "cell_mm": 0.5,
       "measured_c": 58.3,
       "uncertainty_k": 1.5,
-      "modelled_c": 57.36176681518555,
-      "error_k": -0.9382331848144503,
-      "band_k": 1.768417349643691,
-      "inside_band": true
+      "modelled_c": 55.728477478027344,
+      "error_k": -2.5715225219726534,
+      "band_k": 1.8300782215626679,
+      "inside_band": false,
+      "shape_error_k": -1.7040614318847631
     },
     {
       "id": "hbm_diode",
@@ -132,10 +136,11 @@
       "cell_mm": 0.5,
       "measured_c": 50.38,
       "uncertainty_k": 1.5,
-      "modelled_c": 49.20756530761719,
-      "error_k": -1.172434692382815,
-      "band_k": 1.768417349643691,
-      "inside_band": true
+      "modelled_c": 49.212493896484375,
+      "error_k": -1.1675061035156276,
+      "band_k": 1.8300782215626679,
+      "inside_band": true,
+      "shape_error_k": -0.30004501342773726
     },
     {
       "id": "lid_centre",
@@ -150,10 +155,11 @@
       "cell_mm": 0.5,
       "measured_c": 50.67,
       "uncertainty_k": 1.5,
-      "modelled_c": 50.14183044433594,
-      "error_k": -0.5281695556640642,
-      "band_k": 1.768417349643691,
-      "inside_band": true
+      "modelled_c": 50.14756393432617,
+      "error_k": -0.5224360656738298,
+      "band_k": 1.8300782215626679,
+      "inside_band": true,
+      "shape_error_k": 0.34502502441406047
     },
     {
       "id": "lid_corner",
@@ -168,17 +174,25 @@
       "cell_mm": 0.5,
       "measured_c": 46.75,
       "uncertainty_k": 1.5,
-      "modelled_c": 46.963600158691406,
-      "error_k": 0.21360015869140625,
-      "band_k": 1.768417349643691,
-      "inside_band": true
+      "modelled_c": 46.9676513671875,
+      "error_k": 0.2176513671875,
+      "band_k": 1.8300782215626679,
+      "inside_band": true,
+      "shape_error_k": 1.0851124572753903
     }
   ],
   "summary": {
     "count": 5,
-    "inside_band": 5,
-    "bias_k": -0.43307083129882784,
-    "rms_k": 0.7276004341898247,
-    "max_abs_k": 1.172434692382815
+    "inside_band": 4,
+    "bias_k": -0.8674610900878903,
+    "rms_k": 1.2947778011235003,
+    "max_abs_k": 2.5715225219726534,
+    "shape_rms_k": 0.9612288028693977,
+    "shape_max_abs_k": 1.7040614318847631,
+    "measured_spread_k": 14.299999999999997,
+    "modelled_spread_k": 13.788856506347656,
+    "spread_ratio": 0.9642556997445916,
+    "discriminating": true,
+    "shape_inside_band": true
   }
 }

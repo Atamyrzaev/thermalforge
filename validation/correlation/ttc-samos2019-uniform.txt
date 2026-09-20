@@ -1,0 +1,29 @@
+Case: ttc-samos2019-uniform  (F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796)
+Mesh 32 x 32 x 13 at 0.25 mm  ·  modelled peak 77.71 degC  ·  model band +/- 1.40 K
+
+sensor          measured  modelled    error    band  verdict
+d0                86.67C    77.54C   -9.13K   1.41K  OUTSIDE   on-die diode, cell 0
+d1                87.93C    77.48C  -10.45K   1.41K  OUTSIDE   on-die diode, cell 1
+d2                88.06C    77.29C  -10.77K   1.41K  OUTSIDE   on-die diode, cell 2
+d3                86.99C    77.04C   -9.95K   1.41K  OUTSIDE   on-die diode, cell 3
+d4                88.76C    77.57C  -11.19K   1.41K  OUTSIDE   on-die diode, cell 4
+d5                89.86C    77.37C  -12.49K   1.41K  OUTSIDE   on-die diode, cell 5
+d6                90.04C    77.20C  -12.84K   1.41K  OUTSIDE   on-die diode, cell 6
+d7                89.22C    77.26C  -11.97K   1.41K  OUTSIDE   on-die diode, cell 7
+d8                93.04C    77.20C  -15.84K   1.41K  OUTSIDE   on-die diode, cell 8
+d9                92.85C    77.31C  -15.53K   1.41K  OUTSIDE   on-die diode, cell 9
+d10               93.55C    77.29C  -16.26K   1.41K  OUTSIDE   on-die diode, cell 10
+d11               93.25C    77.34C  -15.91K   1.41K  OUTSIDE   on-die diode, cell 11
+d12               89.63C    77.43C  -12.20K   1.41K  OUTSIDE   on-die diode, cell 12
+d13               89.97C    77.49C  -12.48K   1.41K  OUTSIDE   on-die diode, cell 13
+d14               90.50C    77.68C  -12.82K   1.41K  OUTSIDE   on-die diode, cell 14
+d15               91.54C    77.69C  -13.85K   1.41K  OUTSIDE   on-die diode, cell 15
+
+0 of 16 sensors inside the combined band  ·  bias -12.73 K  ·  RMS 12.91 K  ·  worst 16.26 K
+After removing the -12.73 K common offset: shape RMS 2.16 K  ·  worst 3.60 K
+Spread across the sensors: measured 6.88 K, modelled 0.65 K  (0.09x)
+
+At least one sensor disagrees beyond both bands, and removing a common offset
+does not fix it, so the disagreement is in how heat spreads. Before adjusting
+anything, check the case: sensor position, the power that was really drawn,
+and the cooling that was really applied are wrong more often than the solver.
