@@ -679,10 +679,11 @@ function renderStackStrip() {
   const keepoutNote = keepout > 0
     ? ` · keep-out ${requested} µm → ${(keepout * 1000).toFixed(0)} µm on this mesh`
     : " · no keep-out";
-  const band = state.shown && state.shown.metrics.uncertainty;
+  // The error budget belongs to the checks panel, which is rebuilt with each
+  // result. Repeating it here showed the PREVIOUS solve's band beside the new
+  // mesh whenever the mesh changed, which is worse than not saying it.
   $("stack-note").textContent =
     `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`
-    + (band ? ` · discretization ±${band.mesh_k.toFixed(2)} K, measured` : "")
     + keepoutNote;
 }
 

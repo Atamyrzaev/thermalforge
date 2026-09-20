@@ -149,10 +149,14 @@ MAX_COOLING_CELLS = 10
 # What changes is cost and discretization error, both MEASURED on a 20 mm
 # package (tools/mesh_convergence.py, validation/mesh_convergence.json):
 #
-#   0.5  mm    19,200 unknowns    0.4 s    123 MB   error 0.04-0.24 K
-#   0.25 mm    76,800 unknowns    4.1 s    346 MB   error 0.005-0.10 K
+#   0.5  mm    19,200 unknowns    0.4 s    123 MB
+#   0.25 mm    76,800 unknowns    4.1 s    346 MB
 #   0.25 mm    96,000 unknowns   22.9 s    493 MB   (with a cold plate meshed)
 #   0.25 mm   115,200 unknowns   25.0 s    783 MB   (with a lid and heatsink)
+#
+# What the error is depends on the DESIGN, not just the cell size, so it is
+# not a column here: see mesh_band() for the band a design is quoted and
+# mesh_check() for measuring the design in hand instead of estimating it.
 #
 # Standard is the default because a trade-show laptop should answer in under a
 # second. Fine exists because "we cannot go finer" would be false: the answer
