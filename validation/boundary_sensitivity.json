@@ -1,0 +1,41 @@
+{
+  "what": "how far the peak moves when the convective coefficient moves by the amount a real rig's own h is known to vary",
+  "h_tolerance": 0.09,
+  "tolerance_source": "spread of the effective h implied by 13 power patterns under one unchanged forced-convection rig, SAMOS 2019 dataset (doi:10.5281/zenodo.2871796); see validation/MEASURED_DATA.md",
+  "not_covered": "natural convection, where h depends on the temperature it produces and varies 4-5x across power patterns on the same rig -- a band around a constant h does not describe that",
+  "cases": {
+    "passive": {
+      "h_w_m2k": 1000.0,
+      "cooling": "direct",
+      "baseline_peak_c": 111.00383843305298,
+      "peak_at_low_h_c": 115.94215475499647,
+      "peak_at_high_h_c": 106.76579653308113,
+      "rise_k": 86.00383843305298,
+      "boundary_band_k": 4.588179110957668,
+      "boundary_band_pct_of_rise": 5.334853879259347,
+      "seconds": 1.8675858974456787
+    },
+    "forced": {
+      "h_w_m2k": 2500.0,
+      "cooling": "lid_heatsink",
+      "baseline_peak_c": 58.96141405397151,
+      "peak_at_low_h_c": 60.35701503510768,
+      "peak_at_high_h_c": 57.794725938552176,
+      "rise_k": 23.96141405397151,
+      "boundary_band_k": 1.2811445482777515,
+      "boundary_band_pct_of_rise": 5.346698426862695,
+      "seconds": 4.607911586761475
+    },
+    "coldplate": {
+      "h_w_m2k": 25000.0,
+      "cooling": "coldplate",
+      "baseline_peak_c": 31.00804755218826,
+      "peak_at_low_h_c": 31.211729776976426,
+      "peak_at_high_h_c": 30.833552533105376,
+      "rise_k": 6.008047552188259,
+      "boundary_band_k": 0.18908862193552523,
+      "boundary_band_pct_of_rise": 3.1472557481116326,
+      "seconds": 2.716773748397827
+    }
+  }
+}

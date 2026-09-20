@@ -168,6 +168,37 @@ def bump_underfill_layer_k(
     return kxy, kxy, kz
 
 
+# BEOL: the interconnect stack on the active face, alternating copper wiring
+# levels with SiO2 dielectric. Copper fraction by THICKNESS over the whole
+# stack; 30 % is the middle of the usual range and is the default here.
+# UNCITED for the fraction itself -- it is a process parameter, not a
+# published constant -- so it is a named input rather than a buried number.
+BEOL_COPPER_FRACTION = 0.30
+BEOL_THICKNESS_UM = 10.0        # typical advanced-node stack; process dependent
+
+
+def beol_k(copper_fraction: float = BEOL_COPPER_FRACTION) -> Tuple[float, float]:
+    """(k_xy, k_z) of a copper/SiO2 interconnect stack.
+
+    The same series/parallel rules as every other laminate here, eqs.
+    (10)-(11): heat crossing the stack goes through the oxide in series, heat
+    running along it goes through the copper in parallel. The result is
+    violently anisotropic -- about 2 W/(m K) through and over 100 along -- and
+    the small number sits directly on top of where power is deposited.
+
+    Not in the default stack. A real BEOL is 5-15 um thick, which is thinner
+    than one 20 um z-cell, so putting it in honestly needs the compact-layer
+    treatment the cooling path uses (preserve k.t along and t/k through) plus
+    a re-pin of every published number. Exposed and measured here so that
+    work starts from a cited value rather than a guess.
+    """
+    if not 0.0 < copper_fraction < 1.0:
+        raise ValueError("copper_fraction must be between 0 and 1")
+    kz, kxy = laminate_k([(TSCI_K["copper"], copper_fraction),
+                          (TSCI_K["sio2"], 1.0 - copper_fraction)])
+    return kxy, kz
+
+
 def tsv_cell_k(r_core_um: float, r_liner_um: float, pitch_um: float) -> Tuple[float, float]:
     """(k_xy, k_z) of the paper's TSV cell: a Cu core with an SiO2 liner on a
     square pitch in silicon. Exists to check this module against the paper's
@@ -187,6 +218,8 @@ if __name__ == "__main__":
     print(f"Source: {CITATION}")
     kxy, kz = tsv_cell_k(8.0, 9.0, 40.0)
     print(f"TSV check cell:   kz {kz:8.3f} (paper 175.2)   kxy {kxy:8.3f} (paper FEM 115.3)")
+    kxy_e, kz_e = beol_k()
+    print(f"BEOL @ {BEOL_COPPER_FRACTION:.0%} Cu:  kz {kz_e:8.3f}                kxy {kxy_e:8.3f}")
     kz_b, kxy_b = microbump_k()
     print(f"Microbump:        kz {kz_b:8.3f}                kxy {kxy_b:8.3f}")
     for pitch in (30.0, 40.0, 55.0):

@@ -30,7 +30,8 @@ from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 
-from src.composite_materials import CITATION as TSCI_CITATION, TSCI_K, bump_underfill_layer_k
+from src.composite_materials import (CITATION as TSCI_CITATION, TSCI_K, beol_k,
+                                     bump_underfill_layer_k, tsv_cell_k)
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("RISC3D-AI.GridBuilder")
@@ -51,6 +52,10 @@ logger = logging.getLogger("RISC3D-AI.GridBuilder")
 # ---------------------------------------------------------------------------
 
 _COMPOSITE_KX, _COMPOSITE_KY, _COMPOSITE_KZ = bump_underfill_layer_k()
+# The paper's own TSV cell: 8 um copper core, 9 um to the outside of the
+# SiO2 liner, 40 um pitch.
+_TSV_KXY, _TSV_KZ = tsv_cell_k(8.0, 9.0, 40.0)
+_BEOL_KXY, _BEOL_KZ = beol_k()
 
 MATERIALS: Dict[str, Dict[str, float]] = {
     "silicon": {"k": TSCI_K["silicon"], "rho": 2330.0, "cp": 712.0},
@@ -68,6 +73,25 @@ MATERIALS: Dict[str, Dict[str, float]] = {
         "kx": _COMPOSITE_KX, "ky": _COMPOSITE_KY, "kz": _COMPOSITE_KZ,
         "rho": 3500.0,                          # UNCITED volumetric estimate
         "cp": 450.0,                            # UNCITED
+    },
+    # Silicon carrying TSVs: a copper core in an SiO2 liner on a square
+    # pitch, eq. (2) along the vias and Maxwell-Garnett across them. Checked
+    # against the paper's own cell (r 8 / 9 um, 40 um pitch): this gives
+    # kxy 114.4 against its FEM 115.3, and kz 175.2 against its 175.2.
+    # Derivation in src/composite_materials.py (tsv_cell_k).
+    "tsv_interposer": {
+        "kx": _TSV_KXY, "ky": _TSV_KXY, "kz": _TSV_KZ,
+        "rho": 2330.0,                          # silicon dominates the volume
+        "cp": 712.0,
+    },
+    # Copper/SiO2 interconnect on the active face, eqs. (10)-(11). About
+    # 2 W/(m K) through and over 100 along -- see composite_materials.beol_k.
+    # NOT in any stack this codebase builds: a real BEOL is thinner than one
+    # 20 um z-cell and needs the compact-layer treatment first.
+    "beol": {
+        "kx": _BEOL_KXY, "ky": _BEOL_KXY, "kz": _BEOL_KZ,
+        "rho": 2800.0,                          # UNCITED volumetric estimate
+        "cp": 700.0,                            # UNCITED
     },
     # UNCITED textbook value; not used by any stack in this codebase.
     "ambient_air": {"k": 0.026, "rho": 1.2, "cp": 1005.0},

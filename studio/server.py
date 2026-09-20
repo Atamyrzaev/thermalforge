@@ -12,6 +12,8 @@ project's Python environment: no framework, no CDN, no build step.
     POST /api/transient         start a time-stepped burst -> {job_id}
     GET  /api/jobs/<id>         job progress and, when done, the result
     POST /api/jobs/<id>/cancel  stop a running job
+    POST /api/jobs/<id>/pause   hold it at the next safe point
+    POST /api/jobs/<id>/resume  let it carry on
 """
 
 from __future__ import annotations
@@ -42,6 +44,59 @@ mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 
+class Control:
+    """Cancellation, and pause, in the object the engine already consults.
+
+    The search and the time stepper call `cancel.is_set()` at every point
+    where stopping is safe. That makes those same points the only places a
+    pause can safely take effect, so pausing is implemented by BLOCKING in
+    `is_set()` rather than by threading a second flag through the engine: no
+    solver code changes, and a paused job cannot be holding a half-updated
+    incumbent. Cancelling releases the hold, so a paused job can still be
+    stopped.
+    """
+
+    def __init__(self):
+        self._cancel = threading.Event()
+        self._go = threading.Event()
+        self._go.set()
+        self._held = threading.Event()
+        self.paused = False
+
+    # -- what the engine sees --------------------------------------------
+    def is_set(self) -> bool:
+        if not self._go.is_set():
+            # Asking for a pause is not the same as being paused. The engine
+            # only consults this between safe points, and model building has
+            # none, so a request can sit unhonoured for seconds. Saying
+            # "paused" during that window would be a claim the job has stopped
+            # when it has not.
+            self._held.set()
+            try:
+                self._go.wait()      # released by resume() or by set()
+            finally:
+                self._held.clear()
+        return self._cancel.is_set()
+
+    @property
+    def held(self) -> bool:
+        return self._held.is_set()
+
+    def set(self) -> None:           # cancel
+        self._cancel.set()
+        self._go.set()               # never leave a thread parked on a dead job
+
+    # -- what the server sees --------------------------------------------
+    def pause(self) -> None:
+        if not self._cancel.is_set():
+            self.paused = True
+            self._go.clear()
+
+    def resume(self) -> None:
+        self.paused = False
+        self._go.set()
+
+
 class Job:
     def __init__(self):
         self.id = uuid.uuid4().hex[:12]
@@ -50,12 +105,15 @@ class Job:
         self.progress: Dict = {"stage": "queued", "elapsed_s": 0.0}
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
-        self.cancel = threading.Event()
+        self.cancel = Control()
         self.lock = threading.Lock()
 
     def snapshot(self) -> dict:
         with self.lock:
-            out = {"id": self.id, "state": self.state, "progress": dict(self.progress)}
+            state = self.state
+            if state == "running" and self.cancel.paused:
+                state = "paused" if self.cancel.held else "pausing"
+            out = {"id": self.id, "state": state, "progress": dict(self.progress)}
             if self.state == "done":
                 out["result"] = self.result
             if self.error:
@@ -243,13 +301,15 @@ def make_handler(studio: Studio):
                     target = QA_ROOT / f"{name}.png"
                     target.write_bytes(base64.b64decode(url[len(prefix):]))
                     self._send_json({"ok": True, "path": str(target)})
-                elif path.startswith("/api/jobs/") and path.endswith("/cancel"):
+                elif path.startswith("/api/jobs/") and path.rsplit("/", 1)[-1] in (
+                        "cancel", "pause", "resume"):
+                    action = path.rsplit("/", 1)[-1]
                     job = studio.jobs.get(path.split("/")[3])
                     if job is None:
                         self._error("no such job", HTTPStatus.NOT_FOUND)
                     else:
-                        job.cancel.set()
-                        self._send_json({"ok": True})
+                        getattr(job.cancel, {"cancel": "set"}.get(action, action))()
+                        self._send_json({"ok": True, "job": job.snapshot()})
                 else:
                     self._error("not found", HTTPStatus.NOT_FOUND)
             except engine.StudioError as exc:

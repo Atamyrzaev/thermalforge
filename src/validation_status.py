@@ -51,7 +51,13 @@ TRANSIENT_NOTE = ("this is a transient snapshot; the per-solve checks apply to t
 LIMITATIONS: Tuple[Tuple[str, str], ...] = (
     ("Uniform-silicon blocks",
      "each die and chiplet is homogeneous silicon, with no BEOL, device layer "
-     "or interposer TSVs"),
+     "or interposer TSVs in the stack that ships. Effective properties for two "
+     "of those now exist and are cited (src/composite_materials.py): a "
+     "TSV-bearing interposer at kxy 114.4 / kz 175.2 W/(m K), which reproduces "
+     "the source paper's own FEM cell to 0.8 %, and a copper/SiO2 BEOL at "
+     "kxy 118 / kz 2.1. Neither is wired in: the interposer swap alone moves "
+     "the edge-AI peak +2.8 K, and a 5-15 um BEOL is thinner than one 20 um "
+     "z-cell, so both need the compact-layer treatment and a deliberate re-pin"),
     ("Device layer one cell thick",
      "power now enters at the active plane against the bumps, as a flip-chip die "
      "generates it, but the source is one mesh cell (20 um) thick rather than the "
@@ -70,6 +76,12 @@ LIMITATIONS: Tuple[Tuple[str, str], ...] = (
      "was fitted, so the absolute temperature is calibrated rather than validated. One "
      "package, forced convection, uniform chiplet power -- nothing outside that has been "
      "compared with hardware (validation/MEASURED_DATA.md)"),
+    ("The cooling number dominates the budget",
+     "everything above the die is one convective coefficient, and perturbing it by "
+     "the +/-9 % a real rig's own h varies across 13 power patterns "
+     "(tools/boundary_sensitivity.py) moves the peak by about 5 % of the rise -- "
+     "more than the mesh (1-2 %) and more than the conductivities. The reported "
+     "number is limited by how well the cooling is known, not by the solver"),
     ("A single constant cooling coefficient",
      "measured on that same dataset, the effective coefficient implied by 13 power "
      "patterns varies 4x under natural convection and 5x with an unpowered heat sink, "

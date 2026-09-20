@@ -2528,6 +2528,63 @@ class TestLegacyReportArithmetic:
         assert r.improvement_pct == pytest.approx(25.0)      # 15 K of a 60 K rise
 
 
+class TestCitedEffectiveProperties:
+    """Every conductivity in the stack has to come from somewhere nameable.
+    These two are effective media -- a TSV-bearing interposer and a BEOL
+    stack -- built from the same cited table and the same series/parallel
+    rules as the microbump composite, and checked against the numbers the
+    paper published for its own cells."""
+
+    def test_the_tsv_cell_reproduces_the_papers_own_numbers(self):
+        from src.composite_materials import tsv_cell_k
+        # The paper's cell: 8 um copper core, 9 um to the liner's outside,
+        # 40 um pitch. It quotes 175.2 out of plane analytically and 115.3
+        # in plane by FEM.
+        kxy, kz = tsv_cell_k(8.0, 9.0, 40.0)
+        assert kz == pytest.approx(175.2, abs=0.05)
+        assert kxy == pytest.approx(115.3, rel=0.02)
+
+    def test_a_tsv_interposer_conducts_better_through_than_along(self):
+        """Copper pillars help heat cross the interposer and the oxide liners
+        get in the way of heat running along it, so plain silicon is wrong in
+        both directions at once -- optimistic through, pessimistic along."""
+        from src.grid_builder import MATERIALS
+        m = MATERIALS["tsv_interposer"]
+        assert m["kz"] > MATERIALS["silicon"]["k"] > m["kx"]
+        assert m["kx"] == m["ky"]
+
+    def test_beol_is_a_barrier_through_and_a_spreader_along(self):
+        """About two orders of magnitude apart. The small number is the one
+        that matters: it sits directly on the plane where power is deposited."""
+        from src.composite_materials import beol_k
+        from src.grid_builder import MATERIALS
+        kxy, kz = beol_k()
+        assert kz < 3.0 and kxy > 100.0
+        assert kxy / kz > 50.0
+        assert MATERIALS["beol"]["kz"] == pytest.approx(kz)
+        # More copper helps along the stack and barely helps through it.
+        kxy_rich, kz_rich = beol_k(0.45)
+        assert kxy_rich > kxy
+        assert kz_rich < 1.5 * kz
+
+    def test_a_copper_fraction_outside_zero_to_one_is_refused(self):
+        from src.composite_materials import beol_k
+        for bad in (0.0, 1.0, -0.1, 1.5):
+            with pytest.raises(ValueError, match="between 0 and 1"):
+                beol_k(bad)
+
+    def test_neither_is_in_a_stack_this_codebase_builds(self):
+        """Both are available and cited; neither is wired in. Switching the
+        interposer to the TSV composite moves the edge-AI peak by +2.8 K, and
+        BEOL at 5-15 um is thinner than one 20 um z-cell, so both need a
+        deliberate re-pin rather than a quiet default change -- and the one
+        measured validation case is a bare test chip with no interposer at
+        all, which a global switch would silently misdescribe."""
+        import src.experiment as experiment_module
+        assert experiment_module.STACK_MATERIALS == (
+            "silicon", "bump_underfill_composite", "silicon")
+
+
 class TestRemainingLimitations:
     def test_remaining_limitations_say_what_has_and_has_not_been_compared(self):
         """One measured case is not a validated model, and the limitations

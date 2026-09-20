@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "risc3d-ai"
-version = "0.5.1"
+version = "0.6.0"
 description = "Thermal co-optimization for 3D-IC chiplet packages: a verified steady-state solver and a provably optimal placement search"
 requires-python = ">=3.10"
 dependencies = [

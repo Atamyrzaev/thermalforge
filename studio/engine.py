@@ -71,6 +71,7 @@ for _logger in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder",
 VALIDATION_DIR = Path(__file__).resolve().parent.parent / "validation"
 MESH_STUDY_PATH = VALIDATION_DIR / "mesh_convergence.json"
 MATERIAL_STUDY_PATH = VALIDATION_DIR / "material_sensitivity.json"
+BOUNDARY_STUDY_PATH = VALIDATION_DIR / "boundary_sensitivity.json"
 
 DZ_M = 20e-6
 DZ_UM = 20.0
@@ -777,6 +778,7 @@ def _load_study(path: Path) -> Optional[dict]:
 
 _MESH_STUDY = _load_study(MESH_STUDY_PATH)
 _MATERIAL_STUDY = _load_study(MATERIAL_STUDY_PATH)
+_BOUNDARY_STUDY = _load_study(BOUNDARY_STUDY_PATH)
 
 
 # A source needs about this many cells across it before its PEAK is the
@@ -922,13 +924,22 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
                  mesh_study: Optional[dict] = None,
                  material_study: Optional[dict] = None,
                  concentrated: bool = False,
-                 resolution: Optional[dict] = None) -> Optional[dict]:
+                 resolution: Optional[dict] = None,
+                 boundary_study: Optional[dict] = None) -> Optional[dict]:
     """What is known about how wrong the peak could be, in kelvin.
 
-    Two measured, independent contributions, added in quadrature:
-      mesh      -- a 2/1/0.5 mm convergence study (tools/mesh_convergence.py)
+    Three measured, independent contributions, added in quadrature:
+      mesh      -- reference packages refined to 0.25 mm and compared
+                   (tools/mesh_convergence.py), audited by tools/band_check.py
       materials -- silicon conductivity +/-10 %, bump composite +/-30 %
                    (tools/material_sensitivity.py)
+      boundary  -- the convective coefficient +/-9 %, which is how much a real
+                   rig's own h varies across 13 power patterns
+                   (tools/boundary_sensitivity.py)
+
+    The boundary term is the largest of the three, at about 5 % of the rise
+    against 1-2 % for the mesh. That is worth saying plainly: the number is
+    limited by how well the cooling is known, not by the solver.
 
     Both are measured on a reference package and scaled to THIS design's rise
     above ambient, which is what they are proportional to. This is a
@@ -945,10 +956,20 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
         case = cases.get(name) if name else None
         if case and case.get("rise_k"):
             material_k = float(case["material_band_k"]) / float(case["rise_k"]) * rise_k
-    if mesh is None and material_k is None:
+    boundary_study = _BOUNDARY_STUDY if boundary_study is None else boundary_study
+    boundary_k = None
+    if boundary_study and rise_k > 0:
+        cases = (boundary_study.get("cases") or {}).values()
+        pcts = [float(c["boundary_band_pct_of_rise"]) for c in cases
+                if c.get("boundary_band_pct_of_rise")]
+        # The worst of the measured regimes, for the same reason the mesh band
+        # takes its worst case: a band that holds beats one that flatters.
+        if pcts:
+            boundary_k = max(pcts) / 100.0 * rise_k
+    if mesh is None and material_k is None and boundary_k is None:
         return None
     mesh_k = mesh["band_k"] if mesh else 0.0
-    combined = math.hypot(mesh_k, material_k or 0.0)
+    combined = math.sqrt(mesh_k ** 2 + (material_k or 0.0) ** 2 + (boundary_k or 0.0) ** 2)
     # A band describes a source the mesh can see. If the design's smallest
     # feature is under a cell, refining does not converge the peak, it raises
     # it -- so quoting a band here would be quoting the wrong quantity.
@@ -956,6 +977,7 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
     return {
         "mesh_k": mesh_k,
         "material_k": material_k,
+        "boundary_k": boundary_k,
         "resolution_limited": limited,
         "peak_is_lower_bound": limited,
         "combined_k": combined,

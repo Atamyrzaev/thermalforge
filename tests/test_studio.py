@@ -32,7 +32,7 @@ from studio import engine as E
 from tools import correlate as correlate_module
 from tools.correlate import CaseError, correlate, load_case, render
 from studio.scenarios import scenarios
-from studio.server import serve
+from studio.server import Control, serve
 
 
 def spec(**overrides) -> E.PackageSpec:
@@ -1273,6 +1273,67 @@ class TestMeasuredNotEstimated:
         assert "nothing to compare" in out["note"]
 
 
+class TestPausableJobs:
+    """A long proof that can only be cancelled is a proof you have to start
+    again. Pause lives in the object the engine already consults for
+    cancellation, so it takes effect exactly where stopping was already safe
+    and nowhere else."""
+
+    def test_a_pause_holds_the_caller_and_a_resume_releases_it(self):
+        control = Control()
+        control.pause()
+        released, started = threading.Event(), threading.Event()
+
+        def worker():
+            started.set()
+            control.is_set()          # blocks while paused
+            released.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        assert started.wait(2.0)
+        assert not released.wait(0.3), "is_set() returned while paused"
+        assert control.held is True
+        control.resume()
+        assert released.wait(2.0), "resume did not release the worker"
+        assert control.held is False
+
+    def test_cancelling_a_paused_job_releases_it_rather_than_stranding_it(self):
+        """Otherwise pause is a trap: the thread parks and nothing can reach
+        it again."""
+        control = Control()
+        control.pause()
+        out, started = [], threading.Event()
+
+        def worker():
+            started.set()
+            out.append(control.is_set())
+
+        threading.Thread(target=worker, daemon=True).start()
+        assert started.wait(2.0)
+        control.set()                 # cancel
+        for _ in range(100):
+            if out:
+                break
+            time.sleep(0.02)
+        assert out == [True], "a cancelled job stayed parked on the pause"
+
+    def test_asking_to_pause_is_not_the_same_as_being_paused(self):
+        """The engine only consults this between safe points, and building a
+        model has none. Reporting 'paused' before the job has actually stopped
+        would claim something untrue for as long as that takes."""
+        control = Control()
+        control.pause()
+        assert control.paused is True     # requested
+        assert control.held is False      # but nobody has stopped yet
+
+    def test_pause_after_cancel_is_ignored(self):
+        control = Control()
+        control.set()
+        control.pause()
+        assert control.paused is False
+        assert control.is_set() is True   # and it does not block
+
+
 class TestMeshLevels:
     """"We cannot go finer" would be false: the factorization is exact at
     either size. What a finer mesh costs is time and memory, and what it buys
@@ -1413,19 +1474,49 @@ class TestMeshErrorBar:
         assert budget["cell_mm"] in (0.25, 0.5, 1.0, 2.0)
 
     def test_the_budget_adds_independent_sources_in_quadrature(self):
+        """Three measured terms now, not two. Each study is passed explicitly
+        so the test measures the arithmetic rather than whatever happens to be
+        committed in validation/."""
         mesh = {"cases": {"passive": {"order_p": 1.0, "band_pct_of_rise_by_cell_mm": {"0.5": 1.0}}}}
         materials = {"cases": {"passive": {"material_band_k": 2.0, "rise_k": 50.0}}}
-        budget = E.error_budget(0.5, 50.0, 1000.0, mesh, materials)
-        assert budget["mesh_k"] == pytest.approx(0.5)      # 1 % of 50 K
-        assert budget["material_k"] == pytest.approx(2.0)  # same rise as the study
-        assert budget["combined_k"] == pytest.approx(math.hypot(0.5, 2.0))
-        assert budget["combined_k"] < budget["mesh_k"] + budget["material_k"]
+        boundary = {"cases": {"forced": {"boundary_band_pct_of_rise": 6.0}}}
+        budget = E.error_budget(0.5, 50.0, 1000.0, mesh, materials, boundary_study=boundary)
+        assert budget["mesh_k"] == pytest.approx(0.5)       # 1 % of 50 K
+        assert budget["material_k"] == pytest.approx(2.0)   # same rise as the study
+        assert budget["boundary_k"] == pytest.approx(3.0)   # 6 % of 50 K
+        assert budget["combined_k"] == pytest.approx(math.sqrt(0.5 ** 2 + 2.0 ** 2 + 3.0 ** 2))
+        # Quadrature, not a sum: independent sources do not simply stack.
+        assert budget["combined_k"] < 0.5 + 2.0 + 3.0
+
+    def test_the_boundary_term_takes_the_worst_measured_regime(self):
+        """Same rule as the mesh band. A design's cooling regime is not always
+        one of the measured ones, so the band has to hold for the worst."""
+        mesh = {"cases": {"passive": {"band_pct_of_rise_by_cell_mm": {"0.5": 0.0}}}}
+        boundary = {"cases": {"gentle": {"boundary_band_pct_of_rise": 2.0},
+                              "harsh": {"boundary_band_pct_of_rise": 7.0}}}
+        budget = E.error_budget(0.5, 100.0, 1000.0, mesh, {}, boundary_study=boundary)
+        assert budget["boundary_k"] == pytest.approx(7.0)
 
     def test_one_study_alone_still_gives_a_budget(self):
         mesh = {"cases": {"passive": {"band_pct_of_rise_by_cell_mm": {"0.5": 1.0}}}}
-        only_mesh = E.error_budget(0.5, 50.0, 1000.0, mesh, {})
-        assert only_mesh["material_k"] is None and only_mesh["combined_k"] == pytest.approx(0.5)
-        assert E.error_budget(0.5, 50.0, 1000.0, {}, {}) is None
+        only_mesh = E.error_budget(0.5, 50.0, 1000.0, mesh, {}, boundary_study={})
+        assert only_mesh["material_k"] is None and only_mesh["boundary_k"] is None
+        assert only_mesh["combined_k"] == pytest.approx(0.5)
+        assert E.error_budget(0.5, 50.0, 1000.0, {}, {}, boundary_study={}) is None
+
+    def test_the_cooling_number_is_the_biggest_term_on_a_real_design(self, cache):
+        """Worth pinning, because it is the opposite of what the project
+        assumed before it was measured: the conductivities were thought to
+        dominate. On the shipped scenarios the boundary term is larger than
+        the mesh and the materials, so the answer is limited by how well the
+        cooling is known rather than by the solver."""
+        pkg = spec(size_mm=20.0, h_w_m2k=1000.0)
+        out = E.solve(cache, pkg, E.parse_chiplets([chip("a", 5, 5, 8.0, 7, 7)], pkg))
+        u = out["metrics"]["uncertainty"]
+        if u is None or u["boundary_k"] is None:
+            pytest.skip("no boundary study committed; run tools/boundary_sensitivity.py")
+        assert u["boundary_k"] > u["mesh_k"]
+        assert u["boundary_k"] > (u["material_k"] or 0.0)
 
 
 class TestExactOptimizer:

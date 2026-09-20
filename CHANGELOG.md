@@ -3,6 +3,46 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.6.0 — 21 September 2026
+
+**The error budget has a third term, and it is the biggest one.** Everything
+above the die was collapsed into one convective coefficient and never given a
+band. `tools/boundary_sensitivity.py` perturbs it by ±9 % — not a guess, but
+the spread the same rig's own `h` shows across 13 power patterns in the SAMOS
+dataset — and the peak moves **5.3 % of the rise** passively, 5.4 % under a
+lid and heatsink, 3.2 % under a cold plate. That is more than the mesh
+(1–2 %) and more than the conductivities.
+
+This corrects what the project used to say. The budget was described as
+dominated by the silicon conductivity; measured, it is dominated by the
+cooling number. Demo scenarios go from ±2.47, ±1.68, ±1.41 K to **±4.08,
+±3.19, ±2.34 K** — wider because a term was missing, not because anything got
+worse.
+
+**Long proofs can be paused.** `POST /api/jobs/<id>/pause` and `/resume`, and
+a Pause button on the optimizer overlay. The hold lives in the object the
+engine already consults for cancellation, so it takes effect exactly where
+stopping was already safe and needs no solver change. Verified on a
+176,319,369,216-layout search: held after 1.3 s, progress provably frozen,
+resumed to the same optimum (65.4729 °C, re-solve delta 2.0e-10 K), and still
+cancellable while held.
+
+Asking to pause is reported as **`pausing`** until the job actually stops,
+because model building has no checkpoints and a request can sit unhonoured
+for seconds — saying `paused` then would claim something untrue. Both UI poll
+loops were also only continuing while the state was `running`, so a paused
+job would have fallen through and reported a finish that never happened.
+
+**Two more effective properties, cited.** A TSV-bearing interposer
+(kxy 114.4, kz 175.2 W/(m K)), which reproduces the source paper's own FEM
+cell to 0.8 %, and a copper/SiO2 BEOL stack (kxy 118, kz 2.1 — two orders of
+magnitude apart, with the small number sitting on the plane where power is
+deposited). Neither is in the shipped stack, and the limitation now says so
+along with what it would cost: the interposer swap alone moves the edge-AI
+peak **+2.8 K**, a 5–15 µm BEOL is thinner than one 20 µm z-cell, and the one
+measured validation case is a bare test chip with no interposer that a global
+switch would silently misdescribe.
+
 ## 0.5.1 — 20 September 2026
 
 **"Verified, not validated" is no longer the whole truth.** The spreading has

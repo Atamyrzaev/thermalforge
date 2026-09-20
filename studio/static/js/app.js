@@ -449,6 +449,7 @@ function renderChecks() {
       `±${u.combined_k.toFixed(2)} K (${u.pct_of_rise.toFixed(1)} % of the rise): mesh ±${u.mesh_k.toFixed(2)} K `
       + `at ${u.cell_mm} mm cells`
       + (u.material_k === null ? "" : `, conductivities ±${u.material_k.toFixed(2)} K`)
+      + (u.boundary_k == null ? "" : `, cooling coefficient ±${u.boundary_k.toFixed(2)} K`)
       + (u.resolution_limited
          ? `. The mesh half of this does NOT apply: a feature smaller than a cell is not `
            + `refined toward an answer, so the band understates it — see Hotspots resolved.`
@@ -870,11 +871,17 @@ async function pollJob() {
   }
   const p = job.progress || {};
   $("opt-stage").textContent = stageText(p);
+  const paused = job.state === "paused", pausing = job.state === "pausing";
+  state.jobPaused = paused || pausing;
+  $("btn-pause").textContent = paused ? "Resume" : (pausing ? "Pausing…" : "Pause");
+  $("btn-pause").disabled = pausing;
   if (p.best_c != null) $("opt-best").textContent = `${p.best_c.toFixed(2)} °C`;
   if (p.combinations) $("opt-combos").textContent = compact(p.combinations);
   if (p.leaves != null) $("opt-leaves").textContent = p.leaves.toLocaleString();
   $("opt-elapsed").textContent = `${(p.elapsed_s || 0).toFixed(1)} s`;
-  if (job.state === "running") { setTimeout(pollJob, 250); return; }
+  // A held job is still a live job: keep polling, or the overlay falls
+  // through to the completion branch and reports a finish that never happened.
+  if (job.state === "running" || paused || pausing) { setTimeout(pollJob, 250); return; }
 
   $("opt-overlay").classList.add("hidden");
   state.jobId = null;
@@ -1185,8 +1192,11 @@ async function pollBurst() {
     return;
   }
   const p = job.progress || {};
-  if (job.state === "running") {
-    if (p.steps) {
+  // Same rule as the optimizer's overlay: paused and pausing are live states.
+  if (job.state === "running" || job.state === "paused" || job.state === "pausing") {
+    if (job.state !== "running") {
+      $("tr-status").textContent = job.state === "paused" ? "Paused" : "Pausing…";
+    } else if (p.steps) {
       $("tr-status").textContent =
         `Stepping… ${p.step} of ${p.steps} · t = ${(p.t_s || 0).toFixed(2)} s · ${(p.peak_c || 0).toFixed(1)} °C`;
     }
@@ -1251,6 +1261,14 @@ function wire() {
   $("btn-optimize").addEventListener("click", () => optimize());
   $("btn-cancel").addEventListener("click", async () => {
     if (state.jobId) await postJSON(`/api/jobs/${state.jobId}/cancel`, {});
+  });
+  // A proof that can only be stopped is a proof you have to start again. The
+  // hold takes effect at the solver's next safe point, which is why the button
+  // reads "Pausing…" until the server confirms the job has actually stopped.
+  $("btn-pause").addEventListener("click", async () => {
+    if (!state.jobId) return;
+    const held = state.jobPaused;
+    await postJSON(`/api/jobs/${state.jobId}/${held ? "resume" : "pause"}`, {});
   });
   $("btn-show-initial").addEventListener("click", () => showPlacement("initial"));
   $("btn-show-optimized").addEventListener("click", () => showPlacement("optimized"));
