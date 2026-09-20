@@ -1055,6 +1055,85 @@ class TestBandFollowsTheDesign:
         assert band is not None and band["band_k"] == pytest.approx(0.2)
 
 
+class TestHotspotsResolved:
+    """The band says how much the answer moves when the mesh is refined around
+    a source the mesh can SEE. A source smaller than a cell is not one of
+    those: its power lands in a single cell and is averaged over that cell's
+    area, so the reported peak stops depending on the design and refining
+    raises it instead of converging on it."""
+
+    def part(self, feature_frac, power_w=8.0):
+        half = feature_frac / 2.0
+        return {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": power_w,
+                "x_mm": 7, "y_mm": 7, "power_pattern": "custom",
+                "blocks": [[0.5 - half, 0.5 - half, feature_frac, feature_frac, 0.70]]}
+
+    def pkg(self, mesh="standard"):
+        return E.PackageSpec.parse({"size_mm": 20.0, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+                                    "pitch_mm": 1.0, "mesh": mesh})
+
+    def test_a_uniform_design_is_not_told_about_a_rule_it_cannot_break(self, cache):
+        pkg = self.pkg()
+        out = E.solve(cache, pkg, E.parse_chiplets([chip("a", 5, 5, 8.0, 7, 7)], pkg))
+        assert out["resolution"]["applies"] is False
+        assert out["metrics"]["uncertainty"]["peak_is_lower_bound"] is False
+
+    def test_a_resolved_hotspot_passes_and_an_unresolved_one_does_not(self, cache):
+        pkg = self.pkg()
+        # 0.63 of a 5 mm part is 3.15 mm: over six 0.5 mm cells.
+        wide = E.solve(cache, pkg, E.parse_chiplets([self.part(0.63)], pkg))["resolution"]
+        assert wide["resolved"] is True and wide["cells_across"] == pytest.approx(6.3)
+        # 0.10 of it is 0.5 mm: exactly one cell, and one is not enough.
+        narrow = E.solve(cache, pkg, E.parse_chiplets([self.part(0.10)], pkg))["resolution"]
+        assert narrow["resolved"] is False and narrow["cells_across"] == pytest.approx(1.0)
+        assert narrow["under_one_cell"] is False
+        assert narrow["needed_cell_mm"] == pytest.approx(0.25)
+        assert narrow["reachable"] is True
+
+    def test_the_budget_refuses_to_band_what_it_cannot_resolve(self, cache):
+        pkg = self.pkg()
+        out = E.solve(cache, pkg, E.parse_chiplets([self.part(0.10)], pkg))
+        budget = out["metrics"]["uncertainty"]
+        assert budget["resolution_limited"] is True
+        assert budget["peak_is_lower_bound"] is True
+
+    def test_it_says_when_no_mesh_the_app_builds_would_resolve_it(self, cache):
+        """A 0.1 mm hotspot needs 0.05 mm cells. Offering the fine mesh here
+        would be offering a fix that is not one."""
+        pkg = self.pkg()
+        out = E.solve(cache, pkg, E.parse_chiplets([self.part(0.02)], pkg))["resolution"]
+        assert out["under_one_cell"] is True
+        assert out["reachable"] is False
+        assert out["needed_cell_mm"] < min(E.CELL_CHOICES_MM)
+
+    def test_the_peak_really_does_stop_depending_on_the_design(self, cache):
+        """The measurement behind the rule: below one cell, hotspots that
+        differ five-fold report the same temperature, because the app is
+        describing its own mesh rather than the design."""
+        pkg = self.pkg()
+        peaks = {}
+        for frac in (0.10, 0.05, 0.02):          # 0.50, 0.25 and 0.10 mm
+            out = E.solve(cache, pkg, E.parse_chiplets([self.part(frac)], pkg))
+            peaks[frac] = out["peak"]["t_c"]
+        assert peaks[0.10] == pytest.approx(peaks[0.05], abs=1e-9)
+        assert peaks[0.10] == pytest.approx(peaks[0.02], abs=1e-9)
+        # And a resolved one is genuinely different.
+        wide = E.solve(cache, pkg, E.parse_chiplets([self.part(0.63)], pkg))["peak"]["t_c"]
+        assert abs(wide - peaks[0.10]) > 20.0
+
+    def test_an_imported_map_is_measured_by_its_tile(self, cache):
+        """A tile is the finest thing a file asserts, so a map finer than the
+        mesh is the same problem arriving through a different door."""
+        pkg = self.pkg()
+        fine_map = {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                    "x_mm": 7, "y_mm": 7, "power_pattern": "imported",
+                    "power_grid": {"cols": 32, "rows": 32,
+                                   "weights": [1.0] * 1023 + [50.0]}}
+        out = E.solve(cache, pkg, E.parse_chiplets([fine_map], pkg))["resolution"]
+        assert out["feature_mm"] == pytest.approx(5.0 / 32)
+        assert out["resolved"] is False
+
+
 class TestMeasuredNotEstimated:
     """The band every solve carries is an estimate scaled from reference
     packages. This measures the design in hand instead."""

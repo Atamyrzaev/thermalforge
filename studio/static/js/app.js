@@ -426,14 +426,34 @@ function renderChecks() {
     [m.floor_ratio == null || m.floor_ratio >= 1, "Physically bounded",
       `rise ${m.rise_k.toFixed(1)} K is above the cooling floor P/(hA) = ${m.floor_rise_k.toFixed(1)} K`],
   ];
+  // A source smaller than a cell is averaged over the cell, so the peak
+  // stops depending on the design: a 0.5 mm hotspot and a 0.1 mm one report
+  // the same temperature. That is not a band, it is a number we cannot
+  // defend, so it sits with the other checks that can fail.
+  const r = res.resolution;
+  if (r && r.applies) {
+    const detail = r.resolved
+      ? `smallest internal feature is ${r.feature_mm.toFixed(2)} mm on ${r.chiplet}, `
+        + `${r.cells_across.toFixed(1)} cells across`
+      : `${r.chiplet}'s smallest feature is ${r.feature_mm.toFixed(2)} mm, only `
+        + `${r.cells_across.toFixed(1)} cells across — its power is averaged over the cell, `
+        + `so this peak is a LOWER BOUND, not a converged answer. `
+        + (r.reachable
+           ? `Resolving it needs ${r.needed_cell_mm.toFixed(2)} mm cells.`
+           : `Resolving it would need ${r.needed_cell_mm.toFixed(3)} mm cells, finer than this app builds.`);
+    items.push([!!r.resolved, "Hotspots resolved", detail]);
+  }
   const u = m.uncertainty;
   if (u) {
     items.push([true, "Error budget",
       `±${u.combined_k.toFixed(2)} K (${u.pct_of_rise.toFixed(1)} % of the rise): mesh ±${u.mesh_k.toFixed(2)} K `
       + `at ${u.cell_mm} mm cells`
       + (u.material_k === null ? "" : `, conductivities ±${u.material_k.toFixed(2)} K`)
-      + `. Estimated from reference packages — press “Measure this design’s mesh error” `
-      + `to replace the mesh half with this design's own.`]);
+      + (u.resolution_limited
+         ? `. The mesh half of this does NOT apply: a feature smaller than a cell is not `
+           + `refined toward an answer, so the band understates it — see Hotspots resolved.`
+         : `. Estimated from reference packages — press “Measure this design’s mesh error” `
+           + `to replace the mesh half with this design's own.`)]);
   }
   box.innerHTML = items.map(([ok, title, detail]) =>
     `<li><span class="${ok ? "ok" : "no"}">${ok ? "✓" : "✗"}</span><span>${title}<small>${detail}</small></span></li>`).join("")

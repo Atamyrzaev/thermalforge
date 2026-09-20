@@ -50,6 +50,20 @@ more than an order of magnitude (measured on the RISC-V scenario before the fix
 above: 0.004 K uniform against 1.008 K patterned). A design is banded by the
 family it belongs to, taking the worst case in that family.
 
+**A hotspot smaller than a cell is now refused, not averaged silently.**
+Auditing the band found a case it never covered. On a 5 mm part carrying 70 %
+of 8 W in a centred block, refining 0.5 mm → 0.25 mm moves the peak +0.2 K
+when the block is 3.15 mm across, +1.0 K at 1.00 mm, and **+29.2 K at
+0.50 mm** — against a band of 1.98 K. And blocks of 0.50, 0.25 and 0.10 mm
+report the *same* temperature, because each fills exactly one cell: below a
+cell the peak describes the mesh, not the design, and refining raises it
+rather than converging on it. The app now measures the smallest feature in
+every design, fails a **Hotspots resolved** check when it is under two cells,
+labels the peak a lower bound, and declines to quote a mesh band it knows does
+not apply. It also says when no mesh it builds would resolve the feature — a
+0.1 mm hotspot needs 0.05 mm cells — rather than offering the fine mesh as a
+fix that is not one.
+
 **The band is audited now, not asserted.** `tools/band_check.py` solves
 fourteen designs at both mesh levels and compares the difference it measures
 against the band the app quoted them. Run against the reference set as it

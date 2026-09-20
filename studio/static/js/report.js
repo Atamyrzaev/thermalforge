@@ -42,6 +42,23 @@ function colorbarImage(kind) {
 
 const num = (v, digits) => (v === null || v === undefined || !Number.isFinite(v) ? "–" : v.toFixed(digits));
 
+// A peak that is a lower bound has to say so in the document somebody sends
+// on, not only in the app where it was produced.
+function resolutionWarning(res) {
+  const r = res && res.resolution;
+  if (!r || !r.applies || r.resolved) return "";
+  return `<p class="note" style="border-left:3px solid #b00;padding-left:10px">
+    <b>This peak is a lower bound, not a converged answer.</b>
+    ${r.chiplet}'s smallest internal feature is ${r.feature_mm.toFixed(2)} mm, which is
+    ${r.cells_across.toFixed(1)} mesh cells across. A source smaller than a cell has its power
+    averaged over that cell, so the reported junction temperature stops depending on the feature's
+    real size and refining the mesh raises it rather than converging on it.
+    ${r.reachable
+      ? `Resolving it needs ${r.needed_cell_mm.toFixed(2)} mm cells.`
+      : `Resolving it would need ${r.needed_cell_mm.toFixed(3)} mm cells, finer than this tool builds — it needs local mesh refinement, which is not implemented.`}
+    The mesh error bar quoted above does not cover this.</p>`;
+}
+
 function checksRows(label, res) {
   const v = res.verification;
   const balancePct = v.specified_w > 0 ? 100 * Math.abs(v.sink_heat_w - v.specified_w) / v.specified_w : 0;
@@ -173,6 +190,7 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
       <h2>Solver checks</h2>
       <table><tr><th>Solve</th><th>Residual</th><th>Energy balance: generated → leaving</th><th>Unknowns</th></tr>
         ${checksRows("Before", a)}${checksRows("After", b)}</table>
+      ${resolutionWarning(b)}
     </section>
   </div>
 

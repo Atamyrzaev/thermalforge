@@ -779,6 +779,74 @@ _MESH_STUDY = _load_study(MESH_STUDY_PATH)
 _MATERIAL_STUDY = _load_study(MATERIAL_STUDY_PATH)
 
 
+# A source needs about this many cells across it before its PEAK is the
+# design's rather than the mesh's. Below one cell the finite-volume average is
+# all there is: the same cell carries the same watts whether the hotspot
+# inside it is 0.5 mm or 0.1 mm, so the reported peak stops depending on the
+# design. Two cells is where measured refinement stops moving the answer by
+# more than the band: at 2 cells across, 0.5 mm -> 0.25 mm moved the peak
+# 1.04 K against a 1.98 K band; at 1 cell it moved 29.2 K.
+MIN_CELLS_ACROSS_FEATURE = 2.0
+
+
+def smallest_feature_mm(chiplet) -> Optional[float]:
+    """The narrowest thing inside this chiplet, in mm, or None if uniform.
+
+    For blocks that is the smaller side of the smallest block; for an imported
+    map it is one tile, since a tile is the finest structure the file asserts.
+    """
+    sizes = []
+    for b in chiplet.blocks:
+        sizes.append(min(b.w_frac * chiplet.w_mm, b.h_frac * chiplet.h_mm))
+    grid = chiplet.power_grid
+    if grid is not None and grid.cols and grid.rows:
+        sizes.append(min(chiplet.w_mm / grid.cols, chiplet.h_mm / grid.rows))
+    return min(sizes) if sizes else None
+
+
+def resolution_report(spec: PackageSpec, chiplets) -> dict:
+    """Is the hottest structure in this design resolved by the mesh?
+
+    This is not the discretization band, and the band does not cover it. The
+    band says how much the answer moves when the mesh is refined around a
+    source the mesh can SEE. A source smaller than a cell is not seen at all:
+    its power lands in one cell and is averaged over the cell's area, so the
+    reported peak is a LOWER BOUND on the junction, and refining raises it
+    instead of converging.
+
+    Measured on a 5 mm part with a centred hotspot carrying 70 % of 8 W, on a
+    20 mm package at h = 2000:
+
+        hotspot 3.15 mm (6 cells)   0.5 mm 81.8 C   0.25 mm 82.0 C    +0.2 K
+        hotspot 1.00 mm (2 cells)   0.5 mm 117.3 C  0.25 mm 118.3 C   +1.0 K
+        hotspot 0.50 mm (1 cell)    0.5 mm 117.3 C  0.25 mm 146.5 C  +29.2 K
+        hotspot 0.10 mm             0.5 mm 117.3 C  0.25 mm 146.5 C  +29.2 K
+
+    The last two rows are the point: identical answers for hotspots that
+    differ by 5x, because both fill one cell. The app cannot tell them apart,
+    so it has to say so rather than print a confident number.
+    """
+    worst_id, worst_mm = None, None
+    for c in chiplets:
+        feature = smallest_feature_mm(c)
+        if feature is not None and (worst_mm is None or feature < worst_mm):
+            worst_id, worst_mm = c.id, feature
+    if worst_mm is None:
+        return {"applies": False, "resolved": True, "cell_mm": spec.cell_mm}
+    cells_across = worst_mm / spec.cell_mm
+    return {
+        "applies": True,
+        "resolved": bool(cells_across >= MIN_CELLS_ACROSS_FEATURE),
+        "under_one_cell": bool(cells_across < 1.0),
+        "chiplet": worst_id,
+        "feature_mm": worst_mm,
+        "cell_mm": spec.cell_mm,
+        "cells_across": cells_across,
+        "needed_cell_mm": worst_mm / MIN_CELLS_ACROSS_FEATURE,
+        "reachable": bool(worst_mm / MIN_CELLS_ACROSS_FEATURE >= min(CELL_CHOICES_MM)),
+    }
+
+
 def mesh_check(cache: "ModelCache", spec: PackageSpec, chiplets) -> dict:
     """Solve THIS design at both mesh levels and report the difference.
 
@@ -853,7 +921,8 @@ def _case_for(h_w_m2k: float, cases: dict) -> Optional[str]:
 def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
                  mesh_study: Optional[dict] = None,
                  material_study: Optional[dict] = None,
-                 concentrated: bool = False) -> Optional[dict]:
+                 concentrated: bool = False,
+                 resolution: Optional[dict] = None) -> Optional[dict]:
     """What is known about how wrong the peak could be, in kelvin.
 
     Two measured, independent contributions, added in quadrature:
@@ -880,9 +949,15 @@ def error_budget(cell_mm: float, rise_k: float, h_w_m2k: float,
         return None
     mesh_k = mesh["band_k"] if mesh else 0.0
     combined = math.hypot(mesh_k, material_k or 0.0)
+    # A band describes a source the mesh can see. If the design's smallest
+    # feature is under a cell, refining does not converge the peak, it raises
+    # it -- so quoting a band here would be quoting the wrong quantity.
+    limited = bool(resolution and resolution.get("applies") and not resolution.get("resolved"))
     return {
         "mesh_k": mesh_k,
         "material_k": material_k,
+        "resolution_limited": limited,
+        "peak_is_lower_bound": limited,
         "combined_k": combined,
         "pct_of_rise": 100.0 * combined / rise_k if rise_k else 0.0,
         "cell_mm": mesh["cell_mm"] if mesh else cell_mm,
@@ -982,6 +1057,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
     rise_k = float(result.peak_c) - spec.ambient_c
     i, j, k = result.peak_ijk
     layer = next(l["name"] for l in spec.layers if l["k0"] <= k < l["k1"])
+    resolution = resolution_report(spec, chiplets)
     by_id = {c.id: c for c in chiplets}
     rows = []
     for row in result.per_chiplet:
@@ -1005,6 +1081,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
         "t_min_c": float(field_c.min()),
         "t_max_c": float(field_c.max()),
         "ambient_c": spec.ambient_c,
+        "resolution": resolution,
         "peak": {"t_c": float(result.peak_c), "i": i, "j": j, "k": k,
                  "x_mm": (i + 0.5) * spec.cell_mm, "y_mm": (j + 0.5) * spec.cell_mm,
                  "z_um": (k + 0.5) * pkg.dz * 1e6, "layer": layer},
@@ -1021,7 +1098,8 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
             "flux_chiplets_w_cm2": total_w / (chip_mm2 / 100.0) if chip_mm2 > 0 else None,
             "lambda_mm": model.lambda_mm, "h_w_m2k": spec.h_w_m2k,
             "uncertainty": error_budget(spec.cell_mm, rise_k, spec.h_w_m2k,
-                                        concentrated=any_internal_power(chiplets)),
+                                        concentrated=any_internal_power(chiplets),
+                                        resolution=resolution),
         },
         "verification": {
             "residual": float(result.residual),

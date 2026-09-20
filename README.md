@@ -93,6 +93,16 @@ editable layers (interposer / bumps / die) rather than an arbitrary one, and the
 keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 0.5 mm mesh — stricter than asked, never looser, and halved by a finer one.
 
+One limitation is enforced rather than printed. A hotspot smaller than a mesh
+cell is averaged over that cell, so the reported peak stops depending on the
+design: measured, blocks of 0.50, 0.25 and 0.10 mm inside a 5 mm part all
+report the same temperature, and refining from 0.5 mm to 0.25 mm raises the
+0.50 mm case by **29.2 K** against a quoted band of 1.98 K. The app detects
+this, fails its **Hotspots resolved** check, and declines to quote a mesh band
+it knows does not apply — the peak is labelled a lower bound. Resolving a
+0.1 mm hotspot would need 0.05 mm cells, which no mesh this app builds
+provides; that is what local refinement is for, and it is not built yet.
+
 ## Layout
 
 | Path | What it is |
@@ -104,7 +114,7 @@ keep-out is enforced in whole mesh cells, so a 100 µm rule becomes 500 µm on a
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `band_check.py` (is the band actually a bound?), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
 | `validation/` | Verification artifacts, versioned as evidence: the studies, plus `cases/` and `correlation/` |
 | `examples/` | Power maps to import: one matrix form, one region table |
-| `tests/` | 333 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 339 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 
