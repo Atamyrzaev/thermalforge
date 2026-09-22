@@ -2573,16 +2573,18 @@ class TestCitedEffectiveProperties:
             with pytest.raises(ValueError, match="between 0 and 1"):
                 beol_k(bad)
 
-    def test_neither_is_in_a_stack_this_codebase_builds(self):
-        """Both are available and cited; neither is wired in. Switching the
-        interposer to the TSV composite moves the edge-AI peak by +2.8 K, and
-        BEOL at 5-15 um is thinner than one 20 um z-cell, so both need a
-        deliberate re-pin rather than a quiet default change -- and the one
-        measured validation case is a bare test chip with no interposer at
-        all, which a global switch would silently misdescribe."""
+    def test_the_default_stack_is_unchanged_and_tsvs_are_opt_in(self):
+        """The TSV interposer is a per-design choice rather than a new
+        default: it moves the edge-AI peak +2.8 K, and the one measured
+        validation case is a bare test chip with no interposer at all, which a
+        global switch would silently misdescribe. BEOL is still not wired in,
+        because at 5-15 um it is thinner than one 20 um z-cell."""
         import src.experiment as experiment_module
+        import studio.engine as engine_module
         assert experiment_module.STACK_MATERIALS == (
             "silicon", "bump_underfill_composite", "silicon")
+        assert engine_module.INTERPOSER_MATERIALS == ("silicon", "tsv_interposer")
+        assert "beol" not in engine_module.INTERPOSER_MATERIALS
 
 
 class TestRemainingLimitations:

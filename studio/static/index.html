@@ -46,6 +46,9 @@
           <option value="20">20 × 20 mm</option><option value="30">30 × 30 mm</option>
           <option value="40">40 × 40 mm</option></select></label>
         <label>Ambient<span class="input-unit"><input id="pkg-ambient" type="number" step="1" min="-40" max="125"><em>°C</em></span></label>
+        <label class="span2">Interposer<select id="pkg-interposer">
+          <option value="silicon">Plain silicon</option>
+          <option value="tsv_interposer">Silicon with copper TSVs (kxy 114, kz 175 W/mK)</option></select></label>
         <label class="span2">Cooling path<select id="pkg-path">
           <option value="direct">Bare die — the coolant meets the silicon</option>
           <option value="lid">TIM + copper lid (1 mm)</option>

@@ -55,9 +55,11 @@ LIMITATIONS: Tuple[Tuple[str, str], ...] = (
      "of those now exist and are cited (src/composite_materials.py): a "
      "TSV-bearing interposer at kxy 114.4 / kz 175.2 W/(m K), which reproduces "
      "the source paper's own FEM cell to 0.8 %, and a copper/SiO2 BEOL at "
-     "kxy 118 / kz 2.1. Neither is wired in: the interposer swap alone moves "
-     "the edge-AI peak +2.8 K, and a 5-15 um BEOL is thinner than one 20 um "
-     "z-cell, so both need the compact-layer treatment and a deliberate re-pin"),
+     "kxy 118 / kz 2.1. The TSV interposer is a per-design choice in the app "
+     "(interposer_material), off by default because not every package has TSVs "
+     "and the measured validation case has no interposer; choosing it moves the "
+     "edge-AI peak +2.8 K. BEOL is not wired in: a 5-15 um stack is thinner "
+     "than one 20 um z-cell and needs the compact-layer treatment first"),
     ("Device layer one cell thick",
      "power now enters at the active plane against the bumps, as a flip-chip die "
      "generates it, but the source is one mesh cell (20 um) thick rather than the "

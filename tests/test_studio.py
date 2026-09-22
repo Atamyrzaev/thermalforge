@@ -1474,6 +1474,49 @@ class TestFixedParts:
         assert "io" not in out["certificate"]["rotated"]
 
 
+class TestInterposerMaterial:
+    """The interposer is a per-design choice between two cited materials:
+    plain silicon, and silicon carrying copper TSVs. It is not a global
+    default, because not every package has TSVs -- and the one measured
+    validation case is a bare test chip with no interposer at all."""
+
+    def test_plain_silicon_is_the_default_and_nothing_moves(self, cache):
+        """Every number pinned before this existed was computed on plain
+        silicon, so the default has to be plain silicon or all of them move."""
+        assert spec().interposer_material == "silicon"
+        sc = next(s for s in scenarios() if s["id"] == "edge-ai-soc")
+        pkg = E.PackageSpec.parse(sc["package"])
+        peak = E.solve(cache, pkg, E.parse_chiplets(sc["chiplets"], pkg))["peak"]["t_c"]
+        assert peak == pytest.approx(85.764, abs=5e-4)
+
+    def test_tsvs_move_the_peak_and_the_solve_stays_exact(self, cache):
+        """Measured: +2.8 K on the edge-AI scenario. The TSV composite
+        conducts better through the interposer but worse along it, and with
+        the sink on the die backside the interposer is a sideways spreading
+        path -- so losing in-plane conductivity costs more than gaining
+        through-plane conductivity buys."""
+        sc = next(s for s in scenarios() if s["id"] == "edge-ai-soc")
+        plain = E.PackageSpec.parse(sc["package"])
+        tsv = E.PackageSpec.parse(dict(sc["package"], interposer_material="tsv_interposer"))
+        a = E.solve(cache, plain, E.parse_chiplets(sc["chiplets"], plain))
+        b = E.solve(cache, tsv, E.parse_chiplets(sc["chiplets"], tsv))
+        assert b["peak"]["t_c"] - a["peak"]["t_c"] == pytest.approx(2.795, abs=0.01)
+        v = b["verification"]
+        assert v["residual"] < 1e-8
+        assert v["sink_heat_w"] == pytest.approx(v["specified_w"], rel=1e-9)
+
+    def test_the_two_materials_are_two_models(self):
+        """Keyed apart, or a TSV package would be handed a silicon
+        factorization and report the wrong temperature confidently."""
+        a = spec(interposer_material="silicon")
+        b = spec(interposer_material="tsv_interposer")
+        assert a.model_key != b.model_key
+
+    def test_an_uncited_material_is_refused(self):
+        with pytest.raises(E.StudioError, match="interposer_material must be one of"):
+            spec(interposer_material="glass")
+
+
 class TestMeshLevels:
     """"We cannot go finer" would be false: the factorization is exact at
     either size. What a finer mesh costs is time and memory, and what it buys

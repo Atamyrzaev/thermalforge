@@ -81,6 +81,13 @@ LAYER_NAMES = ("Interposer (Si)", "Microbumps + underfill", "Die (Si)")
 # whole stack must stay small enough to mesh laterally as well.
 MIN_LAYER_UM = DZ_UM
 MAX_STACK_UM = 600.0
+# What the interposer may be made of. Only materials with a cited derivation
+# are offered: plain silicon, and silicon carrying copper TSVs in an SiO2 liner
+# (src/composite_materials.tsv_cell_k, which reproduces its source paper's FEM
+# cell to 0.8 %). This is a per-design choice rather than a global default
+# because not every package has TSVs -- a bare test chip has no interposer at
+# all, and the one measured validation case is exactly that.
+INTERPOSER_MATERIALS = ("silicon", "tsv_interposer")
 
 # Assembly needs room between chiplets for underfill flow and microbump
 # dispense tolerance; 100 um is a common floor for 2.5D packages. Enforced on
@@ -234,6 +241,7 @@ class PackageSpec:
     mesh: str = DEFAULT_MESH                          # how fine the app may go
     rotate: bool = False                              # may the search turn parts?
     size_y_mm: float = 0.0    # package side in y; 0 means "same as x" (square)
+    interposer_material: str = "silicon"
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -260,6 +268,10 @@ class PackageSpec:
         if not isinstance(mesh, str) or mesh not in MESH_LEVELS:
             raise StudioError(f"mesh must be one of {', '.join(sorted(MESH_LEVELS))}")
         rotate = bool(raw.get("rotate", False))
+        interposer_material = raw.get("interposer_material", "silicon")
+        if interposer_material not in INTERPOSER_MATERIALS:
+            raise StudioError("interposer_material must be one of "
+                              + ", ".join(INTERPOSER_MATERIALS))
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
             size_y_mm=(0.0 if raw.get("size_y_mm") in (None, 0, 0.0)
@@ -274,6 +286,7 @@ class PackageSpec:
             cooling_layers=cooling_layers,
             mesh=mesh,
             rotate=rotate,
+            interposer_material=interposer_material,
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -400,7 +413,7 @@ class PackageSpec:
         # The mesh level is not in the key: two levels that land on the same
         # cell size are the same model, and should share one factorization.
         return (self.size_mm, self.size_y, self.cell_mm, self.h_w_m2k, self.ambient_c,
-                self.stack_um, self.cooling_layers)
+                self.stack_um, self.cooling_layers, self.interposer_material)
 
 
 @dataclass(frozen=True)
@@ -792,6 +805,10 @@ class ThermalModel:
             layer_cells=(meshed.layer_cells[0], meshed.layer_cells[1], spec.die_cells),
             stack_um=spec.stack_um)
         grid_builder = build_stack(config)
+        if spec.interposer_material != "silicon":
+            # build_stack filled the interposer with silicon; overwrite it.
+            n_i = int(round(spec.stack_um[0] / DZ_UM))
+            grid_builder.assign_layer(slice(0, n_i), spec.interposer_material)
         _apply_cooling_materials(grid_builder, spec)
         grid_builder.validate_grid()
         self.solver = ThermalSolver.from_grid_builder(grid_builder)

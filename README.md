@@ -116,7 +116,7 @@ provides; that is what local refinement is for, and it is not built yet.
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `band_check.py` (is the band actually a bound?), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
 | `validation/` | Verification artifacts, versioned as evidence: the studies, plus `cases/` and `correlation/` |
 | `examples/` | Power maps to import: one matrix form, one region table |
-| `tests/` | 369 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 373 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
 
 ## Development
 

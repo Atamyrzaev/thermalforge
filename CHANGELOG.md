@@ -19,6 +19,19 @@ with every check passing, and the peak drops from 85.8 to 77.9 °C against the
 same parts on 20 × 20 — what 50 % more cooled area should do. The exact
 optimizer proves its optimum on a rectangle the same way it does on a square.
 
+**The interposer's material is a choice.** Plain silicon, or silicon
+carrying copper TSVs (kxy 114.4, kz 175.2 W/mK — the cited composite that
+reproduces its source paper's FEM cell to 0.8 %). This closes the S1 item left
+open yesterday, and closes it the way that item needed: per design, not as a
+new global default. Not every package has TSVs, and the one measured
+validation case is a bare test chip with no interposer at all, which a global
+switch would have silently misdescribed. Plain silicon stays the default, so no
+pinned number moves. Choosing TSVs moves the edge-AI peak +2.8 K, verified in
+the running app (88.559 °C against 85.764): the composite conducts better
+through the interposer and worse along it, and with the sink on the die
+backside the interposer is a sideways spreading path, so the in-plane loss
+outweighs the through-plane gain.
+
 **Parts can be fixed in place.** A Fixed checkbox in the editor, and
 `"fixed": true` on a chiplet. An I/O die against the edge its bumps face, a
 memory stack under a lid cut-out: parts whose position is a constraint rather
