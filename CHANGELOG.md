@@ -19,6 +19,27 @@ with every check passing, and the peak drops from 85.8 to 77.9 °C against the
 same parts on 20 × 20 — what 50 % more cooled area should do. The exact
 optimizer proves its optimum on a rectangle the same way it does on a square.
 
+**Parts can be fixed in place.** A Fixed checkbox in the editor, and
+`"fixed": true` on a chiplet. An I/O die against the edge its bumps face, a
+memory stack under a lid cut-out: parts whose position is a constraint rather
+than a choice. In the exact search a fixed part is simply a chiplet with one
+candidate, so the proof stays a proof — it is the best layout of everything
+else around what is held. A fixed part is never turned, and never merged with
+an identical free twin by the symmetry cut.
+
+Doing it found a real defect. Single-chiplet solves were shared between parts
+of the same footprint, keyed on size and internal pattern, on the assumption
+that such parts had the same set of candidate positions. A fixed part broke
+that: it received its free twin's field, with hundreds of rows where it had
+one. The key now carries the positions too; identical free parts still share
+(the RISC-V scenario still costs 452 unit solves, same optimum).
+
+Verified in the running app: pin the edge-AI HBM and optimize, and it stays
+at (0, 0) while the other three move; the proof covers 331,776 layouts
+instead of 8,294,400 — exactly 25× fewer, the number of positions the HBM
+had — and reaches the same 73.041 °C optimum, because its start was already
+in the optimal layout.
+
 **How far the exact proof actually scales, measured** (`tools/search_scaling.py`).
 Two earlier guesses about what limits it were wrong. The mesh does not: 307,200
 unknowns factorize in about 35 s with a 3.7e-12 residual. Memory does not: the

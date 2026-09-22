@@ -134,9 +134,10 @@ function packageRequest() {
 }
 
 function chipletRequest(list = state.chiplets) {
-  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm, power_pattern, blocks, power_grid }) => ({
+  return list.map(({ id, name, w_mm, h_mm, power_w, x_mm, y_mm, power_pattern, blocks, power_grid, fixed }) => ({
     id, name, w_mm, h_mm, power_w, x_mm, y_mm,
     power_pattern: power_pattern || "uniform",
+    ...(fixed ? { fixed: true } : {}),
     ...(blocks && blocks.length ? { blocks } : {}),
     ...(power_grid ? { power_grid } : {}),
   }));
@@ -552,6 +553,7 @@ function renderEditor() {
   const cell = cellMm(state.pkg);
   const set = (id, value) => { const el = $(id); if (document.activeElement !== el) el.value = value; };
   set("ed-name", c.name);
+  $("ed-fixed").checked = !!c.fixed;
   set("ed-w", +c.w_mm.toFixed(3));
   set("ed-h", +c.h_mm.toFixed(3));
   set("ed-p", +c.power_w.toFixed(4));
@@ -1374,6 +1376,14 @@ function wire() {
   editNumber("ed-w", (c, v) => { c.w_mm = v; });
   editNumber("ed-h", (c, v) => { c.h_mm = v; });
   editNumber("ed-p", (c, v) => { c.power_w = Math.max(0, Math.min(2000, v)); });
+  $("ed-fixed").addEventListener("change", () => {
+    const c = state.chiplets.find((q) => q.id === state.selectedId);
+    if (!c) return;
+    record();
+    c.fixed = $("ed-fixed").checked;
+    renderChipletList();
+    renderFloorplan();
+  });
   $("ed-name").addEventListener("change", () => {
     const c = state.chiplets.find((q) => q.id === state.selectedId);
     if (c && $("ed-name").value.trim()) { record(); c.name = $("ed-name").value.trim(); renderChipletList(); renderFloorplan(); }

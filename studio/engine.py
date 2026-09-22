@@ -415,11 +415,15 @@ class ChipletIn:
     power_pattern: str = "uniform"
     blocks: Tuple[PowerBlock, ...] = ()
     power_grid: Optional[PowerGrid] = None
+    # Held where it is by the search. An I/O die against the edge its bumps
+    # face, a memory stack under a lid cut-out: parts whose position is a
+    # constraint rather than a choice.
+    fixed: bool = False
 
     def as_dict(self) -> dict:
         out = {"id": self.id, "name": self.name, "w_mm": self.w_mm, "h_mm": self.h_mm,
                "power_w": self.power_w, "x_mm": self.x_mm, "y_mm": self.y_mm,
-               "power_pattern": self.power_pattern,
+               "power_pattern": self.power_pattern, "fixed": self.fixed,
                "blocks": [[b.x_frac, b.y_frac, b.w_frac, b.h_frac, b.share] for b in self.blocks]}
         if self.power_grid is not None:
             out["power_grid"] = {"cols": self.power_grid.cols, "rows": self.power_grid.rows,
@@ -562,6 +566,7 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
             x_mm=_number(item, "x_mm", 0.0, spec.size_mm, name),
             y_mm=_number(item, "y_mm", 0.0, spec.size_y, name),
             power_pattern=pattern, blocks=blocks, power_grid=power_grid,
+            fixed=bool(item.get("fixed", False)),
         )
         for label, value in (("width", chiplet.w_mm), ("height", chiplet.h_mm),
                              ("x", chiplet.x_mm), ("y", chiplet.y_mm)):
@@ -1448,8 +1453,13 @@ def unit_fields(model: ThermalModel, chiplets, positions, sizes,
         # block of the same size, and an imported map is its own thing. The
         # blocks themselves key this, not the cells they round to -- they are
         # no longer rounded.
+        # The candidate positions belong in the key too. Sharing was safe only
+        # while every part with a given footprint had the same position set; a
+        # fixed part has one position where its free twin has hundreds, and
+        # handing it the twin's field gave it the wrong number of candidates.
         key = (wc, hc, chiplet.blocks,
-               None if grid is None else (grid.cols, grid.rows, grid.weights))
+               None if grid is None else (grid.cols, grid.rows, grid.weights),
+               np.ascontiguousarray(pos).tobytes())
         if key in per_watt:
             fields.append(per_watt[key] * chiplet.power_w)
             if on_chiplet is not None:
@@ -1760,7 +1770,8 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
     # A candidate is a position AND an orientation. Square parts with nothing
     # asymmetric inside them get one orientation, because turning them would
     # double the search without producing a single new layout.
-    variants = [orientations(c, allow=spec.rotate) for c in chiplets]
+    # A fixed part is not turned either: fixing it fixes its orientation too.
+    variants = [(c,) if c.fixed else orientations(c, allow=spec.rotate) for c in chiplets]
     flat, owner = [], []
     for i, group in enumerate(variants):
         for v in group:
@@ -1769,8 +1780,14 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
     flat_sizes = [(_whole(v.w_mm, cell), _whole(v.h_mm, cell)) for v in flat]
     flat_pos: List[np.ndarray] = []
     for v, (wc, hc) in zip(flat, flat_sizes):
-        pos = np.array([(x, y) for x in range(0, pkg.nx - wc + 1, pitch)
-                        for y in range(0, pkg.ny - hc + 1, pitch)], dtype=np.int64)
+        if v.fixed:
+            # One candidate, and it is the position the user drew. It does not
+            # have to sit on the placement pitch: a fixed part is placed by the
+            # design, not by the grid.
+            pos = np.array([(_whole(v.x_mm, cell), _whole(v.y_mm, cell))], dtype=np.int64)
+        else:
+            pos = np.array([(x, y) for x in range(0, pkg.nx - wc + 1, pitch)
+                            for y in range(0, pkg.ny - hc + 1, pitch)], dtype=np.int64)
         flat_pos.append(pos)
     for i, group in enumerate(variants):
         mine = [flat_pos[n] for n in range(len(flat)) if owner[n] == i]
@@ -1827,6 +1844,10 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
 
     signatures = [((_whole(chiplets[i].w_mm, cell), _whole(chiplets[i].h_mm, cell)),
                    chiplets[i].power_w,
+                   # A fixed part and a free twin are NOT interchangeable, and
+                   # two fixed ones sit at different places: give each fixed
+                   # part its own signature so the symmetry cut leaves it alone.
+                   ("fixed", chiplets[i].id) if chiplets[i].fixed else None,
                    chiplets[i].blocks,
                    None if chiplets[i].power_grid is None
                    else (chiplets[i].power_grid.cols, chiplets[i].power_grid.rows,

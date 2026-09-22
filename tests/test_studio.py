@@ -1420,6 +1420,60 @@ class TestRectangularPackages:
         assert self.rect(30.0, 20.0).model_key != self.rect(30.0, 30.0).model_key
 
 
+class TestFixedParts:
+    """Some parts are not the optimizer's to move: an I/O die against the edge
+    its bumps face, a memory stack under a lid cut-out. In the exact search a
+    fixed part is simply a chiplet with one candidate, so the proof stays a
+    proof -- it is the best layout of everything else around what is fixed."""
+
+    def test_a_fixed_part_ends_exactly_where_it_started(self, cache):
+        pkg = spec()
+        raw = [dict(chip("io", 2, 2, 5.0, 8, 8), fixed=True),
+               chip("a", 2, 2, 4.0, 0, 0), chip("b", 4, 2, 3.0, 4, 0)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        placed = {c["id"]: c for c in out["optimized"]["placement"]}
+        assert (placed["io"]["x_mm"], placed["io"]["y_mm"]) == (8.0, 8.0)
+        assert out["certificate"]["resolve_delta_k"] <= E.RESOLVE_TOL_K
+
+    def test_fixing_a_part_can_only_cost_temperature(self, cache):
+        """Taking a choice away from an exact minimizer cannot lower the
+        minimum. If it ever did, the search was not exact."""
+        pkg = spec()
+        free = [chip("io", 2, 2, 5.0, 8, 8), chip("a", 2, 2, 4.0, 0, 0)]
+        held = [dict(free[0], fixed=True), free[1]]
+        t_free = E.optimize(cache, pkg, E.parse_chiplets(free, pkg))["certificate"]["lattice_optimum_c"]
+        t_held = E.optimize(cache, pkg, E.parse_chiplets(held, pkg))["certificate"]["lattice_optimum_c"]
+        assert t_held >= t_free - 1e-9
+
+    def test_the_search_only_counts_one_position_for_it(self, cache):
+        pkg = spec()
+        free = [chip("io", 2, 2, 5.0, 8, 8), chip("a", 2, 2, 4.0, 0, 0)]
+        held = [dict(free[0], fixed=True), free[1]]
+        n_free = E.optimize(cache, pkg, E.parse_chiplets(free, pkg))["certificate"]["combinations"]
+        n_held = E.optimize(cache, pkg, E.parse_chiplets(held, pkg))["certificate"]["combinations"]
+        assert n_held < n_free
+        assert n_free % n_held == 0      # the fixed part contributed a factor of 1
+
+    def test_a_fixed_part_is_not_merged_with_a_free_twin(self, cache):
+        """Identical parts are deduplicated as interchangeable. A fixed one and
+        a free one are not interchangeable, and treating them as if they were
+        would let the symmetry cut move the part that was meant to stay put."""
+        pkg = spec()
+        raw = [dict(chip("p", 2, 2, 4.0, 8, 8), fixed=True), chip("q", 2, 2, 4.0, 0, 0)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        placed = {c["id"]: c for c in out["optimized"]["placement"]}
+        assert (placed["p"]["x_mm"], placed["p"]["y_mm"]) == (8.0, 8.0)
+        assert out["certificate"]["identical_chiplets"] == 0
+
+    def test_a_fixed_part_is_never_turned(self, cache):
+        pkg = spec(rotate=True)
+        raw = [dict(chip("io", 4, 2, 5.0, 4, 6), fixed=True), chip("a", 2, 2, 3.0, 0, 0)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        placed = {c["id"]: c for c in out["optimized"]["placement"]}
+        assert (placed["io"]["w_mm"], placed["io"]["h_mm"]) == (4.0, 2.0)
+        assert "io" not in out["certificate"]["rotated"]
+
+
 class TestMeshLevels:
     """"We cannot go finer" would be false: the factorization is exact at
     either size. What a finer mesh costs is time and memory, and what it buys

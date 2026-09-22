@@ -68,6 +68,7 @@ export function serializeDesign(pkg, chiplets, title) {
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
       power_w: c.power_w, x_mm: c.x_mm, y_mm: c.y_mm, color: c.color,
       power_pattern: c.power_pattern || "uniform",
+      ...(c.fixed ? { fixed: true } : {}),
       ...(c.blocks && c.blocks.length ? { blocks: c.blocks } : {}),
       ...(c.power_grid ? { power_grid: c.power_grid, map_source: c.map_source || "" } : {}),
     })),
@@ -197,6 +198,7 @@ export function parseDesign(text) {
       y_mm: number(c, "y_mm", 0, pkg.size_mm, where),
       color: typeof c.color === "string" && COLOUR.test(c.color) ? c.color : "#8aa0b8",
       power_pattern: typeof c.power_pattern === "string" ? c.power_pattern.slice(0, 30) : "uniform",
+      fixed: c.fixed === true,
       ...(c.blocks === undefined ? {} : { blocks: parseBlocks(c.blocks, where) }),
       ...(c.power_grid === undefined || c.power_grid === null
         ? {} : { power_grid: parseGrid(c.power_grid, where),
