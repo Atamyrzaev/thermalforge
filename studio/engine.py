@@ -58,6 +58,8 @@ from src.experiment import (
     grid_weights, package_from_config, power_z_range, solve_placement, uniform_share,
     validate_placement,
 )
+from src.composite_materials import BEOL_COPPER_FRACTION, beol_bump_layer
+from src.grid_builder import MATERIALS
 from src.surrogate import spreading_length_m
 from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
 
@@ -88,6 +90,11 @@ MAX_STACK_UM = 600.0
 # because not every package has TSVs -- a bare test chip has no interposer at
 # all, and the one measured validation case is exactly that.
 INTERPOSER_MATERIALS = ("silicon", "tsv_interposer")
+# The interconnect stack on the die's active face, compacted into the bump
+# layer (src/composite_materials.compact_into). 0 means none -- the default,
+# so no pinned number moves. Measured across 14 designs by
+# tools/beol_sensitivity.py: -2.6 % to +1.7 % of the rise.
+MAX_BEOL_UM = 20.0
 
 # Assembly needs room between chiplets for underfill flow and microbump
 # dispense tolerance; 100 um is a common floor for 2.5D packages. Enforced on
@@ -242,6 +249,7 @@ class PackageSpec:
     rotate: bool = False                              # may the search turn parts?
     size_y_mm: float = 0.0    # package side in y; 0 means "same as x" (square)
     interposer_material: str = "silicon"
+    beol_um: float = 0.0      # interconnect stack on the die's active face; 0 = none
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -272,6 +280,11 @@ class PackageSpec:
         if interposer_material not in INTERPOSER_MATERIALS:
             raise StudioError("interposer_material must be one of "
                               + ", ".join(INTERPOSER_MATERIALS))
+        beol_um = (0.0 if raw.get("beol_um") in (None, 0, 0.0)
+                   else _number(raw, "beol_um", 0.0, MAX_BEOL_UM, "package"))
+        if beol_um >= layers[1]:
+            raise StudioError(f"a {beol_um:g} um BEOL cannot fold into a {layers[1]:g} um "
+                              f"bump layer; it has to be the thinner of the two")
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
             size_y_mm=(0.0 if raw.get("size_y_mm") in (None, 0, 0.0)
@@ -287,6 +300,7 @@ class PackageSpec:
             mesh=mesh,
             rotate=rotate,
             interposer_material=interposer_material,
+            beol_um=beol_um,
         )
         cell = spec.cell_mm
         if _whole(spec.pitch_mm, cell) is None:
@@ -413,7 +427,7 @@ class PackageSpec:
         # The mesh level is not in the key: two levels that land on the same
         # cell size are the same model, and should share one factorization.
         return (self.size_mm, self.size_y, self.cell_mm, self.h_w_m2k, self.ambient_c,
-                self.stack_um, self.cooling_layers, self.interposer_material)
+                self.stack_um, self.cooling_layers, self.interposer_material, self.beol_um)
 
 
 @dataclass(frozen=True)
@@ -809,6 +823,16 @@ class ThermalModel:
             # build_stack filled the interposer with silicon; overwrite it.
             n_i = int(round(spec.stack_um[0] / DZ_UM))
             grid_builder.assign_layer(slice(0, n_i), spec.interposer_material)
+        if spec.beol_um > 0:
+            # The BEOL sits between the device layer and the bumps, too thin
+            # for cells of its own: fold it into the bump layer, keeping k.t
+            # along and t/k through.
+            n_i = int(round(spec.stack_um[0] / DZ_UM))
+            n_b = int(round(spec.stack_um[1] / DZ_UM))
+            bump = beol_bump_layer(MATERIALS["bump_underfill_composite"], spec.stack_um[1],
+                                   spec.beol_um, BEOL_COPPER_FRACTION)
+            grid_builder.assign_layer(slice(n_i, n_i + n_b), "bump_underfill_composite",
+                                      overrides={k: bump[k] for k in ("kx", "ky", "kz")})
         _apply_cooling_materials(grid_builder, spec)
         grid_builder.validate_grid()
         self.solver = ThermalSolver.from_grid_builder(grid_builder)

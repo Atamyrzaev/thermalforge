@@ -5,15 +5,16 @@
     "source": "F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796",
     "date": "2019",
     "measured_by": "Politecnico di Milano (not by this project)",
-    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 1 kHz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples at the end of the powered phase: the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
+    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 10 Hz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples (40 s) at the end of the powered phase, from validation/measured/ttc_samos2019_steady.json (built by tools/ttc_extract.py): the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
     "geometry_note": "The dataset does not state the die size. It is pinned by cross-reference: the 3D-ICE 3.0 paper (IEEE TCAD 41(4), 2022) describes the uniform preheat on this same platform as 5 W/cm2, and this dataset's uniform baseline is 0.2 W per element, so each element is 0.04 cm2 -- 2 x 2 mm -- and the 4x4 array is 8 x 8 mm.",
-    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (60000 W/m2K) are NOT disclosed by the source. They were fitted once, on the 'one' power pattern alone, and then held fixed for every other pattern including this one. Two numbers fitted on one configuration and twelve others predicted from them is what validation looks like when the rig's own parameters were never published -- but the LEVEL of this model is calibrated, so only the SHAPE is evidence.",
+    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (23,382 W/m2K) are NOT disclosed by the source. They are fitted on the 'one' power pattern ALONE, each doing one job: h is solved so the modelled MEAN temperature of 'one' matches the measured mean, and thickness is chosen for the best SHAPE on 'one'. Nothing is fitted on this pattern. An earlier fit chose both for shape and only tie-broke on level, so h was never fitted to the level and landed on the edge of its search range at 60,000; that fit is superseded. Thickness is weakly constrained -- shape RMS moves only 0.640 to 0.818 K across 100-560 um -- so it is reported, not relied on.",
     "run": "heatsink_with_fan/hotspot_2",
-    "total_power_w": 10.139
+    "total_power_w": 10.139,
+    "cross_validation": "tools/ttc_crossvalidate.py predicts all 13 measured patterns of this rig, none fitted on the pattern it predicts. Shape inside the stated band on 11 of 12 (h and thickness from 'one'); level inside on 12 of 13 when each pattern's h is fitted on the other twelve. The one miss on both counts is 'nine', where the fan cools the sink unevenly: under uniform power the row means differ by 5.8 K with the fan and by under 1.6 K without it, so a single uniform h cannot represent that boundary. See validation/ttc_crossvalidation.json."
   },
   "synthetic": false,
-  "model_band_k": 1.0265287902367615,
-  "peak_modelled_c": 64.56524211446617,
+  "model_band_k": 2.6100644785060227,
+  "peak_modelled_c": 68.76067779631057,
   "grid": {
     "nx": 32,
     "ny": 32,
@@ -21,6 +22,7 @@
     "cell_mm": 0.25,
     "dz_um": 20.0,
     "size_mm": 8.0,
+    "size_y_mm": 8.0,
     "layers": [
       {
         "name": "Interposer (Si)",
@@ -111,9 +113,9 @@
     ]
   },
   "verification": {
-    "residual": 2.6200691788285e-12,
-    "energy_imbalance_k": 5.2101405461629243e-11,
-    "sink_heat_w": 10.13890000017397,
+    "residual": 2.928062088450511e-12,
+    "energy_imbalance_k": 8.013992609764182e-11,
+    "sink_heat_w": 10.1389000001133,
     "deposited_w": 10.1389,
     "specified_w": 10.1389,
     "unknowns": 13312
@@ -132,11 +134,11 @@
       "cell_mm": 0.25,
       "measured_c": 65.016,
       "uncertainty_k": 0.1,
-      "modelled_c": 60.40938186645508,
-      "error_k": -4.606618133544927,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -1.807759332656865
+      "modelled_c": 64.59845733642578,
+      "error_k": -0.4175426635742241,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -1.7520025253295946
     },
     {
       "id": "d1",
@@ -151,11 +153,11 @@
       "cell_mm": 0.25,
       "measured_c": 40.807,
       "uncertainty_k": 0.1,
-      "modelled_c": 38.6172981262207,
-      "error_k": -2.189701873779299,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.6091569271087631
+      "modelled_c": 42.78770446777344,
+      "error_k": 1.9807044677734353,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.6462446060180649
     },
     {
       "id": "d2",
@@ -170,11 +172,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.945,
       "uncertainty_k": 0.1,
-      "modelled_c": 34.95451736450195,
-      "error_k": -1.9904826354980472,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.808376165390015
+      "modelled_c": 39.10026550292969,
+      "error_k": 2.155265502929687,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.8208056411743168
     },
     {
       "id": "d3",
@@ -189,11 +191,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.174,
       "uncertainty_k": 0.1,
-      "modelled_c": 33.7708740234375,
-      "error_k": -2.4031259765624995,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.39573282432556267
+      "modelled_c": 37.900360107421875,
+      "error_k": 1.7263601074218755,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.39190024566650505
     },
     {
       "id": "d4",
@@ -208,11 +210,11 @@
       "cell_mm": 0.25,
       "measured_c": 40.904,
       "uncertainty_k": 0.1,
-      "modelled_c": 38.651607513427734,
-      "error_k": -2.252392486572269,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.5464663143157931
+      "modelled_c": 42.82207107543945,
+      "error_k": 1.9180710754394497,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.5836112136840792
     },
     {
       "id": "d5",
@@ -227,11 +229,11 @@
       "cell_mm": 0.25,
       "measured_c": 38.187,
       "uncertainty_k": 0.1,
-      "modelled_c": 36.03403091430664,
-      "error_k": -2.152969085693357,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.6458897151947052
+      "modelled_c": 40.18777084350586,
+      "error_k": 2.0007708435058618,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.6663109817504913
     },
     {
       "id": "d6",
@@ -246,11 +248,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.789,
       "uncertainty_k": 0.1,
-      "modelled_c": 34.216854095458984,
-      "error_k": -2.572145904541017,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.22671289634704506
+      "modelled_c": 38.34842300415039,
+      "error_k": 1.5594230041503891,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.2249631423950187
     },
     {
       "id": "d7",
@@ -265,11 +267,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.303,
       "uncertainty_k": 0.1,
-      "modelled_c": 33.416622161865234,
-      "error_k": -2.886377838134763,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.08751903724670074
+      "modelled_c": 37.53350830078125,
+      "error_k": 1.2305083007812527,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.10395156097411773
     },
     {
       "id": "d8",
@@ -284,11 +286,11 @@
       "cell_mm": 0.25,
       "measured_c": 37.312,
       "uncertainty_k": 0.1,
-      "modelled_c": 34.971744537353516,
-      "error_k": -2.340255462646482,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.45860333824158017
+      "modelled_c": 39.11762619018555,
+      "error_k": 1.8056261901855493,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.4711663284301788
     },
     {
       "id": "d9",
@@ -303,11 +305,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.987,
       "uncertainty_k": 0.1,
-      "modelled_c": 34.22919464111328,
-      "error_k": -2.7578053588867206,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.041053442001341534
+      "modelled_c": 38.36083984375,
+      "error_k": 1.3738398437499981,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.039379981994627666
     },
     {
       "id": "d10",
@@ -322,11 +324,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.563,
       "uncertainty_k": 0.1,
-      "modelled_c": 33.41178894042969,
-      "error_k": -3.151211059570315,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.35235225868225273
+      "modelled_c": 37.524444580078125,
+      "error_k": 0.9614445800781226,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.37301528167724785
     },
     {
       "id": "d11",
@@ -341,11 +343,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.358,
       "uncertainty_k": 0.1,
-      "modelled_c": 32.96456527709961,
-      "error_k": -3.3934347229003876,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.5945759220123255
+      "modelled_c": 37.06459045410156,
+      "error_k": 0.7065904541015655,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.627869407653805
     },
     {
       "id": "d12",
@@ -360,11 +362,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.417,
       "uncertainty_k": 0.1,
-      "modelled_c": 33.80274963378906,
-      "error_k": -2.614250366210939,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": 0.18460843467712307
+      "modelled_c": 37.93241500854492,
+      "error_k": 1.5154150085449203,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": 0.18095514678954983
     },
     {
       "id": "d13",
@@ -379,11 +381,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.324,
       "uncertainty_k": 0.1,
-      "modelled_c": 33.428558349609375,
-      "error_k": -2.895441650390623,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.09658284950256091
+      "modelled_c": 37.545570373535156,
+      "error_k": 1.2215703735351582,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.11288948822021228
     },
     {
       "id": "d14",
@@ -398,11 +400,11 @@
       "cell_mm": 0.25,
       "measured_c": 36.182,
       "uncertainty_k": 0.1,
-      "modelled_c": 32.97516632080078,
-      "error_k": -3.206833679199221,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.40797487831115875
+      "modelled_c": 37.07524108886719,
+      "error_k": 0.8932410888671853,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.4412187728881851
     },
     {
       "id": "d15",
@@ -417,24 +419,24 @@
       "cell_mm": 0.25,
       "measured_c": 36.063,
       "uncertainty_k": 0.1,
-      "modelled_c": 32.694305419921875,
-      "error_k": -3.3686945800781274,
-      "band_k": 1.0313880730282607,
-      "inside_band": false,
-      "shape_error_k": -0.5698357791900652
+      "modelled_c": 36.7830696105957,
+      "error_k": 0.7200696105957007,
+      "band_k": 2.6119794375069105,
+      "inside_band": true,
+      "shape_error_k": -0.6143902511596697
     }
   ],
   "summary": {
     "count": 16,
-    "inside_band": 0,
-    "bias_k": -2.798858800888062,
-    "rms_k": 2.8699521883916863,
-    "max_abs_k": 4.606618133544927,
-    "shape_rms_k": 0.6348346055041951,
-    "shape_max_abs_k": 1.807759332656865,
+    "inside_band": 16,
+    "bias_k": 1.3344598617553705,
+    "rms_k": 1.4796012214850005,
+    "max_abs_k": 2.155265502929687,
+    "shape_rms_k": 0.6390904881030096,
+    "shape_max_abs_k": 1.7520025253295946,
     "measured_spread_k": 28.953000000000003,
-    "modelled_spread_k": 27.715076446533203,
-    "spread_ratio": 0.9572436861994681,
+    "modelled_spread_k": 27.815387725830078,
+    "spread_ratio": 0.9607083109118252,
     "discriminating": true,
     "shape_inside_band": true
   }

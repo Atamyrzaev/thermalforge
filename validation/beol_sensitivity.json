@@ -1,0 +1,564 @@
+{
+  "what": "peak shift from compacting a BEOL (5-15 um, 20-40 % Cu) into the bump layer, over the fourteen designs tools/band_check.py audits",
+  "treatment": "k.t along and t/k through preserved, in the bump layer's own thickness",
+  "variants": [
+    {
+      "beol_um": 5.0,
+      "copper_fraction": 0.3
+    },
+    {
+      "beol_um": 10.0,
+      "copper_fraction": 0.3
+    },
+    {
+      "beol_um": 15.0,
+      "copper_fraction": 0.3
+    },
+    {
+      "beol_um": 10.0,
+      "copper_fraction": 0.2
+    },
+    {
+      "beol_um": 10.0,
+      "copper_fraction": 0.4
+    }
+  ],
+  "rows": [
+    {
+      "name": "two 4 mm parts, film",
+      "cooling": "direct",
+      "rise_k": 48.780000043985524,
+      "peak_c": 73.78000004398552,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.2898373955018769
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.5664666826551752
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.8308120258997178
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.2558538539266806
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.8724661703962511
+        }
+      ],
+      "worst_shift_k": -0.8724661703962511,
+      "worst_pct_of_rise": -1.7885735334348865,
+      "mesh_k": 0.6546811629863016,
+      "combined_k": 3.1750632080424346,
+      "shift_over_mesh": 1.3326581238667872
+    },
+    {
+      "name": "two 4 mm parts, cold plate",
+      "cooling": "direct",
+      "rise_k": 11.042420041766377,
+      "peak_c": 36.04242004176638,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.044738929743687095
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.08529958031380147
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.12214377501140916
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.03945261769251829
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.13089058585006796
+        }
+      ],
+      "worst_shift_k": -0.13089058585006796,
+      "worst_pct_of_rise": -1.1853432975289204,
+      "mesh_k": 0.1482014019804867,
+      "combined_k": 0.6695397837386421,
+      "shift_over_mesh": 0.8831939786055599
+    },
+    {
+      "name": "one 2 mm part, dense",
+      "cooling": "direct",
+      "rise_k": 80.87671822932867,
+      "peak_c": 105.87671822932867,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.16261251298868729
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.33462045444576916
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.5178258221110354
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.6138655746694894
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.27250296871415
+        }
+      ],
+      "worst_shift_k": -1.27250296871415,
+      "worst_pct_of_rise": -1.5733860084504478,
+      "mesh_k": 1.08545436451718,
+      "combined_k": 5.264220832423264,
+      "shift_over_mesh": 1.172322863412292
+    },
+    {
+      "name": "one 2 mm part, cold plate",
+      "cooling": "direct",
+      "rise_k": 33.125250222785326,
+      "peak_c": 58.125250222785326,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": 0.12959293852918563
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": 0.24697242165166244
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": 0.34958970355808106
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.5599508143896514
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.06667321192514919
+        }
+      ],
+      "worst_shift_k": 0.5599508143896514,
+      "worst_pct_of_rise": 1.690404783733489,
+      "mesh_k": 0.44457723084277123,
+      "combined_k": 2.008497483935988,
+      "shift_over_mesh": 1.2595130284296614
+    },
+    {
+      "name": "one 2 mm part, weak film",
+      "cooling": "direct",
+      "rise_k": 122.67100345535016,
+      "peak_c": 147.67100345535016,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.42310975092561875
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.8435827997283809
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.2638685116896795
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.3553817418497829
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -2.024961041271524
+        }
+      ],
+      "worst_shift_k": -2.024961041271524,
+      "worst_pct_of_rise": -1.6507250974013354,
+      "mesh_k": 1.6463795640514227,
+      "combined_k": 7.984587728854497,
+      "shift_over_mesh": 1.229947871977034
+    },
+    {
+      "name": "MAC array alone",
+      "cooling": "direct",
+      "rise_k": 56.78172377747825,
+      "peak_c": 81.78172377747825,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.41392729978332454
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.8067558586435553
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.180649174100779
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.2909430585121413
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.3145576303481903
+        }
+      ],
+      "worst_shift_k": -1.3145576303481903,
+      "worst_pct_of_rise": -2.3151069444453762,
+      "mesh_k": 1.2166563858421828,
+      "combined_k": 3.8156398543950334,
+      "shift_over_mesh": 1.0804674562557275
+    },
+    {
+      "name": "MAC array, cold plate",
+      "cooling": "direct",
+      "rise_k": 17.107325636682674,
+      "peak_c": 42.107325636682674,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.05429973788909592
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.10197858712456309
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.14448463857797833
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.00994142736857384
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.19362938648635009
+        }
+      ],
+      "worst_shift_k": -0.19362938648635009,
+      "worst_pct_of_rise": -1.1318507088633245,
+      "mesh_k": 0.36655697636300305,
+      "combined_k": 1.0759132690582804,
+      "shift_over_mesh": 0.5282381702499587
+    },
+    {
+      "name": "MAC array under a lid",
+      "cooling": "lid_heatsink",
+      "rise_k": 30.471060033889046,
+      "peak_c": 55.471060033889046,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.02579480609830398
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.04756484714795306
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.0662941540700217
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.022733776980373932
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.07235946461509002
+        }
+      ],
+      "worst_shift_k": -0.07235946461509002,
+      "worst_pct_of_rise": -0.2374694695052088,
+      "mesh_k": 0.6529003930718301,
+      "combined_k": 2.0476058727383406,
+      "shift_over_mesh": 0.11082772408000258
+    },
+    {
+      "name": "two engines, dense",
+      "cooling": "direct",
+      "rise_k": 67.96349464151353,
+      "peak_c": 92.96349464151353,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.2502198797363917
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.5106003107119932
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.775966398133562
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.12658128014572867
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.1416682014456683
+        }
+      ],
+      "worst_shift_k": -1.1416682014456683,
+      "worst_pct_of_rise": -1.6798256291375477,
+      "mesh_k": 1.4562470854846723,
+      "combined_k": 4.5670367425685665,
+      "shift_over_mesh": 0.7839797331272907
+    },
+    {
+      "name": "quad cores plus a hot edge part",
+      "cooling": "direct",
+      "rise_k": 64.86860513251327,
+      "peak_c": 89.86860513251327,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.2323371534084231
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.46830079552273673
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.7086995044247715
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.07102829660351517
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.0019027895616546
+        }
+      ],
+      "worst_shift_k": -1.0019027895616546,
+      "worst_pct_of_rise": -1.5445110736001992,
+      "mesh_k": 1.3899331937233472,
+      "combined_k": 4.3590651811244525,
+      "shift_over_mesh": 0.7208280182716995
+    },
+    {
+      "name": "crowded, mixed patterns",
+      "cooling": "direct",
+      "rise_k": 59.65716828993891,
+      "peak_c": 84.65716828993891,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.021511199578640117
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.054107508110575964
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.0971336594946024
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": 0.29931966585530745
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.40488653704261424
+        }
+      ],
+      "worst_shift_k": -0.40488653704261424,
+      "worst_pct_of_rise": -0.6786888292699902,
+      "mesh_k": 1.2782682513419008,
+      "combined_k": 4.008865067561214,
+      "shift_over_mesh": 0.3167461419913796
+    },
+    {
+      "name": "40 mm package, small dense part",
+      "cooling": "direct",
+      "rise_k": 65.02008479848746,
+      "peak_c": 90.02008479848746,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.5610764842541585
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.0977622297547782
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.611668303916872
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.5205263996385838
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.6661159611745688
+        }
+      ],
+      "worst_shift_k": -1.6661159611745688,
+      "worst_pct_of_rise": -2.56246353159682,
+      "mesh_k": 3.9264475114692754,
+      "combined_k": 5.7066924639378716,
+      "shift_over_mesh": 0.4243316525454096
+    },
+    {
+      "name": "40 mm package, patterned",
+      "cooling": "direct",
+      "rise_k": 57.85425227540651,
+      "peak_c": 82.85425227540651,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.514138585587375
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.0096604100426703
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -1.4874518882293728
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.5707193634616488
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -1.442049746059638
+        }
+      ],
+      "worst_shift_k": -1.4874518882293728,
+      "worst_pct_of_rise": -2.5710329487080408,
+      "mesh_k": 4.25101348099515,
+      "combined_k": 5.6257194833101,
+      "shift_over_mesh": 0.34990523903988296
+    },
+    {
+      "name": "30 mm package, cold plate",
+      "cooling": "direct",
+      "rise_k": 21.903996627778326,
+      "peak_c": 46.90399662777833,
+      "shifts": [
+        {
+          "beol_um": 5.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.07734023205739504
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.14701603691008813
+        },
+        {
+          "beol_um": 15.0,
+          "copper_fraction": 0.3,
+          "shift_k": -0.21034403407060154
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.2,
+          "shift_k": -0.034510935363869066
+        },
+        {
+          "beol_um": 10.0,
+          "copper_fraction": 0.4,
+          "shift_k": -0.2590567193119
+        }
+      ],
+      "worst_shift_k": -0.2590567193119,
+      "worst_pct_of_rise": -1.1826915595091358,
+      "mesh_k": 1.609461384257493,
+      "combined_k": 2.0658732115302887,
+      "shift_over_mesh": 0.16095864234196144
+    }
+  ],
+  "worst_pct_of_rise": -2.5710329487080408,
+  "worst_design": "40 mm package, patterned",
+  "worst_shift_over_mesh_band": 1.3326581238667872,
+  "worst_over_mesh_design": "two 4 mm parts, film"
+}

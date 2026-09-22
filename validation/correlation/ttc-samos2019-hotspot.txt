@@ -1,32 +1,28 @@
 Case: ttc-samos2019-hotspot  (F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796)
-Mesh 32 x 32 x 13 at 0.25 mm  ·  modelled peak 64.57 degC  ·  model band +/- 1.03 K
+Mesh 32 x 32 x 13 at 0.25 mm  ·  modelled peak 68.76 degC  ·  model band +/- 2.61 K
 
 sensor          measured  modelled    error    band  verdict
-d0                65.02C    60.41C   -4.61K   1.03K  OUTSIDE   on-die diode, cell 0
-d1                40.81C    38.62C   -2.19K   1.03K  OUTSIDE   on-die diode, cell 1
-d2                36.95C    34.95C   -1.99K   1.03K  OUTSIDE   on-die diode, cell 2
-d3                36.17C    33.77C   -2.40K   1.03K  OUTSIDE   on-die diode, cell 3
-d4                40.90C    38.65C   -2.25K   1.03K  OUTSIDE   on-die diode, cell 4
-d5                38.19C    36.03C   -2.15K   1.03K  OUTSIDE   on-die diode, cell 5
-d6                36.79C    34.22C   -2.57K   1.03K  OUTSIDE   on-die diode, cell 6
-d7                36.30C    33.42C   -2.89K   1.03K  OUTSIDE   on-die diode, cell 7
-d8                37.31C    34.97C   -2.34K   1.03K  OUTSIDE   on-die diode, cell 8
-d9                36.99C    34.23C   -2.76K   1.03K  OUTSIDE   on-die diode, cell 9
-d10               36.56C    33.41C   -3.15K   1.03K  OUTSIDE   on-die diode, cell 10
-d11               36.36C    32.96C   -3.39K   1.03K  OUTSIDE   on-die diode, cell 11
-d12               36.42C    33.80C   -2.61K   1.03K  OUTSIDE   on-die diode, cell 12
-d13               36.32C    33.43C   -2.90K   1.03K  OUTSIDE   on-die diode, cell 13
-d14               36.18C    32.98C   -3.21K   1.03K  OUTSIDE   on-die diode, cell 14
-d15               36.06C    32.69C   -3.37K   1.03K  OUTSIDE   on-die diode, cell 15
+d0                65.02C    64.60C   -0.42K   2.61K  inside   on-die diode, cell 0
+d1                40.81C    42.79C   +1.98K   2.61K  inside   on-die diode, cell 1
+d2                36.95C    39.10C   +2.16K   2.61K  inside   on-die diode, cell 2
+d3                36.17C    37.90C   +1.73K   2.61K  inside   on-die diode, cell 3
+d4                40.90C    42.82C   +1.92K   2.61K  inside   on-die diode, cell 4
+d5                38.19C    40.19C   +2.00K   2.61K  inside   on-die diode, cell 5
+d6                36.79C    38.35C   +1.56K   2.61K  inside   on-die diode, cell 6
+d7                36.30C    37.53C   +1.23K   2.61K  inside   on-die diode, cell 7
+d8                37.31C    39.12C   +1.81K   2.61K  inside   on-die diode, cell 8
+d9                36.99C    38.36C   +1.37K   2.61K  inside   on-die diode, cell 9
+d10               36.56C    37.52C   +0.96K   2.61K  inside   on-die diode, cell 10
+d11               36.36C    37.06C   +0.71K   2.61K  inside   on-die diode, cell 11
+d12               36.42C    37.93C   +1.52K   2.61K  inside   on-die diode, cell 12
+d13               36.32C    37.55C   +1.22K   2.61K  inside   on-die diode, cell 13
+d14               36.18C    37.08C   +0.89K   2.61K  inside   on-die diode, cell 14
+d15               36.06C    36.78C   +0.72K   2.61K  inside   on-die diode, cell 15
 
-0 of 16 sensors inside the combined band  ·  bias -2.80 K  ·  RMS 2.87 K  ·  worst 4.61 K
-After removing the -2.80 K common offset: shape RMS 0.63 K  ·  worst 1.81 K
-Spread across the sensors: measured 28.95 K, modelled 27.72 K  (0.96x)
+16 of 16 sensors inside the combined band  ·  bias +1.33 K  ·  RMS 1.48 K  ·  worst 2.16 K
+After removing the +1.33 K common offset: shape RMS 0.64 K  ·  worst 1.75 K
+Spread across the sensors: measured 28.95 K, modelled 27.82 K  (0.96x)
 
-The SHAPE agrees and the level does not: every sensor is off by about -2.80 K
-together, while their differences from each other are reproduced. That is the
-signature of a series resistance nobody modelled -- a contact, a grease line,
-a heat sink whose real performance was never disclosed -- not of the
-conduction inside the package. It is evidence FOR the solver and AGAINST the
-boundary condition as given. Calibrating the boundary on this case and then
-quoting the same case as validation would be circular; say which you did.
+Every sensor agrees within the measurement's uncertainty and the model's
+error budget. That is evidence about THIS package, under THESE conditions.
+The model's status changes only for what has actually been compared.

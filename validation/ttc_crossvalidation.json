@@ -1,0 +1,286 @@
+{
+  "what": "calibrate the two unpublished rig parameters on measured patterns, predict held-out ones, judge level and shape against the stated band",
+  "condition": "heatsink_with_fan",
+  "modelled_cooling": "lid_heatsink",
+  "fit_on": "one",
+  "fits": [
+    {
+      "t_si_um": 100,
+      "h_w_m2k": 23381.68226188782,
+      "shape_rms_k": 0.639784222930182
+    },
+    {
+      "t_si_um": 200,
+      "h_w_m2k": 23710.46983786953,
+      "shape_rms_k": 0.6668818777548318
+    },
+    {
+      "t_si_um": 300,
+      "h_w_m2k": 24081.051285750793,
+      "shape_rms_k": 0.7111913550470811
+    },
+    {
+      "t_si_um": 400,
+      "h_w_m2k": 24475.883250181683,
+      "shape_rms_k": 0.7534242929396855
+    },
+    {
+      "t_si_um": 500,
+      "h_w_m2k": 24889.19281664403,
+      "shape_rms_k": 0.789721973311444
+    },
+    {
+      "t_si_um": 560,
+      "h_w_m2k": 24532.71670531202,
+      "shape_rms_k": 0.8178131552517446
+    }
+  ],
+  "chosen": {
+    "t_si_um": 100.0,
+    "h_w_m2k": 23381.68226188782
+  },
+  "rows": [
+    {
+      "pattern": "checkboard",
+      "power_w": 25.336106617,
+      "level_k": 1.9513375492096112,
+      "shape_rms_k": 1.2026154068584605,
+      "band_k": 2.628682533613591,
+      "level_inside": true,
+      "shape_inside": true
+    },
+    {
+      "pattern": "four",
+      "power_w": 14.406988385499998,
+      "level_k": 1.5706577491760667,
+      "shape_rms_k": 1.5279306224469764,
+      "band_k": 2.089671960804588,
+      "level_inside": true,
+      "shape_inside": true
+    },
+    {
+      "pattern": "hotspot_1",
+      "power_w": 10.100087008000001,
+      "level_k": 0.3605270633697484,
+      "shape_rms_k": 0.8359705196894848,
+      "band_k": 2.235411118002518,
+      "level_inside": true,
+      "shape_inside": true
+    },
+    {
+      "pattern": "hotspot_2",
+      "power_w": 10.138633935,
+      "level_k": 1.3340040988922666,
+      "shape_rms_k": 0.6390925509665978,
+      "band_k": 2.6119633277027754,
+      "level_inside": true,
+      "shape_inside": true
+    },
+    {
+      "pattern": "hotspot_3",
+      "power_w": 10.107468206250001,
+      "level_k": 2.5581035518646713,
+      "shape_rms_k": 0.9363856619912777,
+      "band_k": 2.2380106857815973,
+      "level_inside": false,
+      "shape_inside": true
+    },
+    {
+      "pattern": "hotspot_4",
+      "power_w": 9.9620240935,
+      "level_k": 1.5045391674041255,
+      "shape_rms_k": 0.9955668563727296,
+      "band_k": 1.950492425706008,
+      "level_inside": true,
+      "shape_inside": true
+    },
+    {
+      "pattern": "line_1",
+      "power_w": 14.148909444749997,
+      "level_k": 2.32521778297436,
+      "shape_rms_k": 0.37420826411691827,
+      "band_k": 1.9336438629784303,
+      "level_inside": false,
+      "shape_inside": true
+    },
+    {
+      "pattern": "line_2",
+      "power_w": 14.297366731499999,
+      "level_k": 2.6987173614502,
+      "shape_rms_k": 1.0157294384100346,
+      "band_k": 1.724457539221077,
+      "level_inside": false,
+      "shape_inside": true
+    },
+    {
+      "pattern": "nine",
+      "power_w": 28.074510822,
+      "level_k": 0.4445540409088493,
+      "shape_rms_k": 4.2460697326930585,
+      "band_k": 3.109197638225906,
+      "level_inside": true,
+      "shape_inside": false
+    },
+    {
+      "pattern": "sixteen",
+      "power_w": 47.26479097675,
+      "level_k": 6.546148735046352,
+      "shape_rms_k": 2.156623760999176,
+      "band_k": 4.370332932242671,
+      "level_inside": false,
+      "shape_inside": true
+    },
+    {
+      "pattern": "thickline_1",
+      "power_w": 25.32009922825,
+      "level_k": 4.982352746963565,
+      "shape_rms_k": 0.8002333060503846,
+      "band_k": 2.8810052770092165,
+      "level_inside": false,
+      "shape_inside": true
+    },
+    {
+      "pattern": "thickline_2",
+      "power_w": 25.250693775,
+      "level_k": 3.3007590141296976,
+      "shape_rms_k": 2.3361113255963626,
+      "band_k": 2.643034297737389,
+      "level_inside": false,
+      "shape_inside": true
+    }
+  ],
+  "level_inside": 6,
+  "shape_inside": 11,
+  "both_inside": 5,
+  "held_out": 12,
+  "level_vs_power_correlation": 0.7000889637854082,
+  "leave_one_out": {
+    "rows": [
+      {
+        "pattern": "checkboard",
+        "power_w": 25.336106617,
+        "h_fitted_on_others": 28911.80060634089,
+        "level_k": -1.2839760907818345,
+        "band_k": 2.528176149348921,
+        "level_inside": true,
+        "implied_h": 26433.991219651667
+      },
+      {
+        "pattern": "four",
+        "power_w": 14.406988385499998,
+        "h_fitted_on_others": 28642.939166728695,
+        "level_k": -0.19646923801785476,
+        "band_k": 2.032171276884379,
+        "level_inside": true,
+        "implied_h": 27948.05976662378
+      },
+      {
+        "pattern": "hotspot_1",
+        "power_w": 10.100087008000001,
+        "h_fitted_on_others": 28705.974880927337,
+        "level_k": -0.8902630326632206,
+        "band_k": 2.1951693956172873,
+        "level_inside": true,
+        "implied_h": 24703.7291287632
+      },
+      {
+        "pattern": "hotspot_2",
+        "power_w": 10.138633935,
+        "h_fitted_on_others": 28611.473236406622,
+        "level_k": 0.0964690644568762,
+        "band_k": 2.571399665633387,
+        "level_inside": true,
+        "implied_h": 29123.67460087446
+      },
+      {
+        "pattern": "hotspot_3",
+        "power_w": 10.107468206250001,
+        "h_fitted_on_others": 28501.614447482934,
+        "level_k": 1.3451270810290339,
+        "band_k": 2.1977391468513967,
+        "level_inside": true,
+        "implied_h": 37644.18186219765
+      },
+      {
+        "pattern": "hotspot_4",
+        "power_w": 9.9620240935,
+        "h_fitted_on_others": 28595.753236301174,
+        "level_k": 0.291302443785284,
+        "band_k": 1.910947495649382,
+        "level_inside": true,
+        "implied_h": 30216.57942358042
+      },
+      {
+        "pattern": "line_1",
+        "power_w": 14.148909444749997,
+        "h_fitted_on_others": 28548.645039238145,
+        "level_k": 0.6146639846995825,
+        "band_k": 1.877305734647611,
+        "level_inside": true,
+        "implied_h": 31012.399087565336
+      },
+      {
+        "pattern": "line_2",
+        "power_w": 14.297366731499999,
+        "h_fitted_on_others": 28501.614447482934,
+        "level_k": 0.9827025480513711,
+        "band_k": 1.6677597811721119,
+        "level_inside": true,
+        "implied_h": 32588.435061467844
+      },
+      {
+        "pattern": "nine",
+        "power_w": 28.074510822,
+        "h_fitted_on_others": 29489.5142471039,
+        "level_k": -3.4379390825554594,
+        "band_k": 2.997437212338866,
+        "level_inside": false,
+        "implied_h": 23953.57575426115
+      },
+      {
+        "pattern": "one",
+        "power_w": 5.834724856749999,
+        "h_fitted_on_others": 28658.685106449204,
+        "level_k": -0.7174126672682561,
+        "band_k": 1.19016260265095,
+        "level_inside": true,
+        "implied_h": 23386.837376798052
+      },
+      {
+        "pattern": "sixteen",
+        "power_w": 47.26479097675,
+        "h_fitted_on_others": 28128.148207168702,
+        "level_k": 1.221743841559558,
+        "band_k": 4.182780550390481,
+        "level_inside": true,
+        "implied_h": 29499.994005325025
+      },
+      {
+        "pattern": "thickline_1",
+        "power_w": 25.32009922825,
+        "h_fitted_on_others": 28159.082592974737,
+        "level_k": 2.1147478778872184,
+        "band_k": 2.7802090743094148,
+        "level_inside": true,
+        "implied_h": 33149.49668946298
+      },
+      {
+        "pattern": "thickline_2",
+        "power_w": 25.250693775,
+        "h_fitted_on_others": 28564.339142461107,
+        "level_k": 0.24012330143310123,
+        "band_k": 2.542880858964834,
+        "level_inside": true,
+        "implied_h": 29075.237030475124
+      }
+    ],
+    "level_inside": 12,
+    "held_out": 13,
+    "t_si_um": 100.0,
+    "implied_h_vs_power_correlation": -0.034545495666141124,
+    "same_cell_implied_h": {
+      "one": 23386.837376798052,
+      "hotspot_2": 29123.67460087446
+    }
+  }
+}

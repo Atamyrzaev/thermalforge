@@ -64,6 +64,7 @@ export function serializeDesign(pkg, chiplets, title) {
       mesh: pkg.mesh || "standard",
       size_y_mm: pkg.size_y_mm || 0,
       interposer_material: pkg.interposer_material || "silicon",
+      beol_um: pkg.beol_um || 0,
     },
     chiplets: chiplets.map((c) => ({
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
@@ -179,6 +180,8 @@ export function parseDesign(text) {
     mesh: p.mesh === "fine" ? "fine" : "standard",
     size_y_mm: Number.isFinite(p.size_y_mm) ? p.size_y_mm : 0,
     interposer_material: p.interposer_material === "tsv_interposer" ? "tsv_interposer" : "silicon",
+    beol_um: p.beol_um === undefined || p.beol_um === null || p.beol_um === 0
+      ? 0 : number(p, "beol_um", 0, 20, "package"),
   };
   if (!Array.isArray(raw.chiplets) || !raw.chiplets.length) throw new Error("the file has no chiplets");
   if (raw.chiplets.length > MAX_CHIPLETS) throw new Error(`at most ${MAX_CHIPLETS} chiplets`);

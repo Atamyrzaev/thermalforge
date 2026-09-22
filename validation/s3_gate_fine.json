@@ -1,0 +1,87 @@
+{
+  "gate": "8 distinct chiplets on 40 x 40 mm proven optimal in under 60 s, dragging under 50 ms, judged by the WORST of 6 random layouts",
+  "mode": "fixed",
+  "mesh": "fine",
+  "cell_mm": 0.5,
+  "unknowns": 76800,
+  "pitch_mm": 4.0,
+  "trial_cap_s": 120.0,
+  "rows": [
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": 9000000000000000,
+      "proof_s": 38.65156939998269,
+      "cancelled": false,
+      "drag_p95_ms": 68.88685500598511,
+      "resolve_delta_k": 1.816289341149968e-10,
+      "optimum_c": 46.965209135466594,
+      "passed": false,
+      "trial": 0
+    },
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": 9000000000000000,
+      "proof_s": 64.79937579997932,
+      "cancelled": false,
+      "drag_p95_ms": 89.70579000597351,
+      "resolve_delta_k": 1.8400214685243554e-10,
+      "optimum_c": 41.11230992648473,
+      "passed": false,
+      "trial": 1
+    },
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": 8100000000000000,
+      "proof_s": 46.14752779999981,
+      "cancelled": false,
+      "drag_p95_ms": 82.97180999506963,
+      "resolve_delta_k": 1.8172841009800322e-10,
+      "optimum_c": 46.84924633063662,
+      "passed": false,
+      "trial": 2
+    },
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": null,
+      "proof_s": 120.47242599999299,
+      "cancelled": true,
+      "drag_p95_ms": 74.79566999536472,
+      "resolve_delta_k": null,
+      "optimum_c": null,
+      "passed": false,
+      "trial": 3
+    },
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": 9000000000000000,
+      "proof_s": 60.88138589999289,
+      "cancelled": false,
+      "drag_p95_ms": 87.5579550003749,
+      "resolve_delta_k": 1.81572090696136e-10,
+      "optimum_c": 42.155778440336874,
+      "passed": false,
+      "trial": 4
+    },
+    {
+      "parts": 8,
+      "interchangeable_parts": 0,
+      "combinations": 10000000000000000,
+      "proof_s": 27.394464200013317,
+      "cancelled": false,
+      "drag_p95_ms": 74.43372501147677,
+      "resolve_delta_k": 1.9249313254476874e-10,
+      "optimum_c": 52.50543187969421,
+      "passed": false,
+      "trial": 5
+    }
+  ],
+  "largest_passing_count": null,
+  "worst_proof_s": 120.47242599999299,
+  "worst_drag_p95_ms": 89.70579000597351,
+  "passed": false
+}

@@ -3,6 +3,102 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.8.0 — 22 September 2026
+
+**S1's gate is met: level and shape, on one test chip, under forced
+convection.** The label every temperature carries now reads *verified;
+validated (one test chip, forced convection) for level and shape, not
+validated beyond that scope*. It used to say "spreading validated, absolute
+level not validated". Three things changed it, and one of them was a defect in
+the data.
+
+**A defect in the measured data, found before it was mistaken for physics.**
+Two of the SAMOS dataset's 39 recordings — `four` and `checkboard`, with the
+fan — have their 16 diode channels rotated by one place. As recorded, their
+power and temperature maps correlate at 0.24 and −0.43: in `four` the powered
+heaters are cells 0, 1, 4, 5 and the hottest diodes are 1, 2, 5, 6. The same
+patterns line up under the other two cooling conditions. Rotating back restores
+0.95, and `checkboard` becomes a clean checkerboard. The check is model-free, so
+the model cannot have tuned it. `tools/ttc_extract.py` rebuilds the committed
+extract from the raw traces, corrects a recording only when the case is
+decisive, and writes both correlations in. Before this, those two read as a
+6–7 K conduction error, and `validation/MEASURED_DATA.md` used to report
+them as one. The extract's description was also wrong about the sample rate: the
+traces are 10 Hz, not 1 kHz.
+
+**A fit where each unknown does one job.** The old fit chose silicon thickness
+and `h` both for shape, and `h` ran to the edge of its range at 60,000. Now
+`h` is solved so the modelled mean matches the measured one on `one`, and
+thickness is chosen for shape. The declared case (`hotspot_2`, never fitted)
+puts **16 of 16 sensors inside the stated band**: bias +1.33 K, shape
+0.64 K RMS against 28.95 K of spread.
+
+**All thirteen patterns, and a band that is confirmed rather than merely met**
+(`tools/ttc_crossvalidate.py`). No pattern is fitted on itself.
+
+- Shape is inside the band on **11 of 12**.
+- Level is inside on **12 of 13**, each pattern predicted from the `h` fitted
+  on the other twelve.
+- The budget's boundary term predicts 5.5 % of the rise. It was set before
+  this comparison and never tuned on it. The measured level scatter is 5.3 %
+  RMS, mean +0.0 %.
+- The one miss, `nine`, has one cause measured without the model. Under
+  uniform power the rig's row means differ by 5.8 K with the fan and under
+  1.6 K without it, so the fan cools the sink unevenly.
+
+**A wrong explanation, retired by measuring it.** Calibrated on `one` alone,
+the level lands on 6 of 12, and the misses grow with power. "Effective `h`
+rises with power" was the obvious story. But the `h` each pattern implies does
+not move with power (correlation −0.03). The real cause is conditioning: `one`
+has the smallest rise, so a 1 K reference error is 12 % in `h`, and that is
+multiplied eightfold at 47 W. The same work corrected a quieter overstatement.
+The "±9 %" spread in `h` holds for `h` applied directly to the die. Through a
+lid model the same runs imply ±23 %. What both describe is one scatter in the
+rise, and that is what the band matches.
+
+**BEOL, closed the way the TSV interposer was.** `beol_um` on the package,
+and a BEOL selector in the app. The copper/SiO₂ stack (30 % Cu: kxy 118, kz
+2.1 W/mK) is folded into the bump layer, keeping k·t along it and t/k through
+it, because at 5–15 µm it is thinner than one z-cell. It is off by default, so
+no pinned number moves. Measured across the 14 designs `tools/band_check.py`
+audits (`tools/beol_sensitivity.py`), it moves the peak **−2.6 % to +1.7 % of
+the rise**. It mostly cools: 118 W/mK sideways at the source outweighs 2.1 W/mK
+through it. That is inside every design's combined band, but up to 1.3× the
+mesh term, so it is worth setting when the stack is known. The engine and the
+study call the same compaction function, and a test holds them equal.
+
+**S3's gate, set on honest layouts** (`tools/s3_gate.py`). The decision was
+to keep "proven optimal" and set the gate at what the exact search reliably
+does. The scaling study said 12 parts fit in a minute, but its parts were
+identical squares with seven powers. Interchangeable parts collapse by
+symmetry, and 12 of them hide five pairs. With every part distinct, six random
+layouts per count, judged by the worst:
+
+- **8 pass**: worst proof 17.2 s, drag 17 ms at p95.
+- **10 do not**: the first trial was still searching at the 120 s cap.
+
+A trial that overruns is now cancelled and recorded as a failure with its
+time. The gate states its mesh because search cost grows with it. At Fine the
+same 8 take 27–65 s, one ran past 120 s, and a drag costs 69–90 ms, so Fine
+is for checking a result, not for dragging. `tools/search_scaling.py` now
+says its counts are the favourable case.
+
+**S4 is ready to start, with its starting numbers measured**
+(`tools/s4_readiness.py`).
+
+- **The bar.** S4's gate is written in S1's units, so it is measured in them.
+  Each design's own band is 6.1 / 6.5 / 6.7 % of the rise (p5 / median /
+  p95) across 384 random designs: 10–40 mm packages, four cooling stacks,
+  1–8 parts, every power pattern.
+- **The labels.** The solver makes 3.3 clean labels a second, so 100,000 take
+  about 8.4 h on this laptop. Each label carries its residual, energy balance,
+  band, mesh and commit (schema v0). The split is by package.
+- **The finding that shapes the pipeline.** At the standard mesh, 42 % of
+  random designs put a hotspot finer than the cell. Every one is a patterned
+  part on a package of 20 mm or more. A surrogate trained on those would learn
+  the mesh's error. So flagged labels are re-solved at Fine, and the 12 % still
+  unresolved are marked, never trained on.
+
 ## 0.7.0 — 22 September 2026
 
 **Rectangular packages.** `size_y_mm` on the package, and a Height field in

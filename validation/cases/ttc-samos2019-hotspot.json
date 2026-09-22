@@ -5,15 +5,16 @@
     "source": "F. Terraneo, A. Leva, W. Fornaciari, 'An Open-hardware Platform for MPSoC Thermal Modeling', SAMOS 2019. Dataset (CC-BY): https://doi.org/10.5281/zenodo.2871796",
     "date": "2019",
     "measured_by": "Politecnico di Milano (not by this project)",
-    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 1 kHz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples at the end of the powered phase: the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
+    "what_was_measured": "A thermal test chip with a 4x4 array of heating elements and 16 diodes. For each run the dataset records, at 10 Hz, the voltage and current of every heater and the temperature at every diode. The values here are the steady-state averages over 400 samples (40 s) at the end of the powered phase, from validation/measured/ttc_samos2019_steady.json (built by tools/ttc_extract.py): the power is MEASURED (V x I), not nominal, and so is every temperature. Ambient measured with a Rotronic CP11.",
     "geometry_note": "The dataset does not state the die size. It is pinned by cross-reference: the 3D-ICE 3.0 paper (IEEE TCAD 41(4), 2022) describes the uniform preheat on this same platform as 5 W/cm2, and this dataset's uniform baseline is 0.2 W per element, so each element is 0.04 cm2 -- 2 x 2 mm -- and the 4x4 array is 8 x 8 mm.",
-    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (60000 W/m2K) are NOT disclosed by the source. They were fitted once, on the 'one' power pattern alone, and then held fixed for every other pattern including this one. Two numbers fitted on one configuration and twelve others predicted from them is what validation looks like when the rig's own parameters were never published -- but the LEVEL of this model is calibrated, so only the SHAPE is evidence.",
+    "calibrated_not_measured": "Silicon thickness (100 um) and the effective heat-transfer coefficient (23,382 W/m2K) are NOT disclosed by the source. They are fitted on the 'one' power pattern ALONE, each doing one job: h is solved so the modelled MEAN temperature of 'one' matches the measured mean, and thickness is chosen for the best SHAPE on 'one'. Nothing is fitted on this pattern. An earlier fit chose both for shape and only tie-broke on level, so h was never fitted to the level and landed on the edge of its search range at 60,000; that fit is superseded. Thickness is weakly constrained -- shape RMS moves only 0.640 to 0.818 K across 100-560 um -- so it is reported, not relied on.",
     "run": "heatsink_with_fan/hotspot_2",
-    "total_power_w": 10.139
+    "total_power_w": 10.139,
+    "cross_validation": "tools/ttc_crossvalidate.py predicts all 13 measured patterns of this rig, none fitted on the pattern it predicts. Shape inside the stated band on 11 of 12 (h and thickness from 'one'); level inside on 12 of 13 when each pattern's h is fitted on the other twelve. The one miss on both counts is 'nine', where the fan cools the sink unevenly: under uniform power the row means differ by 5.8 K with the fan and by under 1.6 K without it, so a single uniform h cannot represent that boundary. See validation/ttc_crossvalidation.json."
   },
   "package": {
     "size_mm": 8.0,
-    "h_w_m2k": 60000.0,
+    "h_w_m2k": 23381.7,
     "ambient_c": 24.8,
     "pitch_mm": 1.0,
     "cooling": "lid_heatsink",

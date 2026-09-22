@@ -2046,9 +2046,10 @@ class TestCompositeMaterials:
 class TestValidationStatusOnReports:
     """Standing rule: every reported temperature carries the validation status
     on the report itself, alongside the known limitations, and that status says
-    exactly what has been compared with hardware -- currently the spreading but
-    not the absolute level. Checked on each artifact that shows a temperature,
-    not on the helper that formats the text."""
+    exactly what has been compared with hardware -- currently level and shape on
+    one test chip under forced convection, and nothing beyond that scope.
+    Checked on each artifact that shows a temperature, not on the helper that
+    formats the text."""
 
     NAMES = [name for name, _ in validation_module.LIMITATIONS]
 
@@ -2069,8 +2070,9 @@ class TestValidationStatusOnReports:
         out = capsys.readouterr().out
         assert f"STATUS: {validation_module.STATUS.upper()}." in out
         # The two halves are stated separately, because they are different claims.
-        assert "Validated (spreading only): the spatial temperature distribution" in out
-        assert "Not validated (absolute level): the absolute level" in out
+        assert ("Validated (one test chip, forced convection): the temperature map of a "
+                "measured thermal test chip") in out
+        assert "Not validated (outside that scope): natural convection" in out
         for name in self.NAMES:
             assert name in out
 
@@ -2577,26 +2579,36 @@ class TestCitedEffectiveProperties:
         """The TSV interposer is a per-design choice rather than a new
         default: it moves the edge-AI peak +2.8 K, and the one measured
         validation case is a bare test chip with no interposer at all, which a
-        global switch would silently misdescribe. BEOL is still not wired in,
-        because at 5-15 um it is thinner than one 20 um z-cell."""
+        global switch would silently misdescribe. BEOL is opt-in the same way
+        (the package's beol_um), folded into the bump layer rather than given
+        cells, because at 5-15 um it is thinner than one 20 um z-cell."""
         import src.experiment as experiment_module
         import studio.engine as engine_module
         assert experiment_module.STACK_MATERIALS == (
             "silicon", "bump_underfill_composite", "silicon")
         assert engine_module.INTERPOSER_MATERIALS == ("silicon", "tsv_interposer")
         assert "beol" not in engine_module.INTERPOSER_MATERIALS
+        assert engine_module.PackageSpec.parse(
+            {"size_mm": 20.0, "h_w_m2k": 2000.0, "ambient_c": 25.0, "pitch_mm": 2.0}).beol_um == 0.0
 
 
 class TestRemainingLimitations:
     def test_remaining_limitations_say_what_has_and_has_not_been_compared(self):
-        """One measured case is not a validated model, and the limitations
-        have to say which parts of it count as evidence and which do not."""
+        """One test chip is not a validated model, and the limitations have to
+        say what the evidence covers, how it was obtained, and where it stops."""
         assert "Remaining limitations" in validation_module.text_block()
         for block in (validation_module.text_block(), validation_module.html_block()):
-            assert "One measured case, and only its shape" in block
-            # The half that is evidence, and the half that is calibration.
-            assert "0.63 K RMS against 28.95 K of spread" in block
-            assert "the boundary coefficient" in block and "calibrated" in block
+            assert "One measured test chip, one cooling regime" in block
+            # The evidence, with the numbers that make it a claim.
+            assert "16 of 16 sensors inside the stated band" in block
+            assert "0.64 K RMS against 28.95 K of spread" in block
+            assert "11 of 12 held-out patterns" in block and "12 of 13" in block
+            # The band is confirmed by the scatter, not merely wide enough.
+            assert "5.3 % RMS" in block and "(5.5 %)" in block
+            # What is calibrated, and on what.
+            assert "calibrated on OTHER patterns of the same rig" in block
+            # The data defect is disclosed, with the tool that corrects it.
+            assert "rotated by one place" in block and "tools/ttc_extract.py" in block
             # And the assumption the same dataset showed to be regime-dependent.
             assert "A single constant cooling coefficient" in block
             assert "structurally wrong for natural convection" in block
@@ -2988,7 +3000,7 @@ class TestExperimentReport:
     def test_the_report_never_claims_validation_it_has_not_earned(self, optimized_experiment,
                                                                   tmp_path):
         """The bare word is the thing to guard against. The report may state
-        what HAS been compared with hardware -- currently the spreading -- but
+        what HAS been compared with hardware -- currently one test chip -- but
         every occurrence has to be qualified, and the half that has not been
         validated has to appear too. Otherwise a reader skimming for the word
         comes away with the opposite of the truth."""
@@ -2997,13 +3009,12 @@ class TestExperimentReport:
         # Every form the word is allowed to take, and each one limits the
         # claim: it is denied, scoped to the spreading, or explicitly the
         # thing the model did NOT earn.
-        allowed = ("not validated", "spreading validated",
-                   "validated (spreading only)", "rather than validated")
+        allowed = ("not validated", "validated (one test chip")
         found = list(_re.finditer("validated", text))
         assert found, "the report must carry the validation status at all"
         for match in found:
             # A qualifier can sit either side of the word: "not validated"
-            # before it, "validated (spreading only)" after it.
+            # before it, "validated (one test chip, ..." after it.
             context = text[max(0, match.start() - 24):match.end() + 24]
             assert any(q in context for q in allowed), context
         # The unearned half is never silently dropped.

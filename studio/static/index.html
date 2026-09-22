@@ -49,6 +49,11 @@
         <label class="span2">Interposer<select id="pkg-interposer">
           <option value="silicon">Plain silicon</option>
           <option value="tsv_interposer">Silicon with copper TSVs (kxy 114, kz 175 W/mK)</option></select></label>
+        <label class="span2" title="The copper/SiO2 interconnect stack on the die's active face (30 % Cu: kxy 118, kz 2.1 W/mK), folded into the bump layer. Off by default; across 14 audited designs it moves the peak -2.6 % to +1.7 % of the rise.">BEOL<select id="pkg-beol">
+          <option value="0">None (default)</option>
+          <option value="5">5 µm copper/SiO₂ interconnect</option>
+          <option value="10">10 µm copper/SiO₂ interconnect</option>
+          <option value="15">15 µm copper/SiO₂ interconnect</option></select></label>
         <label class="span2">Cooling path<select id="pkg-path">
           <option value="direct">Bare die — the coolant meets the silicon</option>
           <option value="lid">TIM + copper lid (1 mm)</option>
@@ -342,7 +347,7 @@
 <div id="toast" class="toast hidden"></div>
 
 <footer class="footer">
-  Steady-state 3-D heat conduction, finite-volume solver, every number solved and checked (residual and energy balance) · peaks carry a measured mesh error bar · placement optimum is exact over the chosen grid · model verified; spreading validated against a measured test chip (28.95 K of spread reproduced to 0.63 K RMS), absolute level not validated
+  Steady-state 3-D heat conduction, finite-volume solver, every number solved and checked (residual and energy balance) · peaks carry a measured mesh error bar · placement optimum is exact over the chosen grid · model verified; validated (one test chip, forced convection) for level and shape — inside its stated band on 12 of 13 measured patterns — and not validated beyond that scope
 </footer>
 
 <script type="module" src="/js/app.js"></script>

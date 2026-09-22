@@ -1990,3 +1990,132 @@ class TestHttpApi:
         status, _, body = self.request(base_url + "/api/solve", {"package": {"size_mm": 10}})
         assert status == 400 and "h_w_m2k" in json.loads(body)["error"]
         assert self.request(base_url + "/api/jobs/nope")[0] == 404
+
+
+class TestMeasuredExtract:
+    """The one measured dataset had a defect that looked like physics: two
+    recordings with their diode channels rotated by one place, which read as
+    a 6-7 K conduction error. The check that caught it is model-free, and it
+    is pinned here so a rebuilt extract cannot quietly lose it."""
+
+    ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+    @staticmethod
+    def four():
+        """Power on the top-left 2 x 2 of a 4 x 4 array, and a temperature map
+        that falls off with distance from it -- what conduction produces."""
+        p = np.full(16, 0.2)
+        p[[0, 1, 4, 5]] = 3.0
+        r, c = np.divmod(np.arange(16), 4)
+        t = 30.0 + 20.0 * np.exp(-np.hypot(r - 0.5, c - 0.5))
+        return p, t
+
+    def test_a_rotated_recording_is_found_and_the_rotation_named(self):
+        from tools.ttc_extract import CORRECTED_ABOVE, MISALIGNED_BELOW, alignment
+        p, t = self.four()
+        found = alignment(p, np.roll(t, 1))         # diode k recorded in channel k+1
+        assert found["as_recorded"] < MISALIGNED_BELOW
+        assert found["best_rotation"] == 1 and found["best"] > CORRECTED_ABOVE
+
+    def test_an_aligned_recording_is_left_alone(self):
+        from tools.ttc_extract import CORRECTED_ABOVE, alignment
+        p, t = self.four()
+        found = alignment(p, t)
+        assert found["best_rotation"] == 0 and found["as_recorded"] > CORRECTED_ABOVE
+
+    def test_a_symmetric_pattern_is_not_mistaken_for_a_defect(self):
+        """A checkerboard is unchanged by moving two rows, so a rotation of 8
+        can tie with none. The rule corrects only a POOR fit as recorded."""
+        from tools.ttc_extract import MISALIGNED_BELOW, alignment
+        r, c = np.divmod(np.arange(16), 4)
+        p = np.where((r + c) % 2 == 1, 3.0, 0.2)
+        t = 40.0 + 8.0 * (p > 1)
+        found = alignment(p, t)
+        assert found["as_recorded"] >= MISALIGNED_BELOW
+
+    def test_uniform_power_cannot_be_judged(self):
+        from tools.ttc_extract import alignment
+        assert alignment(np.full(16, 3.0), np.linspace(80, 90, 16)) is None
+
+    def test_the_committed_extract_is_aligned_and_says_what_it_corrected(self):
+        data = json.loads((self.ROOT / "validation" / "measured" /
+                           "ttc_samos2019_steady.json").read_text(encoding="utf-8"))
+        assert {c["recording"] for c in data["corrections"]} == {
+            "heatsink_with_fan/four", "heatsink_with_fan/checkboard"}
+        assert all(c["diode_rotation"] == 1 and c["corr_corrected"] > 0.9
+                   for c in data["corrections"])
+        assert "10 Hz" in data["what"]
+        for cond, runs in data["cooling_conditions"].items():
+            for name, run in runs.items():
+                p, t = np.array(run["power_w"]), np.array(run["temp_c"])
+                if p.std() >= 0.2:
+                    assert np.corrcoef(p, t)[0, 1] > 0.9, f"{cond}/{name}"
+
+    def test_the_status_says_what_the_crossvalidation_found(self):
+        """The label quotes numbers; the committed result has to agree."""
+        import src.validation_status as status
+        xv = json.loads((self.ROOT / "validation" /
+                         "ttc_crossvalidation.json").read_text(encoding="utf-8"))
+        loo = xv["leave_one_out"]
+        assert (xv["shape_inside"], xv["held_out"]) == (11, 12)
+        assert (loo["level_inside"], loo["held_out"]) == (12, 13)
+        assert abs(loo["implied_h_vs_power_correlation"]) < 0.2
+        missed = {r["pattern"] for r in loo["rows"] if not r["level_inside"]}
+        missed |= {r["pattern"] for r in xv["rows"] if not r["shape_inside"]}
+        assert missed == {"nine"}
+        assert "11 of 12 held-out patterns" in status.VALIDATED
+        assert "12 of 13" in status.VALIDATED and "'nine'" in status.NOT_VALIDATED
+
+    def test_beol_compaction_keeps_what_the_pair_conducts(self):
+        from src.composite_materials import beol_k
+        from tools.beol_sensitivity import compacted
+        base = {"kx": 20.0, "ky": 20.0, "kz": 5.0, "rho": 1.0, "cp": 1.0}
+        out = compacted(base, 40.0, 10.0, 0.3)
+        kxy_e, kz_e = beol_k(0.3)
+        assert out["kx"] * 40.0 == pytest.approx(20.0 * 40.0 + kxy_e * 10.0)
+        assert 40.0 / out["kz"] == pytest.approx(40.0 / 5.0 + 10.0 / kz_e)
+        assert base["kz"] == 5.0                    # the shipped material is untouched
+
+
+class TestBeolOption:
+    """BEOL is opt-in per design, like the TSV interposer: off by default so no
+    pinned number moves, folded into the bump layer when set, and the engine
+    must build exactly what tools/beol_sensitivity.py measured."""
+
+    PARTS = [{"id": "a", "name": "A", "w_mm": 4, "h_mm": 4, "power_w": 6.0, "x_mm": 2, "y_mm": 2},
+             {"id": "b", "name": "B", "w_mm": 4, "h_mm": 4, "power_w": 4.0, "x_mm": 12, "y_mm": 12}]
+
+    @staticmethod
+    def pkg(**extra):
+        raw = {"size_mm": 20.0, "h_w_m2k": 2000.0, "ambient_c": 25.0, "pitch_mm": 2.0}
+        raw.update(extra)
+        return E.PackageSpec.parse(raw)
+
+    def peak(self, spec):
+        return E.solve(E.ModelCache(), spec, E.parse_chiplets(self.PARTS, spec))["peak"]["t_c"]
+
+    def test_off_by_default_and_part_of_the_model(self):
+        plain, beol = self.pkg(), self.pkg(beol_um=10)
+        assert plain.beol_um == 0.0 and self.pkg(beol_um=0).model_key == plain.model_key
+        assert beol.model_key != plain.model_key      # never shares a factorization
+
+    def test_the_engine_builds_what_the_study_measured(self):
+        import src.grid_builder as G
+        from src.composite_materials import beol_bump_layer
+        spec = self.pkg(beol_um=10)
+        shipped = self.peak(spec)
+        saved = G.MATERIALS["bump_underfill_composite"]
+        G.MATERIALS["bump_underfill_composite"] = beol_bump_layer(saved, spec.stack_um[1], 10.0)
+        try:
+            patched = self.peak(self.pkg())
+        finally:
+            G.MATERIALS["bump_underfill_composite"] = saved
+        assert shipped == pytest.approx(patched, abs=1e-9)
+        # and it moves this design, cooler: the BEOL spreads at the source
+        assert shipped < self.peak(self.pkg()) - 0.1
+
+    def test_a_beol_must_be_thinner_than_the_layer_it_folds_into(self):
+        with pytest.raises(E.StudioError, match="bump layer"):
+            self.pkg(beol_um=20, stack_um=[100, 20, 100])
+        with pytest.raises(E.StudioError):
+            self.pkg(beol_um=25)

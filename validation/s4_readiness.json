@@ -1,0 +1,84 @@
+{
+  "what": "the bar a surrogate must beat and the rate verified labels can be made, measured on the solver before any model is written",
+  "commit": "4e2a278",
+  "mesh": "standard",
+  "gate_s4": "surrogate error at the 95th percentile inside the S1 error bar on held-out packages; guided search scores at least 5x fewer layouts and returns the identical optimum; the copilot cannot state a temperature not in a solve record",
+  "bar": {
+    "definition": "per design, the combined band (mesh, materials, boundary in quadrature) the app prints beside the peak -- confirmed against measured silicon by tools/ttc_crossvalidate.py (boundary term 5.5 % predicted, 5.3 % RMS measured)",
+    "band_k": {
+      "p5": 0.38942779119289983,
+      "median": 3.405884160933385,
+      "p95": 23.901263088376545
+    },
+    "band_pct_of_rise": {
+      "p5": 6.100033923835933,
+      "median": 6.543137488930471,
+      "p95": 6.7198380051795095
+    },
+    "rise_k": {
+      "min": 0.9698521640368227,
+      "median": 51.15731625014418,
+      "max": 931.0941863540189
+    },
+    "labels_flagged_at_first_mesh": 160,
+    "labels_escalated_to_fine": 160,
+    "labels_flagged_lower_bound": 47,
+    "note": "a label whose peak is flagged as a lower bound (hotspot finer than the mesh) must be excluded from training or carried with its flag"
+  },
+  "labels": {
+    "count": 384,
+    "packages": 16,
+    "layouts_per_package": 24,
+    "refused": {
+      "package": 0,
+      "layout": 0
+    },
+    "package_build_s": {
+      "median": 0.5567325999872992,
+      "max": 1.4128502999956254
+    },
+    "warm_solve_ms": {
+      "median": 14.403900000615977,
+      "p95": 108.58634998439808
+    },
+    "wall_s": 101.89465559998644,
+    "labels_per_s": 3.768598046078985,
+    "clean": 337,
+    "clean_per_s": 3.307337347730776,
+    "hours_for_10k_clean": 0.8398834124627962,
+    "hours_for_100k_clean": 8.398834124627962,
+    "all_checks_passed": true,
+    "escalation": "a label flagged as a lower bound is re-solved at the fine mesh"
+  },
+  "split": {
+    "by": "package",
+    "held_out_packages": [
+      0,
+      10,
+      12,
+      15
+    ],
+    "why": "the S4 gate says held-out PACKAGES; a model that has seen the package has seen most of the answer"
+  },
+  "label_schema": [
+    "band_k",
+    "band_terms_k",
+    "checks",
+    "chiplet_peaks_c",
+    "chiplets",
+    "clean",
+    "commit",
+    "escalated",
+    "flagged_at_first_mesh",
+    "mesh",
+    "package",
+    "package_id",
+    "peak_c",
+    "peak_is_lower_bound",
+    "rise_k",
+    "schema",
+    "solve_ms",
+    "unknowns"
+  ],
+  "label_file": "validation/s4_labels_v0.jsonl"
+}

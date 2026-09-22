@@ -186,17 +186,43 @@ def beol_k(copper_fraction: float = BEOL_COPPER_FRACTION) -> Tuple[float, float]
     violently anisotropic -- about 2 W/(m K) through and over 100 along -- and
     the small number sits directly on top of where power is deposited.
 
-    Not in the default stack. A real BEOL is 5-15 um thick, which is thinner
-    than one 20 um z-cell, so putting it in honestly needs the compact-layer
-    treatment the cooling path uses (preserve k.t along and t/k through) plus
-    a re-pin of every published number. Exposed and measured here so that
-    work starts from a cited value rather than a guess.
+    A real BEOL is 5-15 um thick, thinner than one 20 um z-cell, so it is
+    never given cells of its own: compact_into() folds it into the bump layer
+    it sits against. Opt-in per design (the package's beol_um), off by default,
+    and measured by tools/beol_sensitivity.py.
     """
     if not 0.0 < copper_fraction < 1.0:
         raise ValueError("copper_fraction must be between 0 and 1")
     kz, kxy = laminate_k([(TSCI_K["copper"], copper_fraction),
                           (TSCI_K["sio2"], 1.0 - copper_fraction)])
     return kxy, kz
+
+
+def compact_into(host: dict, t_host_um: float, t_layer_um: float,
+                 layer_kxy: float, layer_kz: float) -> dict:
+    """A layer too thin for its own cells, folded into the one it sits against.
+
+    The pair keeps the host's thickness and both of the things that matter:
+    what it conducts along (the sum of k.t, in parallel) and what it resists
+    through (the sum of t/k, in series) -- the same compact-layer rule the
+    cooling path uses for a TIM or a lid. Only kx, ky, kz change; rho and cp
+    stay the host's, since a layer this thin carries negligible heat capacity
+    next to the rest of the stack. Returns a new dict; the host is untouched.
+    """
+    if t_host_um <= 0 or t_layer_um < 0:
+        raise ValueError("thicknesses must be positive")
+    out = dict(host)
+    for axis in ("kx", "ky"):
+        out[axis] = (host[axis] * t_host_um + layer_kxy * t_layer_um) / t_host_um
+    out["kz"] = t_host_um / (t_host_um / host["kz"] + t_layer_um / layer_kz)
+    return out
+
+
+def beol_bump_layer(bump: dict, t_bump_um: float, t_beol_um: float,
+                    copper_fraction: float = BEOL_COPPER_FRACTION) -> dict:
+    """The bump layer with a BEOL of this thickness folded into it."""
+    kxy, kz = beol_k(copper_fraction)
+    return compact_into(bump, t_bump_um, t_beol_um, kxy, kz)
 
 
 def tsv_cell_k(r_core_um: float, r_liner_um: float, pitch_um: float) -> Tuple[float, float]:

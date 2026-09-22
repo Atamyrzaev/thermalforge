@@ -18,6 +18,13 @@ tidy way. The result is the honest answer to "how many parts can this prove".
 
     python tools/search_scaling.py              # 4 .. 16 parts, stops past 10 min
 
+Read its counts as the FAVOURABLE case. Its parts are identical 4 x 4 mm
+squares with seven distinct powers, so parts of the same size and power are
+interchangeable and the search collapses them by symmetry -- 12 of them hide
+five pairs. With every part distinct, as real floorplans are, the same search
+proves 8 in under a minute and not 10; tools/s3_gate.py measures that case and
+is what the S3 gate is set on.
+
 Writes validation/search_scaling.json.
 """
 

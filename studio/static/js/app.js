@@ -131,6 +131,7 @@ function packageRequest() {
            stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100,
            cooling: p.cooling || "direct", mesh: p.mesh || "standard",
            interposer_material: p.interposer_material || "silicon",
+           beol_um: p.beol_um || 0,
            size_y_mm: p.size_y_mm || 0 };
 }
 
@@ -687,6 +688,7 @@ function syncPackageControls() {
   $("pkg-ambient").value = p.ambient_c;
   $("pkg-path").value = p.cooling || "direct";
   $("pkg-interposer").value = p.interposer_material || "silicon";
+  $("pkg-beol").value = String(p.beol_um || 0);
   $("pkg-mesh").value = p.mesh || "standard";
   $("pkg-size-y").value = sizeYOf(p);
   const preset = COOLING_PRESETS.includes(String(p.h_w_m2k)) ? String(p.h_w_m2k) : "custom";
@@ -1332,6 +1334,11 @@ function wire() {
   $("pkg-interposer").addEventListener("change", () => {
     record();
     state.pkg.interposer_material = $("pkg-interposer").value;
+    packageChanged();
+  });
+  $("pkg-beol").addEventListener("change", () => {
+    record();
+    state.pkg.beol_um = Number($("pkg-beol").value) || 0;
     packageChanged();
   });
   $("pkg-path").addEventListener("change", () => {

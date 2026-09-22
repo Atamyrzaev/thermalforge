@@ -7,20 +7,24 @@ Standing rule: the label says exactly what has been compared and nothing more.
   verified          -- the equations are solved correctly. Every steady-state
                        solve checks its algebraic residual, its energy balance
                        and the convective floor, and raises if any fails.
-  spreading         -- how heat spreads from the sources across the die has
-    validated          been compared with measured hardware and agrees. See
-                       validation/cases/ttc-samos2019-hotspot.json.
-  level not         -- the absolute temperature has NOT. On that same case the
-    validated          whole map sits 2.80 K below the measurement, a common
-                       offset that a series resistance outside this model
-                       accounts for, and the boundary coefficient was fitted
-                       rather than measured.
+  validated on one  -- the temperature map of a measured thermal test chip
+    test chip,         under forced convection, predicted with nothing fitted
+    forced             on the pattern predicted, lands inside the model's own
+    convection         stated band: level and shape both, on the declared case
+                       (validation/cases/ttc-samos2019-hotspot.json) and on
+                       all but one of the rig's thirteen patterns
+                       (tools/ttc_crossvalidate.py).
+  not validated     -- everything outside that scope: natural convection,
+    beyond it          non-uniform cooling, stacked and 2.5-D packages,
+                       transients, power structure finer than 2 mm.
 
-The distinction is the point. A constant offset on every sensor is what an
-unmodelled contact or an assumed boundary condition produces, and one number
-removes it; it says nothing about the conduction. What survives removing it is
-shape, which is what this solver computes. Claiming the first would be
-claiming credit for a calibration.
+Two claims are kept apart because they fail differently. A common offset on
+every sensor is what an unmodelled contact or a wrong cooling number produces;
+what survives removing it is shape, which is the conduction this solver
+computes. Both are now inside the band on that rig -- and the band's own
+boundary term, never tuned on this data, predicts the level scatter it
+measures (5.5 % of the rise predicted, 5.3 % RMS measured). The scope is still
+one chip and one cooling regime, and the label says so.
 
 One definition, used by the Stage 1 results block, both Stage 1 HTML views,
 the Stage 2 terminal summary and the Stage 2 report, so they cannot drift
@@ -32,34 +36,46 @@ from __future__ import annotations
 import html as _html
 from typing import Tuple
 
-STATUS = "verified; spreading validated, absolute level not validated"
+STATUS = ("verified; validated (one test chip, forced convection) for level and shape, "
+          "not validated beyond that scope")
 
 VERIFIED = ("every steady-state solve checks its algebraic residual, its energy "
             "balance and the convective floor, and raises if any check fails")
-VALIDATED = ("the spatial temperature distribution has been compared with a measured "
-             "thermal test chip (Terraneo et al., SAMOS 2019, CC-BY dataset): 16 diodes, "
-             "28.95 K of measured spread reproduced to 0.63 K RMS after removing a common "
-             "offset, with the model's two unpublished inputs fitted on a DIFFERENT power "
-             "pattern and held fixed")
-NOT_VALIDATED = ("the absolute level has not. On that case every sensor reads 2.80 K above "
-                 "the model together -- the signature of a series resistance outside this "
-                 "model -- and the convective coefficient was fitted, not measured, so the "
-                 "level is calibrated and only the shape is evidence")
+VALIDATED = ("the temperature map of a measured thermal test chip (Terraneo et al., SAMOS "
+             "2019, CC-BY dataset: 16 diodes, 13 power patterns, forced convection), "
+             "predicted with nothing fitted on the pattern being predicted. The declared "
+             "case puts 16 of 16 sensors inside the stated band -- level bias +1.33 K, "
+             "shape 0.64 K RMS against 28.95 K of spread. Across the rig the shape is "
+             "inside the band on 11 of 12 held-out patterns and the level on 12 of 13 "
+             "(each from the cooling coefficient fitted on the other twelve), and that "
+             "level scatter, 5.3 % RMS of the rise, is what the budget's boundary term "
+             "predicts (5.5 %)")
+NOT_VALIDATED = ("natural convection, where one constant h is structurally wrong; "
+                 "non-uniform cooling (the one pattern that misses, "
+                 "'nine', is where this rig's fan cools the sink unevenly); stacked and "
+                 "2.5-D packages and interposers, which the test chip does not have; the "
+                 "BEOL option, which was not part of the comparison; "
+                 "transients; and power structure finer than its 2 mm cells. And the level "
+                 "is only as good as the cooling coefficient supplied: what was shown is "
+                 "that one h describes a real rig to within the band, not that any h a "
+                 "user types is right")
 TRANSIENT_NOTE = ("this is a transient snapshot; the per-solve checks apply to the "
                   "steady state, not to time-stepped fields")
 
 LIMITATIONS: Tuple[Tuple[str, str], ...] = (
-    ("Uniform-silicon blocks",
-     "each die and chiplet is homogeneous silicon, with no BEOL, device layer "
-     "or interposer TSVs in the stack that ships. Effective properties for two "
-     "of those now exist and are cited (src/composite_materials.py): a "
-     "TSV-bearing interposer at kxy 114.4 / kz 175.2 W/(m K), which reproduces "
-     "the source paper's own FEM cell to 0.8 %, and a copper/SiO2 BEOL at "
-     "kxy 118 / kz 2.1. The TSV interposer is a per-design choice in the app "
-     "(interposer_material), off by default because not every package has TSVs "
-     "and the measured validation case has no interposer; choosing it moves the "
-     "edge-AI peak +2.8 K. BEOL is not wired in: a 5-15 um stack is thinner "
-     "than one 20 um z-cell and needs the compact-layer treatment first"),
+    ("Homogeneous blocks unless a design says otherwise",
+     "each die and chiplet is homogeneous silicon by default. Two cited effective "
+     "media are per-design options (src/composite_materials.py), both off by "
+     "default so no pinned number moves: a TSV-bearing interposer "
+     "(interposer_material; kxy 114.4 / kz 175.2 W/(m K), reproducing its source "
+     "paper's FEM cell to 0.8 %; +2.8 K on the edge-AI peak) and a copper/SiO2 BEOL "
+     "(beol_um; kxy 118 / kz 2.1 at 30 % Cu), folded into the bump layer because "
+     "at 5-15 um it is thinner than one 20 um z-cell. Across the 14 designs "
+     "tools/band_check.py audits, a BEOL moves the peak -2.6 % to +1.7 % of the "
+     "rise (tools/beol_sensitivity.py) -- inside every design's combined band, but "
+     "up to 1.3x its mesh term, so it is worth setting when the stack is known. "
+     "Mostly cooler, because it spreads heat sideways right at the source. The "
+     "copper fraction is a process parameter and is fixed at 30 %"),
     ("Device layer one cell thick",
      "power now enters at the active plane against the bumps, as a flip-chip die "
      "generates it, but the source is one mesh cell (20 um) thick rather than the "
@@ -71,23 +87,29 @@ LIMITATIONS: Tuple[Tuple[str, str], ...] = (
      "chiplet power and 2.14 % with internal power patterns; tools/band_check.py "
      "audits that band against fourteen designs solved at both mesh levels, and the "
      "app prints it beside every peak and can measure this design's own instead"),
-    ("One measured case, and only its shape",
-     "the spreading has been compared with a measured thermal test chip and agrees "
-     "(0.63 K RMS against 28.95 K of spread, parameters fitted on a different power "
-     "pattern); the level on that same case is 2.80 K off and the boundary coefficient "
-     "was fitted, so the absolute temperature is calibrated rather than validated. One "
-     "package, forced convection, uniform chiplet power -- nothing outside that has been "
-     "compared with hardware (validation/MEASURED_DATA.md)"),
+    ("One measured test chip, one cooling regime",
+     "13 power patterns on one 8 x 8 mm test chip under one forced-convection rig "
+     "(validation/MEASURED_DATA.md). The rig's silicon thickness and cooling "
+     "coefficient were never published, so they are calibrated on OTHER patterns of "
+     "the same rig: every compared number is a prediction, but none is independent of "
+     "that rig. Two of the dataset's 39 recordings have their diode channels rotated "
+     "by one place; the extract detects that without the model and corrects it "
+     "(tools/ttc_extract.py), and without the correction the shape looked 6-7 K wrong "
+     "on exactly those two. A second, independently characterised package -- ideally "
+     "a 2.5-D one -- is what would widen this"),
     ("The cooling number dominates the budget",
      "everything above the die is one convective coefficient, and perturbing it by "
-     "the +/-9 % a real rig's own h varies across 13 power patterns "
-     "(tools/boundary_sensitivity.py) moves the peak by about 5 % of the rise -- "
-     "more than the mesh (1-2 %) and more than the conductivities. The reported "
+     "+/-9 % (tools/boundary_sensitivity.py) moves the peak by about 5 % of the rise "
+     "-- more than the mesh (1-2 %) and more than the conductivities. That 9 % is the "
+     "spread a real rig's 13 patterns imply for h applied directly to the die (the "
+     "same runs imply +/-23 % through a lid model, because the lid carries part of the "
+     "resistance itself); what both describe is one scatter in the rise, and measured "
+     "leave-one-out on that rig it is 5.3 % RMS against the term's 5.5 %. The reported "
      "number is limited by how well the cooling is known, not by the solver"),
     ("A single constant cooling coefficient",
-     "measured on that same dataset, the effective coefficient implied by 13 power "
-     "patterns varies 4x under natural convection and 5x with an unpowered heat sink, "
-     "but only +/-9 % under forced convection. One constant h is therefore sound for "
+     "measured on that same dataset (h applied directly to the die), the effective "
+     "coefficient implied by 13 power patterns varies 4x on the bare chip and 5x on a "
+     "heat sink without its fan, but only +/-9 % with the fan running. One constant h is therefore sound for "
      "forced convection and structurally wrong for natural convection, where h depends "
      "on the temperature it is supposed to produce"),
 )
@@ -102,8 +124,8 @@ def text_block(indent: str = "  ", transient: bool = False) -> str:
     lines = [
         f"{indent}STATUS: {STATUS.upper()}.",
         f"{indent}  Verified: {VERIFIED}.",
-        f"{indent}  Validated (spreading only): {VALIDATED}.",
-        f"{indent}  Not validated (absolute level): {NOT_VALIDATED}.",
+        f"{indent}  Validated (one test chip, forced convection): {VALIDATED}.",
+        f"{indent}  Not validated (outside that scope): {NOT_VALIDATED}.",
     ]
     if transient:
         lines.append(f"{indent}  Note: {TRANSIENT_NOTE}.")
@@ -122,8 +144,8 @@ def html_block(transient: bool = False) -> str:
     note = f"<br><b>Note:</b> {e(TRANSIENT_NOTE)}." if transient else ""
     return (
         f"<b>{e(STATUS.capitalize())}.</b> Verified: {e(VERIFIED)}. "
-        f"Validated (spreading only): {e(VALIDATED)}. "
-        f"Not validated (absolute level): {e(NOT_VALIDATED)}.{note}"
+        f"Validated (one test chip, forced convection): {e(VALIDATED)}. "
+        f"Not validated (outside that scope): {e(NOT_VALIDATED)}.{note}"
         f"<ol style='margin:6px 0 4px 18px;padding:0'>{items}</ol>"
         f"Materials: {e(MATERIALS_NOTE)}."
     )
