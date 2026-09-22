@@ -29,6 +29,20 @@ export function fitSquare(width, height, pad = { left: 46, right: 18, top: 16, b
   return { x0, y0, size };
 }
 
+// A package is not always square. One scale for BOTH axes, so a millimetre is
+// the same length across as it is up and a 40 x 10 mm package looks like one
+// instead of being stretched into a square that misstates every distance.
+export function fitRect(width, height, sizeXMm, sizeYMm,
+                        pad = { left: 46, right: 18, top: 16, bottom: 40 }) {
+  const availW = Math.max(10, width - pad.left - pad.right);
+  const availH = Math.max(10, height - pad.top - pad.bottom);
+  const s = Math.min(availW / sizeXMm, availH / sizeYMm);
+  const w = sizeXMm * s, h = sizeYMm * s;
+  const x0 = pad.left + (availW - w) / 2;
+  const y0 = pad.top + (availH - h) / 2;
+  return { x0, y0, w, h, s, size: Math.max(w, h) };
+}
+
 function niceStep(sizeMm) {
   if (sizeMm <= 10) return 2;
   if (sizeMm <= 20) return 4;
@@ -62,12 +76,12 @@ function heatImage(values, nx, ny, colour) {
  * Returns the square geometry used, for hit-testing.
  */
 export function drawPackageMap(ctx, width, height, opts) {
-  const geo = fitSquare(width, height, opts.compact
+  const sizeX = opts.sizeMm, sizeY = opts.sizeYMm || opts.sizeMm;
+  const geo = fitRect(width, height, sizeX, sizeY, opts.compact
     ? { left: 30, right: 8, top: 8, bottom: 24 } : undefined);
-  const { x0, y0, size } = geo;
-  const s = size / opts.sizeMm;
+  const { x0, y0, w, h, s } = geo;
   const toX = (mm) => x0 + mm * s;
-  const toY = (mm) => y0 + size - mm * s;
+  const toY = (mm) => y0 + h - mm * s;
 
   ctx.clearRect(0, 0, width, height);
 
@@ -76,10 +90,10 @@ export function drawPackageMap(ctx, width, height, opts) {
     const { values, nx, ny, lo, hi, kind } = opts.heat;
     const colour = kind === "delta" ? (v) => deltaColor(v, hi) : (v) => tempColor(v, lo, hi);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(heatImage(values, nx, ny, colour), x0, y0, size, size);
+    ctx.drawImage(heatImage(values, nx, ny, colour), x0, y0, w, h);
   } else {
     ctx.fillStyle = "#1a2536";
-    ctx.fillRect(x0, y0, size, size);
+    ctx.fillRect(x0, y0, w, h);
   }
 
   // Placement grid.
@@ -87,9 +101,11 @@ export function drawPackageMap(ctx, width, height, opts) {
     ctx.strokeStyle = opts.heat ? "rgba(0,0,0,0.16)" : "rgba(140,160,190,0.12)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let mm = opts.pitchMm; mm < opts.sizeMm; mm += opts.pitchMm) {
-      ctx.moveTo(toX(mm) + 0.5, y0); ctx.lineTo(toX(mm) + 0.5, y0 + size);
-      ctx.moveTo(x0, toY(mm) + 0.5); ctx.lineTo(x0 + size, toY(mm) + 0.5);
+    for (let mm = opts.pitchMm; mm < sizeX; mm += opts.pitchMm) {
+      ctx.moveTo(toX(mm) + 0.5, y0); ctx.lineTo(toX(mm) + 0.5, y0 + h);
+    }
+    for (let mm = opts.pitchMm; mm < sizeY; mm += opts.pitchMm) {
+      ctx.moveTo(x0, toY(mm) + 0.5); ctx.lineTo(x0 + w, toY(mm) + 0.5);
     }
     ctx.stroke();
   }
@@ -97,17 +113,17 @@ export function drawPackageMap(ctx, width, height, opts) {
   // Axes.
   ctx.strokeStyle = "#3a4d6c";
   ctx.lineWidth = 1;
-  ctx.strokeRect(x0 + 0.5, y0 + 0.5, size - 1, size - 1);
+  ctx.strokeRect(x0 + 0.5, y0 + 0.5, w - 1, h - 1);
   ctx.fillStyle = "#8b9ab3";
   ctx.font = `${opts.compact ? 10 : 11}px Segoe UI, system-ui, sans-serif`;
-  const step = niceStep(opts.sizeMm) * (opts.compact ? 2 : 1);
+  const step = niceStep(Math.max(sizeX, sizeY)) * (opts.compact ? 2 : 1);
   ctx.textAlign = "center"; ctx.textBaseline = "top";
-  for (let mm = 0; mm <= opts.sizeMm + 1e-9; mm += step) ctx.fillText(`${mm}`, toX(mm), y0 + size + 5);
+  for (let mm = 0; mm <= sizeX + 1e-9; mm += step) ctx.fillText(`${mm}`, toX(mm), y0 + h + 5);
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  for (let mm = 0; mm <= opts.sizeMm + 1e-9; mm += step) ctx.fillText(`${mm}`, x0 - 6, toY(mm));
+  for (let mm = 0; mm <= sizeY + 1e-9; mm += step) ctx.fillText(`${mm}`, x0 - 6, toY(mm));
   if (!opts.compact) {
     ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText("x, y in mm", x0, y0 + size + 19);
+    ctx.fillText("x, y in mm", x0, y0 + h + 19);
   }
 
   // Chiplets.
@@ -200,14 +216,14 @@ export function drawPackageMap(ctx, width, height, opts) {
       let lx = px - tw / 2;
       let ly = host ? toY(host.y_mm + host.h_mm) - 26 : py - 30;
       if (ly < y0 + 2) ly = host ? toY(host.y_mm) + 6 : py + 14;
-      lx = Math.max(x0 + 2, Math.min(x0 + size - tw - 2, lx));
+      lx = Math.max(x0 + 2, Math.min(x0 + w - tw - 2, lx));
       ctx.fillStyle = "rgba(255,93,108,0.92)";
       roundRect(ctx, lx, ly, tw, 20, 5); ctx.fill();
       ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
       ctx.fillText(label, lx + 6, ly + 10);
     }
   }
-  return { ...geo, scale: s, toX, toY, toMmX: (px) => (px - x0) / s, toMmY: (py) => (y0 + size - py) / s };
+  return { ...geo, scale: s, toX, toY, toMmX: (px) => (px - x0) / s, toMmY: (py) => (y0 + h - py) / s };
 }
 
 export function formatW(w) {

@@ -3,6 +3,31 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.7.0 — 22 September 2026
+
+**Rectangular packages.** `size_y_mm` on the package, and a Height field in
+the app. Square stays the default — a package states a second side only when
+it has one — so every design, scenario and test written before this still
+reads unchanged. The mesh cell has to divide both sides, because a cell that
+fits one and leaves a sliver on the other would mesh a package that is not the
+one described. A part is bounded by the side it lies along. The drawing keeps
+one scale for both axes, so a millimetre is the same length across as up and a
+40 × 10 mm package looks like one instead of being stretched square.
+
+Verified in the running app: 30 × 20 mm meshes 60 × 40 × 12, solves in 12 ms
+with every check passing, and the peak drops from 85.8 to 77.9 °C against the
+same parts on 20 × 20 — what 50 % more cooled area should do. The exact
+optimizer proves its optimum on a rectangle the same way it does on a square.
+
+**How far the exact proof actually scales, measured** (`tools/search_scaling.py`).
+Two earlier guesses about what limits it were wrong. The mesh does not: 307,200
+unknowns factorize in about 35 s with a 3.7e-12 residual. Memory does not: the
+unit fields for 30 chiplets at 40 mm / 0.5 mm are 0.55 GB. What limits it is the
+search. On a 40 mm package the proof stays near a second up to 8 parts, takes
+12 s at 10 and 9 s at 12, and 59 s at 14. It does not grow smoothly, because
+the bound bites harder when parts crowd each other. So the S3 gate's 30 chiplets
+are out of reach for this search, and the reason is now a measurement.
+
 ## 0.6.0 — 21 September 2026
 
 **The error budget has a third term, and it is the biggest one.** Everything

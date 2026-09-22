@@ -1347,6 +1347,79 @@ class TestPausableJobs:
         assert control.is_set() is True   # and it does not block
 
 
+class TestRectangularPackages:
+    """Real packages are rectangular about as often as they are square, and a
+    tool that only takes one side is the first thing a packaging engineer
+    notices. Square stays the default -- a package states a second side only
+    when it has one -- so every design written before this still reads."""
+
+    def rect(self, x, y, **kw):
+        raw = {"size_mm": x, "size_y_mm": y, "h_w_m2k": 2000.0, "ambient_c": 25.0,
+               "pitch_mm": 2.0}
+        raw.update(kw)
+        return E.PackageSpec.parse(raw)
+
+    def test_a_package_that_states_no_second_side_is_square(self):
+        square = spec(size_mm=20.0)
+        assert square.size_y == 20.0 and square.size_y_mm == 0.0
+        assert square.n_cells == square.n_cells_y
+
+    def test_the_mesh_follows_both_sides(self, cache):
+        pkg = self.rect(30.0, 20.0)
+        assert (pkg.cell_mm, pkg.n_cells, pkg.n_cells_y) == (0.5, 60, 40)
+        assert pkg.unknowns == 60 * 40 * 12
+        out = E.solve(cache, pkg, E.parse_chiplets([chip("a", 4, 4, 6.0, 2, 2)], pkg))
+        assert (out["grid"]["nx"], out["grid"]["ny"]) == (60, 40)
+        assert out["grid"]["size_y_mm"] == 20.0
+        v = out["verification"]
+        assert v["residual"] < 1e-8
+        assert v["sink_heat_w"] == pytest.approx(v["specified_w"], rel=1e-9)
+        assert out["metrics"]["package_area_mm2"] == pytest.approx(600.0)
+
+    def test_the_cell_must_divide_both_sides(self):
+        """A cell that fits one side and leaves a sliver on the other would
+        mesh a package that is not the one described."""
+        with pytest.raises(E.StudioError, match="does not fit"):
+            self.rect(20.0, 20.3)
+
+    def test_a_part_is_bounded_by_the_side_it_lies_along(self):
+        pkg = self.rect(40.0, 10.0)
+        # 30 mm fits along the 40 mm side, not along the 10 mm one.
+        E.parse_chiplets([chip("long", 30, 4, 1.0, 0, 0)], pkg)
+        with pytest.raises(E.StudioError, match="h_mm must be between"):
+            E.parse_chiplets([chip("tall", 4, 30, 1.0, 0, 0)], pkg)
+
+    def test_the_optimum_is_still_proven_on_a_rectangle(self, cache):
+        """The exactness argument never depended on the package being square:
+        more positions along one axis than the other are just positions."""
+        pkg = self.rect(30.0, 20.0)
+        raw = [chip("a", 6, 4, 6.0, 0, 0), chip("b", 4, 4, 4.0, 10, 0),
+               chip("c", 4, 6, 3.0, 0, 10)]
+        out = E.optimize(cache, pkg, E.parse_chiplets(raw, pkg))
+        cert = out["certificate"]
+        assert cert["resolve_delta_k"] <= E.RESOLVE_TOL_K
+        assert out["optimized"]["peak"]["t_c"] <= out["initial"]["peak"]["t_c"] + 1e-9
+        # Every winner sits inside the rectangle it was placed on.
+        for c in out["optimized"]["placement"]:
+            assert c["x_mm"] + c["w_mm"] <= 30.0 + 1e-9
+            assert c["y_mm"] + c["h_mm"] <= 20.0 + 1e-9
+
+    def test_more_cooled_area_is_cooler(self, cache):
+        """The physics a rectangle should obey: stretch the same parts over a
+        larger package and the convective floor drops, so the peak does."""
+        raw = [chip("a", 4, 4, 8.0, 2, 2)]
+        narrow = self.rect(20.0, 20.0)
+        wide = self.rect(30.0, 20.0)
+        t_narrow = E.solve(cache, narrow, E.parse_chiplets(raw, narrow))["peak"]["t_c"]
+        t_wide = E.solve(cache, wide, E.parse_chiplets(raw, wide))["peak"]["t_c"]
+        assert t_wide < t_narrow
+
+    def test_two_packages_differing_only_in_y_are_different_models(self, cache):
+        """The model cache is keyed on geometry; forgetting the second side
+        would hand a 30 x 20 package the factorization of a 30 x 30 one."""
+        assert self.rect(30.0, 20.0).model_key != self.rect(30.0, 30.0).model_key
+
+
 class TestMeshLevels:
     """"We cannot go finer" would be false: the factorization is exact at
     either size. What a finer mesh costs is time and memory, and what it buys

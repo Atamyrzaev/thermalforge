@@ -169,6 +169,7 @@ export class Viewer3D {
   setCut(v) { this.cut = v; this.rebuild(); this.requestDraw(); }
 
   sizeMm() { return this.data ? this.data.nx * this.data.cell_mm : 20; }
+  sizeYMm() { return this.data ? this.data.ny * this.data.cell_mm : 20; }
   dzWorld() { return (this.data.dz_um / 1000) * this.exag; }
 
   rebuild() {
@@ -262,7 +263,9 @@ export class Viewer3D {
   fitDistance() {
     const S = this.sizeMm();
     const H = this.data ? this.data.nz * this.dzWorld() : 5;
-    const radius = Math.hypot(S / 2, S / 2, H / 2);
+    // Both sides: a 40 x 10 mm package framed as if it were 40 x 40 would
+    // sit small in the middle of the view.
+    const radius = Math.hypot(S / 2, this.sizeYMm() / 2, H / 2);
     const aspect = Math.max(0.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight));
     const half = Math.min(FOV / 2, Math.atan(Math.tan(FOV / 2) * aspect));
     return (radius / Math.sin(half)) * 1.04;

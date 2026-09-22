@@ -81,9 +81,9 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
   span = Math.max(0.1, Math.ceil(span * 10) / 10);
   const temps = (part) => new Map(part.chiplets.map((c) => [c.id, c.max_c]));
   const heat = (values, kind, l, h) => ({ values, nx: g.nx, ny: g.ny, lo: l, hi: h, kind });
-  const imgBefore = mapImage({ sizeMm: g.size_mm, heat: heat(a.colmax, "temp", lo, hi), chiplets: withColour(a.placement), temps: temps(a), peak: a.peak });
-  const imgAfter = mapImage({ sizeMm: g.size_mm, heat: heat(b.colmax, "temp", lo, hi), chiplets: withColour(b.placement), temps: temps(b), peak: b.peak });
-  const imgDelta = mapImage({ sizeMm: g.size_mm, compact: true, heat: heat(delta, "delta", -span, span), chiplets: withColour(b.placement) });
+  const imgBefore = mapImage({ sizeMm: g.size_mm, sizeYMm: g.size_y_mm || g.size_mm, heat: heat(a.colmax, "temp", lo, hi), chiplets: withColour(a.placement), temps: temps(a), peak: a.peak });
+  const imgAfter = mapImage({ sizeMm: g.size_mm, sizeYMm: g.size_y_mm || g.size_mm, heat: heat(b.colmax, "temp", lo, hi), chiplets: withColour(b.placement), temps: temps(b), peak: b.peak });
+  const imgDelta = mapImage({ sizeMm: g.size_mm, sizeYMm: g.size_y_mm || g.size_mm, compact: true, heat: heat(delta, "delta", -span, span), chiplets: withColour(b.placement) });
 
   const created = new Date();
   const headline = opt.kept_initial
@@ -154,7 +154,7 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
     <section>
       <h2>Inputs</h2>
       <table>
-        <tr><td>Package</td><td>${g.size_mm} × ${g.size_mm} mm · ${(g.layers || []).map((l) => `${escapeHtml(l.name)} ${l.thickness_um} µm`).join(" / ")}</td></tr>
+        <tr><td>Package</td><td>${g.size_mm} × ${g.size_y_mm || g.size_mm} mm · ${(g.layers || []).map((l) => `${escapeHtml(l.name)} ${l.thickness_um} µm`).join(" / ")}</td></tr>
         <tr><td>Cooling path</td><td>${(g.cooling_layers && g.cooling_layers.length
           ? g.cooling_layers.map(([label, thickness, k]) => `${escapeHtml(label)} ${thickness} µm (k = ${k} W/m·K)`).join(" → ")
           : "none — the coolant meets the die backside")} → h = ${pkg.h_w_m2k.toLocaleString()} W/m²K · ambient ${pkg.ambient_c} °C</td></tr>

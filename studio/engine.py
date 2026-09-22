@@ -223,7 +223,7 @@ def _number(raw: dict, key: str, lo: float, hi: float, where: str) -> float:
 
 @dataclass(frozen=True)
 class PackageSpec:
-    size_mm: float          # square package side
+    size_mm: float          # package side in x
     h_w_m2k: float          # effective heat-transfer coefficient on the die backside
     ambient_c: float
     pitch_mm: float         # placement grid for the optimizer
@@ -233,6 +233,7 @@ class PackageSpec:
     cooling_layers: Tuple[Tuple[str, float, float, int], ...] = ()
     mesh: str = DEFAULT_MESH                          # how fine the app may go
     rotate: bool = False                              # may the search turn parts?
+    size_y_mm: float = 0.0    # package side in y; 0 means "same as x" (square)
 
     @staticmethod
     def parse(raw) -> "PackageSpec":
@@ -261,6 +262,8 @@ class PackageSpec:
         rotate = bool(raw.get("rotate", False))
         spec = PackageSpec(
             size_mm=_number(raw, "size_mm", 5.0, 40.0, "package"),
+            size_y_mm=(0.0 if raw.get("size_y_mm") in (None, 0, 0.0)
+                       else _number(raw, "size_y_mm", 5.0, 40.0, "package")),
             h_w_m2k=_number(raw, "h_w_m2k", 10.0, 1e6, "package"),
             ambient_c=_number(raw, "ambient_c", -40.0, 125.0, "package"),
             pitch_mm=_number(raw, "pitch_mm", 0.5, 20.0, "package"),
@@ -346,20 +349,35 @@ class PackageSpec:
         return (n_i + n_b, n_i + n_b + self.die_cells)
 
     @property
+    def size_y(self) -> float:
+        """The y side. A package is square unless it says otherwise, which is
+        what keeps every design written before rectangles existed valid."""
+        return self.size_y_mm or self.size_mm
+
+    @property
     def cell_mm(self) -> float:
         """The finest lateral mesh cell that keeps the model on the direct
         (exact, factorized) solver path. A taller stack spends cells on z, so
-        it can force a coarser lateral mesh -- which the app then says."""
+        it can force a coarser lateral mesh -- which the app then says. The
+        cell has to divide BOTH sides: a 30 x 20 mm package cannot be meshed
+        by a cell that fits one side and leaves a sliver on the other."""
         for cell in CELL_CHOICES_MM:
-            n = _whole(self.size_mm, cell)
-            if n is not None and n >= 8 and n * n * self.nz <= MESH_LEVELS[self.mesh]:
+            nx = _whole(self.size_mm, cell)
+            ny = _whole(self.size_y, cell)
+            if (nx is not None and ny is not None and min(nx, ny) >= 8
+                    and nx * ny * self.nz <= MESH_LEVELS[self.mesh]):
                 return cell
-        raise StudioError(f"a {self.size_mm:g} mm package does not fit a supported mesh; "
-                          f"use a whole number of millimetres")
+        raise StudioError(f"a {self.size_mm:g} x {self.size_y:g} mm package does not fit a "
+                          f"supported mesh; use whole numbers of millimetres")
 
     @property
     def n_cells(self) -> int:
+        """Cells along x. Kept for callers that predate rectangles."""
         return _whole(self.size_mm, self.cell_mm)
+
+    @property
+    def n_cells_y(self) -> int:
+        return _whole(self.size_y, self.cell_mm)
 
     @property
     def keepout_cells(self) -> int:
@@ -375,14 +393,14 @@ class PackageSpec:
 
     @property
     def unknowns(self) -> int:
-        return self.n_cells * self.n_cells * self.nz
+        return self.n_cells * self.n_cells_y * self.nz
 
     @property
     def model_key(self) -> Tuple:
         # The mesh level is not in the key: two levels that land on the same
         # cell size are the same model, and should share one factorization.
-        return (self.size_mm, self.cell_mm, self.h_w_m2k, self.ambient_c, self.stack_um,
-                self.cooling_layers)
+        return (self.size_mm, self.size_y, self.cell_mm, self.h_w_m2k, self.ambient_c,
+                self.stack_um, self.cooling_layers)
 
 
 @dataclass(frozen=True)
@@ -539,10 +557,10 @@ def parse_chiplets(raw, spec: PackageSpec) -> Tuple[ChipletIn, ...]:
         chiplet = ChipletIn(
             id=cid, name=name,
             w_mm=_number(item, "w_mm", cell, spec.size_mm, name),
-            h_mm=_number(item, "h_mm", cell, spec.size_mm, name),
+            h_mm=_number(item, "h_mm", cell, spec.size_y, name),
             power_w=_number(item, "power_w", 0.0, 2000.0, name),
             x_mm=_number(item, "x_mm", 0.0, spec.size_mm, name),
-            y_mm=_number(item, "y_mm", 0.0, spec.size_mm, name),
+            y_mm=_number(item, "y_mm", 0.0, spec.size_y, name),
             power_pattern=pattern, blocks=blocks, power_grid=power_grid,
         )
         for label, value in (("width", chiplet.w_mm), ("height", chiplet.h_mm),
@@ -744,14 +762,14 @@ class ThermalModel:
 
     def __init__(self, spec: PackageSpec):
         t0 = time.perf_counter()
-        n, cell_m = spec.n_cells, spec.cell_mm * 1e-3
+        nx, ny, cell_m = spec.n_cells, spec.n_cells_y, spec.cell_mm * 1e-3
         # The cooling path rides on top of the die. The stack section only
         # knows three layers, so the mesh is built with a die tall enough to
         # hold the cooling cells and their materials are written afterwards;
         # the Package is then corrected so "the die" means the real die.
         die_um_meshed = spec.stack_um[2] + spec.cooling_cells * DZ_UM
         config = PipelineConfig(
-            grid=GridSection(nx=n, ny=n, nz=spec.nz, dx=cell_m, dy=cell_m, dz=DZ_M),
+            grid=GridSection(nx=nx, ny=ny, nz=spec.nz, dx=cell_m, dy=cell_m, dz=DZ_M),
             boundary_conditions=BoundaryConditionsSection(
                 h_convective=spec.h_w_m2k, t_ambient_c=spec.ambient_c,
                 bottom_bc="neumann", top_bc="robin", side_bc="neumann"),
@@ -1134,7 +1152,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
     spec, pkg = model.spec, model.package
     field_c = np.asarray(result.field_k, dtype=np.float64) - 273.15
     total_w = float(sum(c.power_w for c in chiplets))
-    area_mm2 = spec.size_mm ** 2
+    area_mm2 = spec.size_mm * spec.size_y
     chip_mm2 = float(sum(c.w_mm * c.h_mm for c in chiplets))
     floor_k = total_w / (spec.h_w_m2k * area_mm2 * 1e-6)
     rise_k = float(result.peak_c) - spec.ambient_c
@@ -1154,6 +1172,7 @@ def result_payload(model: ThermalModel, chiplets, result) -> dict:
     return {
         "grid": {"nx": pkg.nx, "ny": pkg.ny, "nz": pkg.nz, "cell_mm": spec.cell_mm,
                  "dz_um": pkg.dz * 1e6, "size_mm": spec.size_mm,
+                 "size_y_mm": spec.size_y,
                  "layers": [dict(layer_) for layer_ in spec.layers],
                  "stack_um": list(spec.stack_um),
                  "die_k0": spec.die_z[0], "die_k1": spec.die_z[1],

@@ -88,12 +88,18 @@ function keepoutMm(pkg) {
   return Math.ceil(requested / (cell * 1000) - 1e-9) * cell;
 }
 
+function sizeYOf(pkg) {
+  return (pkg && pkg.size_y_mm) || (pkg && pkg.size_mm) || 20;
+}
+
 function cellMm(pkg) {
   const nz = nzOf(pkg);
   const cap = MESH_CAPS[(pkg && pkg.mesh) || "standard"] || MESH_CAPS.standard;
+  const sy = sizeYOf(pkg);
   for (const cell of CELL_CHOICES_MM) {
-    const n = pkg.size_mm / cell;
-    if (Math.abs(n - Math.round(n)) < 1e-9 && n >= 8 && n * n * nz <= cap) return cell;
+    const nx = pkg.size_mm / cell, ny = sy / cell;
+    const whole = Math.abs(nx - Math.round(nx)) < 1e-9 && Math.abs(ny - Math.round(ny)) < 1e-9;
+    if (whole && Math.min(nx, ny) >= 8 && nx * ny * nz <= cap) return cell;
   }
   return 1;
 }
@@ -123,7 +129,8 @@ function packageRequest() {
   const p = state.pkg;
   return { size_mm: p.size_mm, h_w_m2k: p.h_w_m2k, ambient_c: p.ambient_c, pitch_mm: p.pitch_mm,
            stack_um: stackOf(p), keepout_um: p.keepout_um !== undefined ? p.keepout_um : 100,
-           cooling: p.cooling || "direct", mesh: p.mesh || "standard" };
+           cooling: p.cooling || "direct", mesh: p.mesh || "standard",
+           size_y_mm: p.size_y_mm || 0 };
 }
 
 function chipletRequest(list = state.chiplets) {
@@ -156,12 +163,12 @@ function decodeResult(res) {
 }
 
 function violations() {
-  const size = state.pkg.size_mm;
+  const size = state.pkg.size_mm, sizeY = sizeYOf(state.pkg);
   const ids = new Set();
   const messages = [];
   const list = state.chiplets;
   for (const c of list) {
-    if (c.x_mm < -1e-9 || c.y_mm < -1e-9 || c.x_mm + c.w_mm > size + 1e-9 || c.y_mm + c.h_mm > size + 1e-9) {
+    if (c.x_mm < -1e-9 || c.y_mm < -1e-9 || c.x_mm + c.w_mm > size + 1e-9 || c.y_mm + c.h_mm > sizeY + 1e-9) {
       ids.add(c.id);
       messages.push(`${c.name} is outside the package`);
     }
@@ -315,7 +322,8 @@ function renderAll() {
 }
 
 function heatFor(res) {
-  if (!res || res.grid.size_mm !== state.pkg.size_mm) return null;
+  if (!res || res.grid.size_mm !== state.pkg.size_mm
+      || (res.grid.size_y_mm || res.grid.size_mm) !== sizeYOf(state.pkg)) return null;
   return { values: res.colmax, nx: res.grid.nx, ny: res.grid.ny,
            lo: Math.floor(res.t_min_c), hi: Math.ceil(res.t_max_c), kind: "temp" };
 }
@@ -328,6 +336,7 @@ function renderFloorplan(invalidIds = new Set()) {
   floorplan.setModel({
     blocksOf,
     sizeMm: state.pkg.size_mm,
+    sizeYMm: sizeYOf(state.pkg),
     cellMm: cellMm(state.pkg),
     pitchMm: state.pkg.pitch_mm,
     heat,
@@ -546,7 +555,9 @@ function renderEditor() {
   set("ed-w", +c.w_mm.toFixed(3));
   set("ed-h", +c.h_mm.toFixed(3));
   set("ed-p", +c.power_w.toFixed(4));
-  for (const id of ["ed-w", "ed-h"]) { $(id).step = cell; $(id).min = cell; $(id).max = state.pkg.size_mm; }
+  for (const [id, span] of [["ed-w", state.pkg.size_mm], ["ed-h", sizeYOf(state.pkg)]]) {
+    $(id).step = cell; $(id).min = cell; $(id).max = span;
+  }
   $("ed-pos").textContent = `${c.x_mm.toFixed(1)}, ${c.y_mm.toFixed(1)} mm`;
   const pattern = c.power_pattern || "uniform";
   if (!$("ed-pattern").querySelector(`option[value="${pattern}"]`)) {
@@ -589,11 +600,11 @@ function moveChiplet(id, x, y, dragging) {
 }
 
 function fitInside(c) {
-  const size = state.pkg.size_mm, cell = cellMm(state.pkg);
+  const size = state.pkg.size_mm, sizeY = sizeYOf(state.pkg), cell = cellMm(state.pkg);
   c.w_mm = Math.min(size, Math.max(cell, Math.round(c.w_mm / cell) * cell));
-  c.h_mm = Math.min(size, Math.max(cell, Math.round(c.h_mm / cell) * cell));
+  c.h_mm = Math.min(sizeY, Math.max(cell, Math.round(c.h_mm / cell) * cell));
   c.x_mm = Math.max(0, Math.min(size - c.w_mm, Math.round(c.x_mm / cell) * cell));
-  c.y_mm = Math.max(0, Math.min(size - c.h_mm, Math.round(c.y_mm / cell) * cell));
+  c.y_mm = Math.max(0, Math.min(sizeY - c.h_mm, Math.round(c.y_mm / cell) * cell));
 }
 
 function rotateSelected() {
@@ -631,7 +642,7 @@ function addChiplet(key) {
   const tpl = LIBRARY.find((l) => l.key === key);
   if (!tpl) return;
   if (state.chiplets.length >= MAX_CHIPLETS) { toast(`At most ${MAX_CHIPLETS} chiplets`); return; }
-  const size = state.pkg.size_mm;
+  const size = state.pkg.size_mm, sizeY = sizeYOf(state.pkg);
   let n = 1;
   while (state.chiplets.some((c) => c.id === `${key}${n}`)) n++;
   const c = { id: `${key}${n}`, name: `${tpl.name} ${n}`, w_mm: tpl.w_mm, h_mm: tpl.h_mm,
@@ -673,6 +684,7 @@ function syncPackageControls() {
   $("pkg-ambient").value = p.ambient_c;
   $("pkg-path").value = p.cooling || "direct";
   $("pkg-mesh").value = p.mesh || "standard";
+  $("pkg-size-y").value = sizeYOf(p);
   const preset = COOLING_PRESETS.includes(String(p.h_w_m2k)) ? String(p.h_w_m2k) : "custom";
   $("pkg-cooling").value = preset;
   $("pkg-h-wrap").classList.toggle("hidden", preset !== "custom");
@@ -695,6 +707,7 @@ function renderStackStrip() {
     + `<span style="flex:${die}" class="s-die">Die ${die} µm</span>`;
   const cell = cellMm(state.pkg), nz = nzOf(state.pkg);
   const n = Math.round(state.pkg.size_mm / cell);
+  const ny = Math.round(sizeYOf(state.pkg) / cell);
   const keepout = keepoutMm(state.pkg);
   const requested = state.pkg.keepout_um !== undefined ? state.pkg.keepout_um : DEFAULT_KEEPOUT_UM;
   const keepoutNote = keepout > 0
@@ -704,7 +717,7 @@ function renderStackStrip() {
   // result. Repeating it here showed the PREVIOUS solve's band beside the new
   // mesh whenever the mesh changed, which is worse than not saying it.
   $("stack-note").textContent =
-    `Mesh ${n} × ${n} × ${nz} = ${(n * n * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`
+    `Mesh ${n} × ${ny} × ${nz} = ${(n * ny * nz).toLocaleString()} cells · ${cell} mm × ${cell} mm × 20 µm`
     + keepoutNote;
 }
 
@@ -789,11 +802,12 @@ function setBusy(busy) {
 // model. The search after that is not predictable, which the warning says.
 function estimateProof() {
   const cell = cellMm(state.pkg), size = state.pkg.size_mm, pitch = state.pkg.pitch_mm;
-  const unknowns = Math.pow(size / cell, 2) * 12;
+  const sizeY = sizeYOf(state.pkg);
+  const unknowns = (size / cell) * (sizeY / cell) * 12;
   let solves = 0, combos = 1;
   for (const c of state.chiplets) {
     const nx = Math.floor((size - c.w_mm) / pitch) + 1;
-    const ny = Math.floor((size - c.h_mm) / pitch) + 1;
+    const ny = Math.floor((sizeY - c.h_mm) / pitch) + 1;
     const n = Math.max(0, nx) * Math.max(0, ny);
     solves += n;
     combos *= Math.max(1, n);
@@ -1023,7 +1037,7 @@ function renderCompare() {
     const canvas = $(canvasId);
     const { ctx, width, height } = setupCanvas(canvas);
     drawPackageMap(ctx, width, height, {
-      sizeMm: g.size_mm, compact: true, heat,
+      sizeMm: g.size_mm, sizeYMm: g.size_y_mm || g.size_mm, compact: true, heat,
       chiplets: withColours(part.placement),
       temps: showTemps ? new Map(part.chiplets.map((c) => [c.id, c.max_c])) : null,
       peak: showTemps ? part.peak : null,
@@ -1274,6 +1288,15 @@ function wire() {
   $("btn-show-optimized").addEventListener("click", () => showPlacement("optimized"));
 
   $("pkg-size").addEventListener("change", () => { record(); state.pkg.size_mm = Number($("pkg-size").value); packageChanged(); });
+  $("pkg-size-y").addEventListener("change", () => {
+    const v = Number($("pkg-size-y").value);
+    if (!Number.isFinite(v)) return;
+    record();
+    // Equal sides mean "square", and a square package stores no second side,
+    // so a design written before rectangles existed still round-trips.
+    state.pkg.size_y_mm = (v === state.pkg.size_mm) ? 0 : Math.max(5, Math.min(40, v));
+    packageChanged();
+  });
   $("pkg-ambient").addEventListener("change", () => {
     const v = Number($("pkg-ambient").value);
     if (Number.isFinite(v)) { record(); state.pkg.ambient_c = Math.max(-40, Math.min(125, v)); packageChanged(); }

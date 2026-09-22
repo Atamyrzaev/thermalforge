@@ -70,7 +70,7 @@ export class FloorplanView {
       let x = Math.round((mx - this.drag.dx) / cell) * cell;
       let y = Math.round((my - this.drag.dy) / cell) * cell;
       x = +Math.max(0, Math.min(this.model.sizeMm - c.w_mm, x)).toFixed(6);
-      y = +Math.max(0, Math.min(this.model.sizeMm - c.h_mm, y)).toFixed(6);
+      y = +Math.max(0, Math.min((this.model.sizeYMm || this.model.sizeMm) - c.h_mm, y)).toFixed(6);
       if (x !== this.drag.lastX || y !== this.drag.lastY) {
         this.drag.lastX = x;
         this.drag.lastY = y;
@@ -95,11 +95,12 @@ export class FloorplanView {
 
   showTip(p, mx, my, c) {
     const m = this.model;
-    if (mx < 0 || my < 0 || mx > m.sizeMm || my > m.sizeMm) { this.hideTip(); return; }
+    const sizeY = m.sizeYMm || m.sizeMm;
+    if (mx < 0 || my < 0 || mx > m.sizeMm || my > sizeY) { this.hideTip(); return; }
     const lines = [];
     if (m.heat && m.heat.kind === "temp") {
       const i = Math.min(m.heat.nx - 1, Math.floor(mx / (m.sizeMm / m.heat.nx)));
-      const j = Math.min(m.heat.ny - 1, Math.floor(my / (m.sizeMm / m.heat.ny)));
+      const j = Math.min(m.heat.ny - 1, Math.floor(my / (sizeY / m.heat.ny)));
       lines.push(`<b>${m.heat.values[i * m.heat.ny + j].toFixed(2)} °C</b> hottest in this column`);
     }
     lines.push(`x ${mx.toFixed(2)} mm · y ${my.toFixed(2)} mm`);

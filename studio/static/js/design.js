@@ -62,6 +62,7 @@ export function serializeDesign(pkg, chiplets, title) {
       keepout_um: pkg.keepout_um === undefined ? DEFAULT_KEEPOUT_UM : pkg.keepout_um,
       cooling: pkg.cooling || "direct",
       mesh: pkg.mesh || "standard",
+      size_y_mm: pkg.size_y_mm || 0,
     },
     chiplets: chiplets.map((c) => ({
       id: c.id, name: c.name, w_mm: c.w_mm, h_mm: c.h_mm,
@@ -174,6 +175,7 @@ export function parseDesign(text) {
       ? DEFAULT_KEEPOUT_UM : number(p, "keepout_um", 0, 2000, "package"),
     cooling: typeof p.cooling === "string" ? p.cooling.slice(0, 30) : "direct",
     mesh: p.mesh === "fine" ? "fine" : "standard",
+    size_y_mm: Number.isFinite(p.size_y_mm) ? p.size_y_mm : 0,
   };
   if (!Array.isArray(raw.chiplets) || !raw.chiplets.length) throw new Error("the file has no chiplets");
   if (raw.chiplets.length > MAX_CHIPLETS) throw new Error(`at most ${MAX_CHIPLETS} chiplets`);
