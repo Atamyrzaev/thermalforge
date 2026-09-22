@@ -171,6 +171,80 @@ export function parsePowerMap(text, chiplet) {
   return parseMatrix(rows);
 }
 
+// An image is read by BRIGHTNESS: black is no power, white is the most.
+// Downsampled by averaging to at most IMAGE_SIDE tiles a side -- far finer
+// than any mesh the app builds, and averaging rather than picking pixels so a
+// hotspot drawn thinner than a tile is not lost between samples.
+const IMAGE_SIDE = 64;
+// Above this mean saturation the picture is a COLOUR heatmap, and a colour
+// heatmap cannot be read by brightness: in a jet or turbo colour scale yellow
+// is brighter than red, so reading luminance would put the hotspot in the
+// wrong place with no error. It is refused and the user is asked for a
+// greyscale export, which is unambiguous.
+const MAX_MEAN_SATURATION = 0.15;
+
+/**
+ * Reads a greyscale image as a power map. Returns a Promise of
+ * {grid, total: null, form: "image", width, height}.
+ */
+export function parsePowerImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("not an image the browser can read")); };
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (!w || !h) throw new Error("the image is empty");
+        const cols = Math.max(1, Math.min(IMAGE_SIDE, w));
+        const rows = Math.max(1, Math.min(IMAGE_SIDE, h));
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const px = ctx.getImageData(0, 0, w, h).data;
+
+        let satSum = 0;
+        const sums = new Float64Array(cols * rows), counts = new Float64Array(cols * rows);
+        for (let y = 0; y < h; y++) {
+          // Image row 0 is the TOP, which is exactly how a power grid is
+          // stored, so no flip is needed -- the same convention as a CSV.
+          const r = Math.min(rows - 1, Math.floor(y / h * rows));
+          for (let x = 0; x < w; x++) {
+            const c = Math.min(cols - 1, Math.floor(x / w * cols));
+            const i = (y * w + x) * 4;
+            const R = px[i], G = px[i + 1], B = px[i + 2], A = px[i + 3] / 255;
+            const hi = Math.max(R, G, B), lo = Math.min(R, G, B);
+            satSum += hi > 0 ? (hi - lo) / hi : 0;
+            // Rec. 709 luminance, weighted by alpha so a transparent pixel is
+            // no power rather than white.
+            const lum = (0.2126 * R + 0.7152 * G + 0.0722 * B) / 255 * A;
+            sums[r * cols + c] += lum;
+            counts[r * cols + c] += 1;
+          }
+        }
+        const saturation = satSum / (w * h);
+        if (saturation > MAX_MEAN_SATURATION) {
+          throw new Error(
+            `this looks like a COLOUR heatmap (mean saturation ${(100 * saturation).toFixed(0)} %). ` +
+            "Brightness does not track power in a colour scale -- yellow is brighter than red -- " +
+            "so it cannot be read without that scale. Export it in greyscale, or as CSV.");
+        }
+        const weights = Array.from(sums, (v, n) => (counts[n] ? v / counts[n] : 0));
+        const grid = { cols, rows, weights };
+        checkSize(grid);
+        if (!weights.some((v) => v > 0)) throw new Error("the image is black everywhere: no power");
+        resolve({ grid, total: null, form: "image", width: w, height: h });
+      } catch (err) {
+        reject(err);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.src = url;
+  });
+}
+
 /** Draws a map into a canvas so an upside-down file is visible, not believed. */
 export function drawPowerMap(canvas, grid, colour) {
   const ctx = canvas.getContext("2d");
@@ -196,6 +270,12 @@ export function readPowerMapFile(input, chiplet) {
     input.onchange = () => {
       const file = input.files && input.files[0];
       if (!file) { resolve(null); return; }
+      if ((file.type && file.type.startsWith("image/")) || /\.(png|jpe?g|bmp|gif|webp)$/i.test(file.name)) {
+        parsePowerImage(file)
+          .then((parsed) => resolve({ ...parsed, filename: file.name }))
+          .catch((err) => reject(new Error(`${file.name}: ${err.message}`)));
+        return;
+      }
       const reader = new FileReader();
       reader.onerror = () => reject(new Error(`could not read ${file.name}`));
       reader.onload = () => {

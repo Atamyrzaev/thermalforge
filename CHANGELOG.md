@@ -19,6 +19,29 @@ with every check passing, and the peak drops from 85.8 to 77.9 °C against the
 same parts on 20 × 20 — what 50 % more cooled area should do. The exact
 optimizer proves its optimum on a rectangle the same way it does on a square.
 
+**Power maps from an image.** Import map… now takes a PNG or JPEG as well as
+CSV. A greyscale image is read by brightness — black is no power, white the
+most — and averaged down to at most 64 tiles a side, far finer than any mesh,
+averaging rather than sampling so a hotspot thinner than a tile is not lost
+between samples. Image row 0 is the top, the same convention as a CSV, so no
+flip is needed.
+
+A **colour** heatmap is refused, with the reason. Brightness does not track
+power in a colour scale — in jet or turbo, yellow is brighter than red — so
+reading luminance would put the hotspot in the wrong place with no error.
+Verified in the app: a red-on-blue heatmap is refused ("mean saturation 99 %")
+and the part it was aimed at is left untouched.
+
+**The hotspot guard stopped crying wolf on imported maps.** Yesterday's guard
+took one tile as an imported map's smallest feature. A tile is the finest thing
+a file can express, not the size of what it does express: a 40 × 40 image of a
+5 mm part has 0.13 mm tiles, so every imported image was being called a lower
+bound. A guard that fires on everything is one people learn to ignore. It now
+measures the width of the hot region — the contiguous run at or above half the
+map's range through the hottest tile. In the app, a 10-pixel hotspot now reads
+resolved at 1.25 mm and 2.5 cells, while a single bright pixel is still caught
+at 0.125 mm, and a uniform map does not trigger it at all.
+
 **The interposer's material is a choice.** Plain silicon, or silicon
 carrying copper TSVs (kxy 114.4, kz 175.2 W/mK — the cited composite that
 reproduces its source paper's FEM cell to 0.8 %). This closes the S1 item left

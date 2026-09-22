@@ -892,18 +892,54 @@ _BOUNDARY_STUDY = _load_study(BOUNDARY_STUDY_PATH)
 MIN_CELLS_ACROSS_FEATURE = 2.0
 
 
-def smallest_feature_mm(chiplet) -> Optional[float]:
-    """The narrowest thing inside this chiplet, in mm, or None if uniform.
+def _hot_width_mm(chiplet) -> Optional[float]:
+    """Width of the hottest region of an imported map, in mm.
 
-    For blocks that is the smaller side of the smallest block; for an imported
-    map it is one tile, since a tile is the finest structure the file asserts.
+    A tile is the finest thing a file CAN express, not the size of what it
+    does express. A 40 x 40 map of a 5 mm part has 0.13 mm tiles, and taking
+    that as the feature size would call every imported map unresolved -- the
+    guard would fire on everything and be ignored. What decides whether the
+    mesh resolves the peak is how wide the hot region is: the contiguous run
+    of tiles at or above half the map's range, through the hottest tile, along
+    each axis. A single hot tile still measures as one tile, so a genuinely
+    sub-cell hotspot is still caught.
+    """
+    grid = chiplet.power_grid
+    if grid is None or not grid.cols or not grid.rows:
+        return None
+    w = np.asarray(grid.weights, dtype=np.float64).reshape(grid.rows, grid.cols)
+    lo, hi = float(w.min()), float(w.max())
+    if hi <= lo:
+        return None                      # uniform map: no hotspot to resolve
+    hot = w >= lo + 0.5 * (hi - lo)
+    r, c = np.unravel_index(int(np.argmax(w)), w.shape)
+
+    def run(line: np.ndarray, at: int) -> int:
+        a = b = at
+        while a > 0 and line[a - 1]:
+            a -= 1
+        while b < len(line) - 1 and line[b + 1]:
+            b += 1
+        return b - a + 1
+
+    across = run(hot[r, :], c) * (chiplet.w_mm / grid.cols)
+    down = run(hot[:, c], r) * (chiplet.h_mm / grid.rows)
+    return min(across, down)
+
+
+def smallest_feature_mm(chiplet) -> Optional[float]:
+    """The narrowest heat-carrying structure inside this chiplet, in mm, or
+    None if its power is uniform.
+
+    For blocks that is the smaller side of the smallest block. For an imported
+    map it is the width of the hot region, not one tile -- see _hot_width_mm.
     """
     sizes = []
     for b in chiplet.blocks:
         sizes.append(min(b.w_frac * chiplet.w_mm, b.h_frac * chiplet.h_mm))
-    grid = chiplet.power_grid
-    if grid is not None and grid.cols and grid.rows:
-        sizes.append(min(chiplet.w_mm / grid.cols, chiplet.h_mm / grid.rows))
+    hot = _hot_width_mm(chiplet)
+    if hot is not None:
+        sizes.append(hot)
     return min(sizes) if sizes else None
 
 

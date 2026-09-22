@@ -1205,17 +1205,41 @@ class TestHotspotsResolved:
         wide = E.solve(cache, pkg, E.parse_chiplets([self.part(0.63)], pkg))["peak"]["t_c"]
         assert abs(wide - peaks[0.10]) > 20.0
 
-    def test_an_imported_map_is_measured_by_its_tile(self, cache):
-        """A tile is the finest thing a file asserts, so a map finer than the
-        mesh is the same problem arriving through a different door."""
+    def mapped(self, weights, n):
+        return [{"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
+                 "x_mm": 7, "y_mm": 7, "power_pattern": "imported",
+                 "power_grid": {"cols": n, "rows": n, "weights": weights}}]
+
+    def test_a_single_hot_tile_is_still_caught(self, cache):
+        """A map whose hotspot really is one tile wide is the sub-cell case
+        arriving through a different door, and must be flagged as one."""
         pkg = self.pkg()
-        fine_map = {"id": "npu", "name": "NPU", "w_mm": 5, "h_mm": 5, "power_w": 8.0,
-                    "x_mm": 7, "y_mm": 7, "power_pattern": "imported",
-                    "power_grid": {"cols": 32, "rows": 32,
-                                   "weights": [1.0] * 1023 + [50.0]}}
-        out = E.solve(cache, pkg, E.parse_chiplets([fine_map], pkg))["resolution"]
+        raw = self.mapped([1.0] * 1023 + [50.0], 32)
+        out = E.solve(cache, pkg, E.parse_chiplets(raw, pkg))["resolution"]
         assert out["feature_mm"] == pytest.approx(5.0 / 32)
         assert out["resolved"] is False
+
+    def test_a_fine_map_of_a_wide_hotspot_is_not_a_false_alarm(self, cache):
+        """The defect this replaced. A tile is the finest thing a file CAN
+        say, not the size of what it does say: a 40 x 40 image of a 5 mm part
+        has 0.13 mm tiles, and taking one tile as the feature called every
+        imported image unresolved. A guard that fires on everything is a guard
+        people learn to ignore. Here the hotspot is 10 tiles across -- 1.25 mm,
+        2.5 cells at 0.5 mm -- and is resolved."""
+        n, w = 40, [0.0] * 1600
+        for r in range(4, 14):
+            for c in range(4, 14):
+                w[r * n + c] = 1.0
+        pkg = self.pkg()
+        out = E.solve(cache, pkg, E.parse_chiplets(self.mapped(w, n), pkg))["resolution"]
+        assert out["feature_mm"] == pytest.approx(1.25)
+        assert out["cells_across"] == pytest.approx(2.5)
+        assert out["resolved"] is True
+
+    def test_a_uniform_map_has_nothing_to_resolve(self, cache):
+        pkg = self.pkg()
+        out = E.solve(cache, pkg, E.parse_chiplets(self.mapped([1.0] * 1600, 40), pkg))
+        assert out["resolution"]["applies"] is False
 
 
 class TestMeasuredNotEstimated:
