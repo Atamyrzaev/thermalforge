@@ -42,7 +42,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import scipy.sparse as sparse
@@ -1589,7 +1589,8 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
                      clearance_cells: int = 0,
                      improve_incumbent: bool = True,
                      cancel: Optional[threading.Event] = None,
-                     on_progress: Optional[Callable[[SearchStats, float], None]] = None
+                     on_progress: Optional[Callable[[SearchStats, float], None]] = None,
+                     order: Optional[List[int]] = None,
                      ) -> Tuple[float, Optional[List[int]], SearchStats]:
     """Exact minimum, over every non-overlapping grid layout, of the peak rise.
 
@@ -1610,6 +1611,11 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
     columns (callers put the layers where peaks sit first). Complete layouts
     are always scored on every cell. Changing the subset changes the speed,
     never the answer.
+
+    `order`: which chiplet is branched on at each depth. Any permutation gives
+    the same optimum -- it changes which subtrees the bound can cut, never the
+    bound itself -- so a guide may choose it (ai/guided.py). Identical parts
+    left non-adjacent simply lose the symmetry cut: slower, never wrong.
     """
     k = len(fields)
     n_cells = fields[0].shape[1]
@@ -1624,8 +1630,13 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
     groups: Dict[tuple, List[int]] = {}
     for i in range(k):
         groups.setdefault(signatures[i], []).append(i)
-    order = [i for group in sorted(groups.values(), key=lambda g: -max(self_peak[i] for i in g))
-             for i in group]
+    if order is None:
+        order = [i for group in sorted(groups.values(), key=lambda g: -max(self_peak[i] for i in g))
+                 for i in group]
+    elif sorted(order) != list(range(k)):
+        raise StudioError("a search order must name every chiplet exactly once")
+    else:
+        order = list(order)
 
     compat: Dict[Tuple[int, int], np.ndarray] = {}
     for a in range(k):
@@ -1825,8 +1836,29 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
 
 def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
              on_progress: Optional[Callable[[dict], None]] = None,
-             cancel: Optional[threading.Event] = None) -> dict:
-    """Exact placement optimization, verified. See the module docstring."""
+             cancel: Optional[threading.Event] = None,
+             allowed: Optional[Callable[[int, float, float, float, float], bool]] = None,
+             search: str = "guided",
+             links: Optional[Sequence[Tuple[str, str, float]]] = None,
+             wirelength_cap_mm: Optional[float] = None,
+             constraint_notes: Optional[Sequence[str]] = None) -> dict:
+    """Exact placement optimization, verified. See the module docstring.
+
+    `allowed(i, x_mm, y_mm, w_mm, h_mm)`: keep only the candidate positions a
+    constraint permits ("memory on the left"). The optimum is then exact over
+    the constrained set, and the certificate says it was constrained.
+    `search`: "guided" (the default, ai/guided.py: the same bound and the same
+    optimum, with an exact prior-cell screen at the leaves) or "shipped" (the
+    threaded search it grew out of, kept as the baseline the guided one is
+    measured against -- tools/ai_gate.py).
+    `links` + `wirelength_cap_mm`: (id_a, id_b, weight) pairs and a cap on the
+    weighted centre-to-centre Manhattan length; an exact side constraint, so
+    it needs the guided search.
+    """
+    if search not in ("shipped", "guided"):
+        raise StudioError("search must be 'shipped' or 'guided'")
+    if wirelength_cap_mm is not None and search != "guided":
+        raise StudioError("a wirelength cap needs the guided search")
     t_start = time.perf_counter()
 
     def report(stage: str, **extra) -> None:
@@ -1866,9 +1898,19 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
             pos = np.array([(x, y) for x in range(0, pkg.nx - wc + 1, pitch)
                             for y in range(0, pkg.ny - hc + 1, pitch)], dtype=np.int64)
         flat_pos.append(pos)
+    if allowed is not None:
+        for n, (v, (wc, hc)) in enumerate(zip(flat, flat_sizes)):
+            if v.fixed or flat_pos[n].size == 0:
+                continue
+            keep = np.array([bool(allowed(owner[n], x * cell, y * cell, wc * cell, hc * cell))
+                             for x, y in flat_pos[n]], dtype=bool)
+            flat_pos[n] = flat_pos[n][keep]
     for i, group in enumerate(variants):
         mine = [flat_pos[n] for n in range(len(flat)) if owner[n] == i]
         if all(p.size == 0 for p in mine):
+            if allowed is not None:
+                raise StudioError(f"{chiplets[i].name} has no position on the "
+                                  f"{spec.pitch_mm:g} mm grid that meets its constraint")
             raise StudioError(f"{chiplets[i].name} does not fit on the "
                               f"{spec.pitch_mm:g} mm grid in any orientation")
     combinations = 1
@@ -1938,14 +1980,52 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
                best_c=(best + spec.ambient_c) if math.isfinite(best) else None,
                combinations=combinations)
 
-    best_value, best_choice, stats = branch_and_bound(
-        fields, positions, extents, signatures, (incumbent_value, incumbent_choice),
-        bound_cells=model.bound_cells, clearance_cells=spec.keepout_cells,
-        cancel=cancel, on_progress=search_progress)
+    index_of = {c.id: i for i, c in enumerate(chiplets)}
+    pair_cost = None
+    if links:
+        pair_cost = {}
+        centres = [(positions[i] + extents[i] / 2.0) * cell for i in range(len(chiplets))]
+        for a_id, b_id, weight in links:
+            if a_id not in index_of or b_id not in index_of or a_id == b_id:
+                raise StudioError(f"a link names an unknown or repeated part: {a_id}-{b_id}")
+            a, b = sorted((index_of[a_id], index_of[b_id]))
+            ca, cb = centres[a], centres[b]
+            dist = (np.abs(ca[:, 0][:, None] - cb[:, 0][None, :])
+                    + np.abs(ca[:, 1][:, None] - cb[:, 1][None, :]))
+            pair_cost[(a, b)] = pair_cost.get((a, b), 0.0) + float(weight) * dist
+    prescreened = 0
+    if search == "guided":
+        from ai.guided import Stopped, guided_branch_and_bound
+        try:
+            best_value, best_choice, gstats = guided_branch_and_bound(
+                fields, positions, extents, signatures, (incumbent_value, incumbent_choice),
+                bound_cells=model.bound_cells, clearance_cells=spec.keepout_cells,
+                prescreen=True, prior_cells=4, pair_cost=pair_cost,
+                cost_cap=float("inf") if wirelength_cap_mm is None else float(wirelength_cap_mm),
+                should_stop=(lambda: cancel is not None and cancel.is_set()),
+                on_progress=lambda gs, best: search_progress(
+                    SearchStats(nodes=gs.nodes, leaves=gs.leaves), best))
+        except Stopped:
+            raise SearchCancelled()
+        stats = SearchStats(nodes=gstats.nodes, leaves=gstats.leaves,
+                            pruned_overlap=gstats.pruned_overlap,
+                            pruned_symmetry=gstats.pruned_symmetry,
+                            pruned_bound=gstats.pruned_bound + gstats.pruned_constraint)
+        prescreened = gstats.prescreened
+    else:
+        best_value, best_choice, stats = branch_and_bound(
+            fields, positions, extents, signatures, (incumbent_value, incumbent_choice),
+            bound_cells=model.bound_cells, clearance_cells=spec.keepout_cells,
+            cancel=cancel, on_progress=search_progress)
     search_s = time.perf_counter() - t0
     if best_choice is None:
+        if wirelength_cap_mm is not None or allowed is not None:
+            raise StudioError("no layout on this placement grid meets the constraints")
         raise StudioError("no non-overlapping layout exists on this placement grid; "
                           "use a finer grid or a larger package")
+    wirelength = None
+    if pair_cost:
+        wirelength = float(sum(m[best_choice[a], best_choice[b]] for (a, b), m in pair_cost.items()))
 
     # -- the winner, re-solved from scratch ---------------------------------
     report("re-solving the winner with the full 3-D solver")
@@ -2028,6 +2108,12 @@ def optimize(cache: ModelCache, spec: PackageSpec, chiplets,
             "total_s": time.perf_counter() - t_start,
             "lattice_optimum_c": best_value + spec.ambient_c,
             "resolve_delta_k": verify_delta_k,
+            "search": search,
+            "layouts_prescreened": int(prescreened),
+            "constrained": bool(allowed is not None or wirelength_cap_mm is not None),
+            "constraints": list(constraint_notes or ()),
+            "wirelength_cap_mm": wirelength_cap_mm,
+            "wirelength_mm": wirelength,
         },
     }
 

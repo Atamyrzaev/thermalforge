@@ -331,6 +331,102 @@ function heatFor(res) {
            lo: Math.floor(res.t_min_c), hi: Math.ceil(res.t_max_c), kind: "temp" };
 }
 
+// -- the AI layer: estimates and words, never a reported number -----------
+
+async function whatIf() {
+  const part = state.chiplets.find((c) => c.id === state.selectedId);
+  const note = $("ed-whatif-note");
+  if (!part) return;
+  if (state.hint && state.hint.partId === part.id) {      // a second click clears it
+    state.hint = null;
+    note.textContent = "";
+    renderFloorplan();
+    return;
+  }
+  note.textContent = "estimating…";
+  try {
+    const res = await postJSON("/api/surrogate/what-if", {
+      package: packageRequest(), chiplets: chipletRequest(), part_id: part.id,
+    });
+    if (!res.ok) throw new Error(res.error);
+    const spots = res.positions || [];
+    if (!spots.length) { note.textContent = "no free position on the grid for this part"; return; }
+    const peaks = spots.map((s) => s.peak_c);
+    state.hint = {
+      partId: part.id, spots, wMm: part.w_mm, hMm: part.h_mm,
+      lo: Math.min(...peaks), hi: Math.max(...peaks),
+      bestKey: `${res.best.x_mm},${res.best.y_mm}`,
+    };
+    const spread = Math.max(...peaks) - Math.min(...peaks);
+    note.innerHTML = `<b>${escapeHtml(res.label)}.</b> ${spots.length} positions in `
+      + `${res.ms.toFixed(0)} ms, spread ${spread.toFixed(1)} K. Green outline: the coolest estimate `
+      + `(${res.best.x_mm}, ${res.best.y_mm}) mm. Move the part there and the solver gives the real number.`;
+    renderFloorplan();
+  } catch (err) {
+    note.textContent = String(err.message || err);
+  }
+}
+
+function renderCopilot(res) {
+  const out = $("copilot-out");
+  const bits = [];
+  if (res.not_understood && res.not_understood.length) {
+    bits.push(`<div class="warn">Not understood, so not applied: `
+      + res.not_understood.map((w) => `<code>${escapeHtml(w)}</code>`).join(", ") + `</div>`);
+  }
+  // Every temperature is a citation: render it as a link to its solve record.
+  const linked = escapeHtml(res.narrative).replace(
+    /\[(rec|req):([0-9a-f]{12}):([A-Za-z0-9_.\[\]-]+)\]/g,
+    (_m, kind, id, path) => ` <a href="#" class="cite" data-record="${id}" title="${kind === "req"
+      ? "what you asked for" : "the solve this number came from"}: ${escapeHtml(path)}">[${id.slice(0, 6)}]</a>`);
+  bits.push(`<p class="copilot-answer">${linked}</p>`);
+  out.innerHTML = bits.join("");
+  out.querySelectorAll("a.cite").forEach((a) => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await getJSON(`/api/records/${a.dataset.record}`);
+      if (!r.ok) throw new Error(r.error);
+      const rec = r.record;
+      toast(`${rec.kind} ${rec.id} · commit ${rec.commit} · checks passed`
+        + (rec.checks.residual === undefined ? ""
+           : ` (residual ${Number(rec.checks.residual).toExponential(1)})`), "info");
+    } catch (err) { toast(String(err.message || err)); }
+  }));
+  $("copilot-apply").classList.toggle("hidden", !res.placement);
+}
+
+async function askCopilot() {
+  const text = $("copilot-text").value.trim();
+  if (!text) return;
+  const out = $("copilot-out");
+  out.textContent = "planning, solving and proving…";
+  try {
+    const res = await postJSON("/api/copilot", {
+      text, package: packageRequest(), chiplets: chipletRequest(),
+    });
+    if (!res.ok) throw new Error(res.error);
+    state.copilot = res;
+    renderCopilot(res);
+  } catch (err) {
+    out.textContent = String(err.message || err);
+  }
+}
+
+function applyCopilot() {
+  const res = state.copilot;
+  if (!res || !res.placement) return;
+  record();
+  const byId = new Map(res.placement.map((p) => [p.id, p]));
+  state.chiplets = state.chiplets.map((c) => (byId.has(c.id)
+    ? { ...c, x_mm: byId.get(c.id).x_mm, y_mm: byId.get(c.id).y_mm } : c));
+  if (res.package) {
+    state.pkg = { ...state.pkg, ...res.package };
+    syncPackageControls();
+  }
+  state.hint = null;
+  packageChanged();
+}
+
 function renderFloorplan(invalidIds = new Set()) {
   if (!floorplan || !state.pkg) return;
   const res = state.shown;
@@ -346,6 +442,7 @@ function renderFloorplan(invalidIds = new Set()) {
     chiplets: state.chiplets,
     selectedId: state.selectedId,
     invalidIds,
+    hint: state.hint && state.hint.partId === state.selectedId ? state.hint : null,
     temps: state.animating ? null : temps,
     peak: heat && !invalidIds.size && !state.animating ? res.peak : null,
     locked: state.animating || state.busy,
@@ -1468,6 +1565,12 @@ function wire() {
     requestSolve();
   });
   $("ed-rotate").addEventListener("click", rotateSelected);
+  $("ed-whatif").addEventListener("click", whatIf);
+  $("copilot-ask").addEventListener("click", askCopilot);
+  $("copilot-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) askCopilot();
+  });
+  $("copilot-apply").addEventListener("click", applyCopilot);
   $("ed-delete").addEventListener("click", removeSelected);
 
   for (const b of document.querySelectorAll("#gl-mode button")) b.addEventListener("click", () => { if (!b.disabled) setGlMode(b.dataset.mode); });

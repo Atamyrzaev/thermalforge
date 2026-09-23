@@ -3,6 +3,126 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.9.0 — 23 September 2026
+
+**The AI layer, under one rule: AI proposes, the solver decides.** Nothing in
+it produces a number a user is shown. It ranks, screens, orders and explains;
+every temperature still comes from a solve that passed its checks. The rule is
+not a convention here, it is enforced in code, and the S4 gate is met on all
+three counts.
+
+**Solve records, and text that cannot outrun them** (`ai/records.py`). Every
+solve the layer touches becomes a record: inputs, outputs, checks, the commit,
+and an id that is a hash of all of it. A temperature reaches text only as a
+citation of a record, through two independent walls. The narrative builder has
+no method that accepts a bare temperature — prose containing one is refused —
+and the finished text is audited against the store before it is shown, so a
+number typed into a template is caught as surely as one a model invented.
+Arithmetic stays traceable too: "with 7 K to spare" is a derived record naming
+its parents. Tests include an explainer that states an uncited temperature and
+one that cites a real record but prints the wrong number; both are refused and
+the deterministic template is used instead.
+
+**A versioned data pipeline** (`ai/dataset.py`, `tools/ai_dataset.py`). A
+160-package, 3,200-label set made by the verified solver: 1,912 designs to
+train and calibrate on, and 506 held-out ones across 32 packages. Each label
+carries its residual, energy balance, band, mesh and commit; the manifest
+carries the generator's seed and the labels' sha256, and loading a dataset
+whose bytes no longer match is refused. The split is by PACKAGE, never by
+layout. Generation is parallel and seeded per package, so three workers give
+the same dataset as one — a test holds them equal.
+
+**A surrogate that is physics first** (`ai/rom.py`, `ai/surrogate.py`). A
+reduced-order model collapses the package to one node per material layer, with
+the engine's own materials, cooling layers and boundary conditions, and solves
+that in milliseconds. On its own it lands within a few per cent — that is what
+carries to packages it has never seen. What a coarse cell cannot resolve, a
+small numpy ensemble learns as a per-part correction, from features that
+describe exactly that: how concentrated a part's power is, how small its
+smallest block is against the cell, how it compares with the spreading length.
+On 506 designs across 32 packages it never
+trained or calibrated on, the 95th-percentile error is
+**0.36 of each design's own error band** (the gate
+asks for 1), inside the band on 100 % of designs, at
+28 ms a design. The reduced-order model alone scores
+1.21, which is the honest measure of what the
+learning added.
+
+**Uncertainty that was corrected when it undercovered.** The interval is
+split-conformal, and calibrated per DESIGN it covered 92 % against a nominal
+95 %: designs on one package are not exchangeable with designs on another,
+because they share its cooling, its stack and its mesh. Calibrating by package
+fixed it — measured coverage 100 %.
+
+**Guided exact search** (`ai/guided.py`). The bound is untouched, so the answer
+is untouched: on every instance of the regression set the optimum is
+**identical**. What changed is the leaves. A complete layout is first checked
+on a few prior cells — the running hot cell, the new part's own hotspot, and
+the cells that have bound the peak most often so far, which the search learns
+as it goes. A layout that already reaches the incumbent there cannot win and is
+cut without being scored. Layouts scored fall from 80,185
+to 874 over the set: **90x in
+total, 52x on the median instance**. Of that, the
+exact screen is 85x and the learned prior a further
+1.1x.
+
+**And what was measured and dropped.** Learned branch ORDERING — the obvious
+thing to build — makes the metric worse. Dynamic rules cut interior nodes but
+leave the flexible parts for the leaf level, which is where layouts are
+actually scored: fail-first scored up to 150x MORE. Handing the search the true
+optimum as its starting incumbent, the best any ordering could do, saves at
+most 4.7x. That is why the gain is at the leaves and not in the order, and the
+policy machinery stays in the module measured rather than shipped as a default.
+
+**The app runs the guided search now.** It is exact, it returns the same
+optimum, and over the regression set it takes 24 % less wall time than the
+threaded search it replaces — single-threaded, because scoring far fewer
+layouts beats spreading the scoring over cores. Pause and progress still work:
+both are on a clock rather than a node count, so a pause takes effect within
+0.2 s. On S3's own gate the worst proof of 8 distinct chiplets falls from
+**17.2 s to 7.5 s**. The gate's count does not move: 10 parts now finishes in
+90 s instead of running past 120, which is faster and still over the minute.
+
+**Say it in words** (`ai/copilot.py`). "under 85 C at 30 W, memory on the left,
+SerDes at the edge" becomes a limit, a power scaling and two placement
+constraints; the constraints filter candidate positions, so what comes back is
+a proven optimum over the constrained set, and "CPU next to memory" becomes an
+exact cap on interconnect length. If the limit is missed, it climbs the cooling
+ladder one exact run at a time. It is a grammar, not a language model:
+deterministic, offline, and it reports the words it did not understand instead
+of guessing. A language model can sit in front of it later; its text goes
+through the same audit.
+
+**Propose the package** (`ai/inverse.py`). Parts, a limit and a netlist in; a
+package size, a cooling stack and an interposer out, with a Pareto front over
+peak temperature, area and interconnect length where every point is a proven
+optimum with its record. The surrogate screens the whole grid of candidates in
+milliseconds and the exact optimizer runs only on the survivors — a screen can
+cost the optimality of the PROPOSAL, never the truth of a reported number. An
+epsilon-constraint sweep adds exact points that trade temperature for wire, and
+a cap nothing can meet is reported as infeasible rather than approximated.
+
+**Learn the unknowns from measurements** (`ai/calibration.py`). A package
+family's undisclosed numbers — the cooling coefficient, an interface
+resistance, a conductivity correction — fitted to measured parts by
+Levenberg-Marquardt with the verified engine as the forward model, with
+uncertainty from the local curvature and a k-fold check that judges the fit on
+patterns it did not see. It also reports what the data does NOT determine: a
+pair correlated beyond 0.95 is named as inseparable rather than printed as two
+confident numbers. With sixteen sensors the SAMOS-style rig does separate h
+from its TIM; with one sensor it does not, and the learner says so.
+
+**In the app.** A Copilot panel whose every temperature is a link to the solve
+record behind it, and "Where is it cooler?" on the selected part: the surrogate
+scores every free position on the grid in about a tenth of a second and paints
+them over the floorplan, with the coolest outlined and labelled an estimate.
+Moving the part runs the real solver, as always. New endpoints: `/api/copilot`,
+`/api/surrogate/what-if`, `/api/inverse`, `/api/records/<id>`, `/api/ai/status`
+— all offline, all exercised by the driver's smoke run.
+
+11 regression instances, 506 held-out
+designs, 441 tests.
+
 ## 0.8.0 — 22 September 2026
 
 **S1's gate is met: level and shape, on one test chip, under forced

@@ -120,9 +120,24 @@
         <label>Position<span id="ed-pos" class="readout"></span></label>
         <div class="span2 editor-buttons">
           <button id="ed-rotate" class="btn btn-small">Rotate 90°</button>
+          <button id="ed-whatif" class="btn btn-small" title="Estimate, for every position on the grid, where this part would run coolest. A surrogate model answers in milliseconds; the solver runs when you move the part.">Where is it cooler?</button>
           <button id="ed-delete" class="btn btn-small btn-danger">Remove</button>
         </div>
+        <div class="span2 muted" id="ed-whatif-note"></div>
       </div>
+    </section>
+
+    <section class="card" id="copilot-card">
+      <h2>Copilot</h2>
+      <p class="muted" style="margin:0 0 8px">Say what the design has to do. Constraints are applied
+        exactly and the layout is proven, not guessed &mdash; and every temperature in the answer is a
+        link to the solve it came from.</p>
+      <textarea id="copilot-text" rows="2" maxlength="500" placeholder="under 85 C at 30 W, memory on the left, SerDes at the edge"></textarea>
+      <div class="editor-buttons">
+        <button id="copilot-ask" class="btn btn-small btn-primary">Ask</button>
+        <button id="copilot-apply" class="btn btn-small hidden">Apply this layout</button>
+      </div>
+      <div id="copilot-out" class="muted"></div>
     </section>
   </aside>
 

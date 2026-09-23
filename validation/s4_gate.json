@@ -1,0 +1,307 @@
+{
+  "gate": "surrogate p95 error inside the S1 band on held-out packages; guided search scores at least 5x fewer layouts and returns the identical optimum; the copilot cannot state a temperature that is not in a solve record",
+  "surrogate": {
+    "model": "thermal-surrogate/v1",
+    "dataset": "thermal-peaks/v1",
+    "test_designs": 506,
+    "test_packages": 32,
+    "p95_err_over_band": 0.3552833829442488,
+    "inside_band_pct": 100.0,
+    "abs_err_k": {
+      "p50": 0.12772344196092433,
+      "p95": 1.027699955788158,
+      "max": 3.896175784720981
+    },
+    "rel_err_pct": {
+      "p50": 0.2893434363428066,
+      "p95": 2.384357674371461
+    },
+    "rom_only_p95_err_over_band": 1.2096252228969264,
+    "conformal_coverage_pct": 100.0,
+    "predict_ms": 28.047384999808855,
+    "passed": true
+  },
+  "search": {
+    "cases": 11,
+    "rows": [
+      {
+        "case": "edge-ai-soc",
+        "combinations": 8294400,
+        "shipped_scored": 6,
+        "guided_scored": 3,
+        "guided_prescreened": 2,
+        "ratio": 2.0,
+        "identical_optimum": true,
+        "shipped_optimum_c": 73.04065858420076,
+        "guided_optimum_c": 73.04065858420076,
+        "shipped_s": 2.7982671999488957,
+        "guided_s": 2.2112869000411592
+      },
+      {
+        "case": "datacenter-coldplate",
+        "combinations": 8294400,
+        "shipped_scored": 11,
+        "guided_scored": 1,
+        "guided_prescreened": 10,
+        "ratio": 11.0,
+        "identical_optimum": true,
+        "shipped_optimum_c": 68.51018646822979,
+        "guided_optimum_c": 68.51018646822979,
+        "shipped_s": 3.940559700015001,
+        "guided_s": 3.1293634999892674
+      },
+      {
+        "case": "riscv-manycore",
+        "combinations": 176319369216,
+        "shipped_scored": 11485,
+        "guided_scored": 28,
+        "guided_prescreened": 19675,
+        "ratio": 410.17857142857144,
+        "identical_optimum": true,
+        "shipped_optimum_c": 65.47287399041181,
+        "guided_optimum_c": 65.47287399041181,
+        "shipped_s": 6.350550900038797,
+        "guided_s": 4.18626139999833
+      },
+      {
+        "case": "random-20mm-0",
+        "combinations": 29491200,
+        "shipped_scored": 2838,
+        "guided_scored": 32,
+        "guided_prescreened": 3068,
+        "ratio": 88.6875,
+        "identical_optimum": true,
+        "shipped_optimum_c": 72.53956222408348,
+        "guided_optimum_c": 72.53956222408348,
+        "shipped_s": 3.4462638000259176,
+        "guided_s": 2.666877499956172
+      },
+      {
+        "case": "random-20mm-1",
+        "combinations": 3061100160,
+        "shipped_scored": 733,
+        "guided_scored": 14,
+        "guided_prescreened": 1271,
+        "ratio": 52.357142857142854,
+        "identical_optimum": true,
+        "shipped_optimum_c": 68.61412428151465,
+        "guided_optimum_c": 68.61412428151465,
+        "shipped_s": 4.70643389999168,
+        "guided_s": 2.786284399975557
+      },
+      {
+        "case": "random-20mm-2",
+        "combinations": 7641694208,
+        "shipped_scored": 22442,
+        "guided_scored": 145,
+        "guided_prescreened": 23467,
+        "ratio": 154.77241379310345,
+        "identical_optimum": true,
+        "shipped_optimum_c": 93.48015882951519,
+        "guided_optimum_c": 93.48015882951519,
+        "shipped_s": 8.320858200022485,
+        "guided_s": 8.148789099999703
+      },
+      {
+        "case": "random-30mm-3",
+        "combinations": 146711230848,
+        "shipped_scored": 15512,
+        "guided_scored": 531,
+        "guided_prescreened": 12999,
+        "ratio": 29.21280602636535,
+        "identical_optimum": true,
+        "shipped_optimum_c": 104.60985708836202,
+        "guided_optimum_c": 104.60985708836202,
+        "shipped_s": 7.975050500012003,
+        "guided_s": 2.8365649999468587
+      },
+      {
+        "case": "random-40mm-4",
+        "combinations": 348678440100,
+        "shipped_scored": 1443,
+        "guided_scored": 33,
+        "guided_prescreened": 1856,
+        "ratio": 43.72727272727273,
+        "identical_optimum": true,
+        "shipped_optimum_c": 29.417247480514458,
+        "guided_optimum_c": 29.417247480514458,
+        "shipped_s": 5.840351100021508,
+        "guided_s": 5.716011399985291
+      },
+      {
+        "case": "random-40mm-5",
+        "combinations": 43046721000000,
+        "shipped_scored": 3434,
+        "guided_scored": 63,
+        "guided_prescreened": 8003,
+        "ratio": 54.507936507936506,
+        "identical_optimum": true,
+        "shipped_optimum_c": 73.96483211328075,
+        "guided_optimum_c": 73.96483211328096,
+        "shipped_s": 6.902652000018861,
+        "guided_s": 5.532390200009104
+      },
+      {
+        "case": "random-10mm-6",
+        "combinations": 186624,
+        "shipped_scored": 53,
+        "guided_scored": 9,
+        "guided_prescreened": 40,
+        "ratio": 5.888888888888889,
+        "identical_optimum": true,
+        "shipped_optimum_c": 237.80216853960087,
+        "guided_optimum_c": 237.80216853960087,
+        "shipped_s": 2.6827359999879263,
+        "guided_s": 2.3318512000259943
+      },
+      {
+        "case": "random-30mm-7",
+        "combinations": 806105664,
+        "shipped_scored": 20679,
+        "guided_scored": 15,
+        "guided_prescreened": 20865,
+        "ratio": 1378.6,
+        "identical_optimum": true,
+        "shipped_optimum_c": 76.44641379446932,
+        "guided_optimum_c": 76.44641379446932,
+        "shipped_s": 1.8481976000475697,
+        "guided_s": 1.9158533999579959
+      }
+    ],
+    "total_ratio": 89.97254004576659,
+    "median_ratio": 52.357142857142854,
+    "identical_optimum": true,
+    "target_ratio": 5.0,
+    "passed": true,
+    "learned_share": {
+      "rows": [
+        {
+          "case": "edge-ai-soc",
+          "shipped": 5,
+          "analytic_only": 3,
+          "with_learned_prior": 3
+        },
+        {
+          "case": "datacenter-coldplate",
+          "shipped": 13,
+          "analytic_only": 1,
+          "with_learned_prior": 1
+        },
+        {
+          "case": "riscv-manycore",
+          "shipped": 11569,
+          "analytic_only": 87,
+          "with_learned_prior": 28
+        },
+        {
+          "case": "random-20mm-0",
+          "shipped": 2800,
+          "analytic_only": 32,
+          "with_learned_prior": 32
+        },
+        {
+          "case": "random-20mm-1",
+          "shipped": 1096,
+          "analytic_only": 14,
+          "with_learned_prior": 14
+        },
+        {
+          "case": "random-20mm-2",
+          "shipped": 23027,
+          "analytic_only": 145,
+          "with_learned_prior": 145
+        },
+        {
+          "case": "random-30mm-3",
+          "shipped": 15224,
+          "analytic_only": 536,
+          "with_learned_prior": 531
+        },
+        {
+          "case": "random-40mm-4",
+          "shipped": 1385,
+          "analytic_only": 36,
+          "with_learned_prior": 33
+        },
+        {
+          "case": "random-40mm-5",
+          "shipped": 4609,
+          "analytic_only": 65,
+          "with_learned_prior": 63
+        },
+        {
+          "case": "random-10mm-6",
+          "shipped": 43,
+          "analytic_only": 9,
+          "with_learned_prior": 9
+        },
+        {
+          "case": "random-30mm-7",
+          "shipped": 20414,
+          "analytic_only": 15,
+          "with_learned_prior": 15
+        }
+      ],
+      "shipped_total": 80185,
+      "analytic_total": 943,
+      "learned_total": 874,
+      "analytic_ratio": 85.03181336161188,
+      "learned_extra_ratio": 1.0789473684210527,
+      "combined_ratio": 91.74485125858124
+    }
+  },
+  "copilot": {
+    "questions": [
+      {
+        "question": "under 80 C at 12 W, memory on the left, SerDes at the edge",
+        "citations": 4,
+        "records": 4,
+        "not_understood": [
+          "SerDes at the edge"
+        ],
+        "meets_limit": true,
+        "every_temperature_cited": true
+      },
+      {
+        "question": "keep the NPU in the centre and find the coolest layout",
+        "citations": 1,
+        "records": 1,
+        "not_understood": [],
+        "meets_limit": null,
+        "every_temperature_cited": true
+      },
+      {
+        "question": "under 40 C with a cold plate, CPU near memory",
+        "citations": 4,
+        "records": 4,
+        "not_understood": [],
+        "meets_limit": true,
+        "every_temperature_cited": true
+      },
+      {
+        "question": "make it purple and quiet",
+        "citations": 2,
+        "records": 2,
+        "not_understood": [
+          "make it purple",
+          "quiet"
+        ],
+        "meets_limit": null,
+        "every_temperature_cited": true
+      }
+    ],
+    "adversarial": {
+      "uncited temperature": {
+        "fell_back_to_template": true,
+        "narrative_audits": true
+      },
+      "cited but wrong value": {
+        "fell_back_to_template": true,
+        "narrative_audits": true
+      }
+    },
+    "offline": true,
+    "passed": true
+  },
+  "passed": true
+}

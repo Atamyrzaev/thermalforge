@@ -126,6 +126,27 @@ export function drawPackageMap(ctx, width, height, opts) {
     ctx.fillText("x, y in mm", x0, y0 + h + 19);
   }
 
+  // Surrogate what-if: where this part would be cooler. Estimates, drawn as
+  // translucent squares over the map, with the best one outlined. The label
+  // beside the canvas says they are estimates; the solver runs on the drop.
+  if (opts.hint && opts.hint.spots && opts.hint.spots.length) {
+    const { spots, wMm, hMm, lo, hi, bestKey } = opts.hint;
+    for (const sp of spots) {
+      const px = toX(sp.x_mm), py = toY(sp.y_mm + hMm);
+      const [r, g, b] = tempColor(sp.peak_c, lo, hi);
+      ctx.fillStyle = `rgba(${r | 0},${g | 0},${b | 0},0.45)`;
+      ctx.fillRect(px, py, wMm * s, hMm * s);
+    }
+    const best = spots.find((sp) => `${sp.x_mm},${sp.y_mm}` === bestKey);
+    if (best) {
+      ctx.strokeStyle = "#7CFFB2";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(toX(best.x_mm) + 1, toY(best.y_mm + hMm) + 1, wMm * s - 2, hMm * s - 2);
+      ctx.setLineDash([]);
+    }
+  }
+
   // Chiplets.
   for (const c of opts.chiplets) {
     const px = toX(c.x_mm), py = toY(c.y_mm + c.h_mm);
