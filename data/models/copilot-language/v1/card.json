@@ -1,0 +1,38 @@
+{
+  "name": "copilot-language",
+  "version": 1,
+  "created": "2026-09-23T21:50:35",
+  "commit": "424da29",
+  "model_sha256": "01e8e0bf16ed71841c637471e8a5cfc4bbcaaaf2570b15baf7f23d866a6b0a04",
+  "kind": "hashed n-gram softmax over masked clauses",
+  "training": {
+    "clauses": 40000,
+    "dim": 4096,
+    "epochs": 40,
+    "generated_val_accuracy": 0.9975,
+    "threshold": 0.4,
+    "threshold_target_precision": 0.97,
+    "train_s": 6845.2148953999995
+  },
+  "held_out": {
+    "requests": 101,
+    "exact_request_match_pct": 92.07920792079207,
+    "intent_precision": 0.9482758620689655,
+    "intent_recall": 0.9482758620689655,
+    "intent_f1": 0.9482758620689655,
+    "junk_requests": 15,
+    "junk_ignored_pct": 93.33333333333333,
+    "part_linking_pct": 94.0
+  },
+  "held_out_b": {
+    "requests": 47,
+    "exact_request_match_pct": 78.72340425531915,
+    "intent_precision": 0.8775510204081632,
+    "intent_recall": 0.8431372549019608,
+    "intent_f1": 0.86,
+    "junk_requests": 8,
+    "junk_ignored_pct": 87.5,
+    "part_linking_pct": 90.0
+  },
+  "note": "decides what to ask the solver; never produces a temperature. Measured on hand-written requests, not on generated text."
+}

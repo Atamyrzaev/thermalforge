@@ -1,0 +1,49 @@
+{
+  "what": "A THIRD hand-written set, written after every fix and measured ONCE. Sets A and B were each measured several times while the parser and corpus were改 improved, and a set you measure repeatedly stops being held out however carefully you avoid copying its sentences into training. This one exists so there is a number nobody iterated against.",
+  "design": {
+    "cpu0": "CPU Core", "gpu0": "GPU Core", "hbm0": "HBM Memory",
+    "npu0": "NPU Accelerator", "ser0": "SerDes"
+  },
+  "requests": [
+    {"text": "nothing on this die is allowed past 97 degrees", "intents": ["LIMIT"]},
+    {"text": "we sell it as a 70c part so hold that", "intents": ["LIMIT"]},
+    {"text": "how does it look at 45 watts", "intents": ["TOTAL_POWER"]},
+    {"text": "total board power lands around 28 W", "intents": ["TOTAL_POWER"]},
+    {"text": "the graphics die on its own is 16 watts", "intents": ["PART_POWER"], "parts": {"PART_POWER": ["gpu0"]}},
+
+    {"text": "i'd sooner have the dram over on the left", "intents": ["LEFT"], "parts": {"LEFT": ["hbm0"]}},
+    {"text": "shove the shader die to the right please", "intents": ["RIGHT"], "parts": {"RIGHT": ["gpu0"]}},
+    {"text": "the host core wants to be up top", "intents": ["TOP"], "parts": {"TOP": ["cpu0"]}},
+    {"text": "accelerator along the bottom edge of the package", "intents": ["BOTTOM"], "parts": {"BOTTOM": ["npu0"]}},
+    {"text": "the link phy has to be right out on the boundary", "intents": ["EDGE"], "parts": {"EDGE": ["ser0"]}},
+    {"text": "wedge the cpu into whichever corner is coolest", "intents": ["CORNER"], "parts": {"CORNER": ["cpu0"]}},
+    {"text": "ml block sits in the centre of the substrate", "intents": ["CENTRE"], "parts": {"CENTRE": ["npu0"]}},
+
+    {"text": "the hbm stack is already attached, so it isn't moving", "intents": ["FIXED"], "parts": {"FIXED": ["hbm0"]}},
+    {"text": "treat the io position as immovable", "intents": ["FIXED"], "parts": {"FIXED": ["ser0"]}},
+    {"text": "the cpu and the memory need to be neighbours", "intents": ["NEAR"], "parts": {"NEAR": ["cpu0", "hbm0"]}},
+    {"text": "run the shortest wire you can from the npu to the cache", "intents": ["NEAR"], "parts": {"NEAR": ["npu0", "hbm0"]}},
+
+    {"text": "there is no spreader in this build", "intents": ["COOLING_DIRECT"]},
+    {"text": "we put a copper ihs over it", "intents": ["COOLING_LID"]},
+    {"text": "forced air, proper finned sink", "intents": ["COOLING_HEATSINK"]},
+    {"text": "it mounts to a liquid cold plate", "intents": ["COOLING_COLDPLATE"]},
+    {"text": "try the 35 mm body instead", "intents": ["SIZE"]},
+    {"text": "work out where everything should sit", "intents": ["OPTIMIZE"]},
+
+    {"text": "keep the cpu and the npu both in the middle", "intents": ["CENTRE"], "parts": {"CENTRE": ["cpu0", "npu0"]}},
+    {"text": "memory hard left, io hard right, under 92 degrees", "intents": ["LEFT", "RIGHT", "LIMIT"], "parts": {"LEFT": ["hbm0"], "RIGHT": ["ser0"]}},
+    {"text": "at 38 watts with a cold plate, what layout keeps it under 70c", "intents": ["TOTAL_POWER", "COOLING_COLDPLATE", "OPTIMIZE", "LIMIT"]},
+    {"text": "pin the serdes to the edge, leave the hbm alone, and cool it under 85", "intents": ["EDGE", "FIXED", "LIMIT"], "parts": {"EDGE": ["ser0"], "FIXED": ["hbm0"]}},
+    {"text": "gpu next to the memory, 30 W, 20mm package", "intents": ["NEAR", "TOTAL_POWER", "SIZE"], "parts": {"NEAR": ["gpu0", "hbm0"]}},
+    {"text": "the npu shoud be centred and the cpu shoud be at the edge", "intents": ["CENTRE", "EDGE"], "parts": {"CENTRE": ["npu0"], "EDGE": ["cpu0"]}},
+
+    {"text": "can we drop a layer from the substrate stackup", "intents": []},
+    {"text": "what's the lead time on this package", "intents": []},
+    {"text": "add a temperature sensor to the die", "intents": []},
+    {"text": "send the floorplan to the customer", "intents": []},
+    {"text": "bump the interface to 64 lanes", "intents": []},
+    {"text": "afternoon, got a minute?", "intents": []},
+    {"text": "how many masks does this need", "intents": []}
+  ]
+}

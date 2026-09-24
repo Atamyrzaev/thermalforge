@@ -12,12 +12,17 @@ record and the text is audited before anyone sees it. The copilot is
 structurally unable to state a temperature that is not in a solve record: its
 prose has no way to carry one, and its output is refused if it does.
 
-It is deterministic and offline: a phrase grammar, not a language model. That
-is a choice, not a limitation to apologise for. The app works with no network,
-and the S4 rule is that it stays that way; and a grammar can say exactly which
-words it did not understand, which it does, instead of guessing. A language
-model can be put in front of it later (Explainer below): its text goes through
-the same audit, and an uncited temperature is refused the same way.
+Reading the request is a TRAINED model (ai/language.py), not a list of
+phrasings: it was trained on generated paraphrases and measured on hand-written
+requests, and it abstains when it is not confident rather than applying the
+nearest keyword match. The phrase grammar below is kept as the fallback for
+when no model is registered, so the app still works with nothing trained.
+
+Both are offline. The app runs with no network and the S4 rule is that it stays
+that way, so the model is a few hundred kilobytes of weights that ship with the
+repository, not a call to somebody's API. Writing the ANSWER stays templated and
+cited; a language model can be put in front of that later (Explainer below), and
+its text goes through the same audit.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from ai import language as lang
 from ai import records as rec
 
 SYNONYMS: Dict[str, Tuple[str, ...]] = {
@@ -85,7 +91,85 @@ def match_parts(phrase: str, chiplets: Sequence[dict]) -> List[str]:
     return hits
 
 
-def parse(text: str, chiplets: Sequence[dict]) -> Plan:
+_MODEL: List[object] = []          # [] unknown, [None] none registered, [model]
+
+
+def language_model():
+    """The registered reader, or None. Loaded once; the copilot works either
+    way, because the grammar is still there."""
+    if not _MODEL:
+        try:
+            model, _card = lang.load_registered()
+            _MODEL.append(model)
+        except Exception:  # noqa: BLE001 -- nothing registered, or unreadable
+            _MODEL.append(None)
+    return _MODEL[0]
+
+
+INTENT_KIND = {"LEFT": "left", "RIGHT": "right", "TOP": "top", "BOTTOM": "bottom",
+               "EDGE": "edge", "CORNER": "corner", "CENTRE": "centre", "FIXED": "fixed"}
+INTENT_COOLING = {"COOLING_DIRECT": "direct", "COOLING_LID": "lid",
+                  "COOLING_HEATSINK": "lid_heatsink", "COOLING_COLDPLATE": "coldplate"}
+
+
+def parse_learned(text: str, chiplets: Sequence[dict], model) -> Plan:
+    """What the model read, turned into the plan the optimizer runs. The model
+    decides what each clause ASKS for; the quantities are read deterministically,
+    because there is nothing to learn about what 85 C means."""
+    plan = Plan(text=text)
+    for r in lang.read(text, chiplets, model):
+        if not r.understood:
+            plan.not_understood.append(r.text)
+            continue
+        got = lang.numbers(r.text)
+        if r.intent == "LIMIT":
+            value = got.get("temp", got.get("bare"))
+            if value is None:
+                plan.not_understood.append(r.text)
+                continue
+            plan.max_peak_c = value
+        elif r.intent == "TOTAL_POWER":
+            if "watt" not in got:
+                plan.not_understood.append(r.text)
+                continue
+            plan.total_power_w = got["watt"]
+        elif r.intent == "PART_POWER":
+            if "watt" not in got:
+                plan.not_understood.append(r.text)
+                continue
+            for pid in r.parts:
+                plan.part_power_w[pid] = got["watt"]
+        elif r.intent == "SIZE":
+            value = got.get("mm", got.get("bare"))
+            if value is None:
+                plan.not_understood.append(r.text)
+                continue
+            plan.size_mm = value
+        elif r.intent in INTENT_COOLING:
+            plan.cooling = INTENT_COOLING[r.intent]
+        elif r.intent == "NEAR":
+            unique = list(dict.fromkeys(r.parts))
+            plan.near.append((unique[0], unique[1], r.text))
+        elif r.intent in INTENT_KIND:
+            plan.constraints.append(Constraint(list(dict.fromkeys(r.parts)),
+                                               INTENT_KIND[r.intent], r.text))
+        elif r.intent != "OPTIMIZE":
+            plan.not_understood.append(r.text)
+            continue
+        plan.understood.append(r.text)
+    return plan
+
+
+def parse(text: str, chiplets: Sequence[dict], model=None) -> Plan:
+    """Read a request. With a registered model that is what reads it; without
+    one, the phrase grammar below does, and says so by understanding less."""
+    model = language_model() if model is None else model
+    if model is not None:
+        return parse_learned(text, chiplets, model)
+    return parse_grammar(text, chiplets)
+
+
+def parse_grammar(text: str, chiplets: Sequence[dict]) -> Plan:
     plan = Plan(text=text)
     clauses = [c.strip() for c in re.split(r"[,;]|\band\b|\bwith\b", text) if c.strip()]
     for clause in clauses:
@@ -294,9 +378,9 @@ def _template(store: rec.RecordStore, ctx: dict) -> str:
 
 def answer(text: str, package: dict, chiplets: List[dict], store: rec.RecordStore, cache,
            explainer: Optional[Explainer] = None, try_cooling: bool = True,
-           max_extra_runs: int = 2) -> Answer:
+           max_extra_runs: int = 2, model=None) -> Answer:
     import studio.engine as E
-    plan = parse(text, chiplets)
+    plan = parse(text, chiplets, model=model)
     pkg, parts = apply_plan(plan, package, chiplets)
     names = {c["id"]: c.get("name", c["id"]) for c in parts}
     spec = E.PackageSpec.parse(pkg)

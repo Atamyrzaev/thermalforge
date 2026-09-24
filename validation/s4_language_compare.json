@@ -1,0 +1,59 @@
+{
+  "model": "copilot-language/v4",
+  "sets": {
+    "A": {
+      "grammar": {
+        "requests": 101,
+        "exact_pct": 61.386138613861384,
+        "precision": 0.9868421052631579,
+        "recall": 0.646551724137931,
+        "f1": 0.78125,
+        "junk_ignored_pct": 100.0
+      },
+      "trained": {
+        "requests": 101,
+        "exact_pct": 94.05940594059406,
+        "precision": 0.9823008849557522,
+        "recall": 0.9568965517241379,
+        "f1": 0.9694323144104803,
+        "junk_ignored_pct": 93.33333333333333
+      }
+    },
+    "B": {
+      "grammar": {
+        "requests": 47,
+        "exact_pct": 38.297872340425535,
+        "precision": 0.9473684210526315,
+        "recall": 0.35294117647058826,
+        "f1": 0.5142857142857143,
+        "junk_ignored_pct": 87.5
+      },
+      "trained": {
+        "requests": 47,
+        "exact_pct": 87.23404255319149,
+        "precision": 0.9787234042553191,
+        "recall": 0.9019607843137255,
+        "f1": 0.9387755102040817,
+        "junk_ignored_pct": 87.5
+      }
+    },
+    "C": {
+      "grammar": {
+        "requests": 35,
+        "exact_pct": 45.714285714285715,
+        "precision": 0.8695652173913043,
+        "recall": 0.5263157894736842,
+        "f1": 0.6557377049180327,
+        "junk_ignored_pct": 85.71428571428571
+      },
+      "trained": {
+        "requests": 35,
+        "exact_pct": 80.0,
+        "precision": 0.8947368421052632,
+        "recall": 0.8947368421052632,
+        "f1": 0.8947368421052632,
+        "junk_ignored_pct": 71.42857142857143
+      }
+    }
+  }
+}

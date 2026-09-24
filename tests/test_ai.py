@@ -603,3 +603,121 @@ class TestCalibrationLearner:
         for c in cases:
             assert len(c.sensors) == len(c.measured_c) == 16
             assert c.package["cooling"] == "lid_heatsink"
+
+
+# ---------------------------------------------------------------------------
+# reading plain English: a trained model, and what it must refuse to do
+# ---------------------------------------------------------------------------
+
+class TestLanguage:
+    PARTS = [{"id": "cpu0", "name": "CPU Core"}, {"id": "gpu0", "name": "GPU Core"},
+             {"id": "hbm0", "name": "HBM Memory"}, {"id": "ser0", "name": "SerDes"},
+             {"id": "npu0", "name": "NPU Accelerator"}]
+
+    @pytest.fixture(scope="class")
+    def model(self):
+        from ai import language as LG
+        try:
+            model, _card = LG.load_registered()
+        except Exception as exc:  # noqa: BLE001
+            pytest.skip(f"no language model registered: {exc}")
+        return model
+
+    def test_names_and_numbers_are_masked_so_phrasing_is_what_is_learned(self):
+        from ai import language as LG
+        vocab = LG.part_vocabulary(self.PARTS)
+        masked, ids = LG.mask("keep the HBM Memory under 85 C", vocab)
+        assert masked == "keep the <part> under <temp>" and ids == ["hbm0"]
+        # a typo still finds the part, and the second part is marked apart
+        masked2, ids2 = LG.mask("put the memroy next to the SerDes", vocab)
+        assert masked2 == "put the <part> next to the <part2>" and ids2 == ["hbm0", "ser0"]
+
+    def test_units_this_app_does_not_model_are_masked_apart(self):
+        """'512 bits' must not read like a temperature: the model sees a
+        different token, which only ever appears in things it cannot do."""
+        from ai import language as LG
+        vocab = LG.part_vocabulary(self.PARTS)
+        assert "<other>" in LG.mask("increase the bus width to 512 bits", vocab)[0]
+        assert "<temp>" in LG.mask("keep it under 85 degrees", vocab)[0]
+
+    def test_features_are_stable_across_processes(self):
+        """Hashing with Python's hash() would bucket the same n-gram
+        differently in the next process, and a saved model would read its own
+        weights as noise."""
+        import subprocess
+        from ai import language as LG
+        here = float(LG.features("keep <part> on the left")[:64].sum())
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, r'" + str(pathlib.Path(__file__).resolve().parent.parent)
+             + "'); from ai import language as L; print(float(L.features('keep <part> on the left')[:64].sum()))"],
+            capture_output=True, text=True, check=True)
+        assert float(out.stdout.strip()) == pytest.approx(here, abs=1e-12)
+
+    def test_quantities_are_read_deterministically_typos_and_all(self):
+        from ai import language as LG
+        assert LG.numbers("keep it under 85 C at 30 W")["temp"] == 85.0
+        assert LG.numbers("keep it under 85 C at 30 W")["watt"] == 30.0
+        assert LG.numbers("under 90 degres")["temp"] == 90.0        # misspelled unit
+        assert LG.numbers("30 wats total")["watt"] == 30.0
+        assert LG.numbers("on a 30mm package")["mm"] == 30.0
+
+    def test_it_reads_a_request_nobody_wrote_a_rule_for(self, model):
+        from ai import language as LG
+        reads = {r.intent: r for r in LG.read(
+            "i'd sooner have the dram over on the left", self.PARTS, model) if r.understood}
+        assert "LEFT" in reads and reads["LEFT"].parts == ["hbm0"]
+
+    def test_one_constraint_over_two_parts_stays_one_constraint(self, model):
+        """Splitting on 'and' would make 'keep the cpu' its own instruction --
+        and it reads as one ('keep it low'), which is the trap."""
+        from ai import language as LG
+        reads = [r for r in LG.read("keep the cpu and gpu in the middle", self.PARTS, model)
+                 if r.understood]
+        assert len(reads) == 1 and reads[0].intent == "CENTRE"
+        assert set(reads[0].parts) == {"cpu0", "gpu0"}
+
+    def test_it_follows_a_pronoun_back_to_the_part(self, model):
+        from ai import language as LG
+        reads = [r for r in LG.read("freeze the hbm, put the cpu next to it",
+                                    self.PARTS, model) if r.understood]
+        near = [r for r in reads if r.intent == "NEAR"]
+        assert near and set(near[0].parts) == {"cpu0", "hbm0"}
+
+    def test_it_says_so_rather_than_guessing(self, model):
+        """The thing that must not happen: an off-topic request quietly
+        turning into a constraint the user never asked for."""
+        from ai import language as LG
+        for junk in ("make the report prettier", "what's the lead time on this package",
+                     "add error correction to the memory"):
+            assert not [r for r in LG.read(junk, self.PARTS, model) if r.understood], junk
+
+    def test_the_registered_model_still_reads_the_set_it_was_never_tuned_on(self, model):
+        """Set C was written last and measured once. This pins it: a change
+        that quietly makes the reader worse fails here."""
+        from tools.ai_train_language import evaluate
+        root = pathlib.Path(__file__).resolve().parent.parent
+        result = evaluate(model, root / "validation" / "language_heldout_c.json")
+        assert result["exact_request_match_pct"] >= 75.0, result["mistakes"]
+        assert result["intent_precision"] >= 0.85
+        assert result["intent_recall"] >= 0.80
+        assert result["part_linking_pct"] >= 90.0
+
+    def test_the_copilot_still_cannot_state_an_uncited_temperature(self, cache, demo, model):
+        """The reader changed; the guarantee did not."""
+        pkg, chips = demo
+        store = REC.RecordStore()
+        answer = CO.answer("i'd like the dram on the left and nothing over 120 degrees",
+                           pkg, chips, store, cache, model=model)
+        assert REC.audit(answer.narrative, store)
+        assert any(c.kind == "left" for c in answer.plan.constraints)
+        assert answer.plan.max_peak_c == 120.0
+
+    def test_without_a_model_the_grammar_still_answers(self, cache, demo):
+        """No model registered is not a broken app: the phrase grammar takes
+        over, understands less, and says so."""
+        pkg, chips = demo
+        store = REC.RecordStore()
+        plan = CO.parse_grammar("under 120 C, memory on the left", chips)
+        assert plan.max_peak_c == 120.0
+        assert [c.kind for c in plan.constraints] == ["left"]

@@ -1,0 +1,66 @@
+{
+  "what": "A SECOND hand-written held-out set, written after the corpus and the parser were fixed against set A. Set A informed which CATEGORIES of phrasing were weak (questions, negations, fragments, several asks in one breath), and fixing categories you learned about from a test set can flatter that test set. This one was written afterwards and measured once, so it says whether the improvement generalises or whether set A had been fitted.",
+  "design": {
+    "cpu0": "CPU Core", "gpu0": "GPU Core", "hbm0": "HBM Memory",
+    "npu0": "NPU Accelerator", "ser0": "SerDes"
+  },
+  "requests": [
+    {"text": "the part can't get hotter than 78 degrees in the field", "intents": ["LIMIT"]},
+    {"text": "our qual limit is 105c, no exceptions", "intents": ["LIMIT"]},
+    {"text": "anything past 92 and we fail qual", "intents": ["LIMIT"]},
+    {"text": "hold the hot spot to 88 celsius", "intents": ["LIMIT"]},
+
+    {"text": "it'll be chewing 22 watts in this mode", "intents": ["TOTAL_POWER"]},
+    {"text": "let's say the die total is 18W", "intents": ["TOTAL_POWER"]},
+    {"text": "model it at 60 watts, worst case", "intents": ["TOTAL_POWER"]},
+
+    {"text": "the shader block is pulling 11 W on its own", "intents": ["PART_POWER"], "parts": {"PART_POWER": ["gpu0"]}},
+    {"text": "set the ml engine to 9 watts", "intents": ["PART_POWER"], "parts": {"PART_POWER": ["npu0"]}},
+
+    {"text": "slide the dram stack over to the left", "intents": ["LEFT"], "parts": {"LEFT": ["hbm0"]}},
+    {"text": "host processor on the left please", "intents": ["LEFT"], "parts": {"LEFT": ["cpu0"]}},
+    {"text": "the render block should live on the right", "intents": ["RIGHT"], "parts": {"RIGHT": ["gpu0"]}},
+    {"text": "stick the tpu up the top end", "intents": ["TOP"], "parts": {"TOP": ["npu0"]}},
+    {"text": "cache down at the bottom of the substrate", "intents": ["BOTTOM"], "parts": {"BOTTOM": ["hbm0"]}},
+    {"text": "the transceiver must sit against the outside wall", "intents": ["EDGE"], "parts": {"EDGE": ["ser0"]}},
+    {"text": "phy out at the rim where the cables land", "intents": ["EDGE"], "parts": {"EDGE": ["ser0"]}},
+    {"text": "park the cpu in a corner of the die", "intents": ["CORNER"], "parts": {"CORNER": ["cpu0"]}},
+    {"text": "i want the ai engine bang in the middle of the package", "intents": ["CENTRE"], "parts": {"CENTRE": ["npu0"]}},
+
+    {"text": "the memory stack is bonded already so don't shift it", "intents": ["FIXED"], "parts": {"FIXED": ["hbm0"]}},
+    {"text": "serdes position is frozen", "intents": ["FIXED"], "parts": {"FIXED": ["ser0"]}},
+
+    {"text": "i want the shortest possible link from the cpu to the dram", "intents": ["NEAR"], "parts": {"NEAR": ["cpu0", "hbm0"]}},
+    {"text": "keep the npu and the memory side by side", "intents": ["NEAR"], "parts": {"NEAR": ["npu0", "hbm0"]}},
+    {"text": "gpu hard up against the cache please", "intents": ["NEAR"], "parts": {"NEAR": ["gpu0", "hbm0"]}},
+
+    {"text": "this part ships lidless", "intents": ["COOLING_DIRECT"]},
+    {"text": "assume no spreader at all", "intents": ["COOLING_DIRECT"]},
+    {"text": "there'll be an ihs over the die", "intents": ["COOLING_LID"]},
+    {"text": "fins and a fan on top", "intents": ["COOLING_HEATSINK"]},
+    {"text": "it sits on a water block", "intents": ["COOLING_COLDPLATE"]},
+
+    {"text": "what if we went to a 25 mm substrate", "intents": ["SIZE"]},
+    {"text": "shrink the footprint to 15mm", "intents": ["SIZE"]},
+
+    {"text": "sort out where everything goes", "intents": ["OPTIMIZE"]},
+    {"text": "give me your best arrangement of the chiplets", "intents": ["OPTIMIZE"]},
+
+    {"text": "keep the npu and cpu in the centre", "intents": ["CENTRE"], "parts": {"CENTRE": ["npu0", "cpu0"]}},
+    {"text": "hbm and cache both on the left side", "intents": ["LEFT"], "parts": {"LEFT": ["hbm0"]}},
+    {"text": "under 88c at 35 W on a 30 mm package", "intents": ["LIMIT", "TOTAL_POWER", "SIZE"]},
+    {"text": "water cooled, 60 watts, npu dead centre, io at the edge", "intents": ["COOLING_COLDPLATE", "TOTAL_POWER", "CENTRE", "EDGE"], "parts": {"CENTRE": ["npu0"], "EDGE": ["ser0"]}},
+    {"text": "the serdes goes at the edge because the connectors are there, and keep it under 95", "intents": ["EDGE", "LIMIT"], "parts": {"EDGE": ["ser0"]}},
+    {"text": "freeze the hbm, put the cpu next to it, and find the coolest layout under 85c", "intents": ["FIXED", "NEAR", "OPTIMIZE", "LIMIT"], "parts": {"FIXED": ["hbm0"], "NEAR": ["cpu0", "hbm0"]}},
+    {"text": "memroy left, srdes edge, 30 wats, under 90 degres", "intents": ["LEFT", "EDGE", "TOTAL_POWER", "LIMIT"], "parts": {"LEFT": ["hbm0"], "EDGE": ["ser0"]}},
+
+    {"text": "can we use a cheaper substrate material", "intents": []},
+    {"text": "add error correction to the memory", "intents": []},
+    {"text": "who signed off on this floorplan", "intents": []},
+    {"text": "make the report prettier", "intents": []},
+    {"text": "run it past the mechanical team", "intents": []},
+    {"text": "good morning", "intents": []},
+    {"text": "increase the bus width to 512 bits", "intents": []},
+    {"text": "what's the yield on this node", "intents": []}
+  ]
+}

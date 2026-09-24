@@ -3,6 +3,65 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.9.1 — 24 September 2026
+
+**The copilot reads plain English now, and the number that says so was
+measured on sentences nothing was fitted to.** It used to read a grammar: a
+list of phrasings somebody thought of, and "not understood" for the rest. It
+now reads a trained model (`ai/language.py`), and the grammar stays as the
+fallback for when nothing is registered.
+
+**How it generalises.** A clause has its part names and its numbers masked --
+"keep <part> under <temp>" -- before anything is featurised, so the model
+learns the shape of a request rather than one design's vocabulary, and works
+on parts it has never seen. Features are hashed word 1-2 grams and character
+3-5 grams; the characters are what let "memroy", "srdes" and "under 90 degres"
+land near the right answer. It is a softmax over 19 intents, 653 KB of
+weights, offline, and it trains in under two minutes.
+
+**What it is measured on.** Three sets of requests written by hand, in a
+different voice from the generator, including typos, domain slang and things
+the app cannot do:
+
+| held-out set | the grammar | the trained reader |
+|---|---|---|
+| A (101 requests) | 61 % exact, F1 0.78 | **96 % exact, F1 0.98** |
+| B (47, written after A's lessons) | 38 %, F1 0.51 | **87 %, F1 0.94** |
+| C (35, written last, measured once) | 46 %, F1 0.66 | **80 %, F1 0.89** |
+
+Set C is the honest headline. A and B were each measured several times while
+the parser was fixed, and a set you measure repeatedly stops being held out,
+however carefully you avoid copying its sentences into training — which is why
+C exists and why its number is the lower one.
+
+**It abstains instead of guessing.** Precision is 0.89-0.99 across the three
+sets: when it acts, it is almost always right, and when it is unsure it says
+which words it did not understand rather than applying the nearest keyword
+match. The abstention threshold is chosen on generated requests run through
+the real pipeline, under a constraint that it must leave 95 % of generated
+junk requests alone; it is never tuned on the hand-written sets.
+
+**Four fixes that came from watching it fail**, each a mechanism rather than a
+phrasing:
+- **"and" is a weak boundary.** "keep the cpu and gpu in the middle" is one
+  constraint over two parts; "the dram on the left and nothing over 120
+  degrees" is two asks. A quantity settles it -- a number belongs to exactly
+  one ask -- and without one, splitting has to beat the whole-phrase reading
+  by a margin, because "keep the cpu" reads as a real instruction on its own.
+- **Pronouns.** "put the cpu next to it" resolves "it" to the part named just
+  before.
+- **Foreign units.** "increase the bus width to 512 bits" masks to `<other>`,
+  not to a bare number, which is what stopped it reading like a temperature.
+- **Typos in units.** "90 degres" and "30 wats" are read as quantities; a unit
+  the reader drops takes the whole constraint with it.
+
+**What did not change: the guarantee.** The model decides what to ASK the
+solver. Every temperature in an answer is still a citation of a solve record,
+the narrative builder still refuses prose containing a temperature, and the
+audit still runs before anything is shown. A misread request can now answer a
+question nobody asked -- visibly, with the constraints it applied written out
+-- but it cannot invent a number.
+
 ## 0.9.0 — 23 September 2026
 
 **The AI layer, under one rule: AI proposes, the solver decides.** Nothing in

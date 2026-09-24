@@ -1,0 +1,68 @@
+{
+  "requests": 35,
+  "exact_request_match_pct": 82.85714285714286,
+  "intent_precision": 0.918918918918919,
+  "intent_recall": 0.8947368421052632,
+  "intent_f1": 0.9066666666666667,
+  "junk_requests": 7,
+  "junk_ignored_pct": 71.42857142857143,
+  "part_linking_pct": 100.0,
+  "mistakes": [
+    {
+      "text": "treat the io position as immovable",
+      "wanted": [
+        "FIXED"
+      ],
+      "got": []
+    },
+    {
+      "text": "keep the cpu and the npu both in the middle",
+      "wanted": [
+        "CENTRE"
+      ],
+      "got": [
+        "BOTTOM"
+      ]
+    },
+    {
+      "text": "memory hard left, io hard right, under 92 degrees",
+      "wanted": [
+        "LEFT",
+        "LIMIT",
+        "RIGHT"
+      ],
+      "got": [
+        "LEFT",
+        "LIMIT"
+      ]
+    },
+    {
+      "text": "at 38 watts with a cold plate, what layout keeps it under 70c",
+      "wanted": [
+        "COOLING_COLDPLATE",
+        "LIMIT",
+        "OPTIMIZE",
+        "TOTAL_POWER"
+      ],
+      "got": [
+        "COOLING_COLDPLATE",
+        "LIMIT",
+        "TOTAL_POWER"
+      ]
+    },
+    {
+      "text": "can we drop a layer from the substrate stackup",
+      "wanted": [],
+      "got": [
+        "SIZE"
+      ]
+    },
+    {
+      "text": "afternoon, got a minute?",
+      "wanted": [],
+      "got": [
+        "COOLING_HEATSINK"
+      ]
+    }
+  ]
+}

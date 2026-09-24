@@ -1,0 +1,54 @@
+{
+  "name": "copilot-language",
+  "version": 4,
+  "created": "2026-09-24T19:09:05",
+  "commit": "424da29",
+  "model_sha256": "ff861e545599072925793e6cc05444aa656039a019589e28b0253b17ba88c195",
+  "kind": "hashed n-gram softmax over masked clauses",
+  "training": {
+    "clauses": 30000,
+    "dim": 4096,
+    "epochs": 40,
+    "generated_val_accuracy": 0.9983333333333333,
+    "threshold": 0.15,
+    "threshold_chosen_on": "generated requests, best F1",
+    "threshold_curve": {
+      "0.15": 0.9725848563968669,
+      "0.2": 0.9725848563968669,
+      "0.25": 0.9725848563968669,
+      "0.3": 0.9725848563968669,
+      "0.35": 0.9719137818419333,
+      "0.4": 0.9725490196078432,
+      "0.45": 0.9725490196078432,
+      "0.5": 0.9725490196078432,
+      "0.55": 0.9725130890052357,
+      "0.6": 0.9704530531845043,
+      "0.65": 0.9697766097240473,
+      "0.7": 0.9690992767915845,
+      "0.75": 0.965016501650165,
+      "0.8": 0.96158940397351
+    },
+    "train_s": 55.343745200007106
+  },
+  "held_out": {
+    "requests": 101,
+    "exact_request_match_pct": 96.03960396039604,
+    "intent_precision": 0.9912280701754386,
+    "intent_recall": 0.9741379310344828,
+    "intent_f1": 0.9826086956521738,
+    "junk_requests": 15,
+    "junk_ignored_pct": 93.33333333333333,
+    "part_linking_pct": 96.07843137254902
+  },
+  "held_out_b": {
+    "requests": 47,
+    "exact_request_match_pct": 91.48936170212765,
+    "intent_precision": 1.0,
+    "intent_recall": 0.9215686274509803,
+    "intent_f1": 0.9591836734693878,
+    "junk_requests": 8,
+    "junk_ignored_pct": 100.0,
+    "part_linking_pct": 95.83333333333333
+  },
+  "note": "decides what to ask the solver; never produces a temperature. Measured on hand-written requests, not on generated text."
+}
