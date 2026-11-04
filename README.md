@@ -4,6 +4,13 @@ Thermal co-optimization for 3D-IC chiplet packages: a verified steady-state heat
 solver, and a placement search that returns the **provably coolest** layout on a
 stated grid rather than a good guess.
 
+> **Author:** ATAMYRZAEV ADKHAMZHON  ·  **Licence:** proprietary, all rights
+> reserved — see [LICENSE](LICENSE). The source is published so that the
+> engineering and the validation evidence in it can be checked; it is not open
+> source, and using it needs written permission. Third-party material —
+> including a CC-BY 4.0 dataset extract that is *not* under this repository's
+> licence — is listed in [NOTICE](NOTICE).
+
 ```bash
 python run_studio.py
 ```
@@ -125,7 +132,7 @@ provides; that is what local refinement is for, and it is not built yet.
 | `tools/` | `mesh_convergence.py` and `material_sensitivity.py` (the error budget), `band_check.py` (is the band actually a bound?), `correlate.py` (measured against modelled), `smoke.py` (does a build start and answer?) |
 | `validation/` | Verification artifacts, versioned as evidence: the studies, plus `cases/` and `correlation/` |
 | `examples/` | Power maps to import: one matrix form, one region table |
-| `tests/` | 375 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py` |
+| `tests/` | 452 tests: `test_core.py`, `test_studio.py`, `test_benchmarks.py`, `test_ai.py` |
 
 ## Development
 
@@ -137,3 +144,16 @@ python -m pytest -q
 The three protected modules — `src/thermal_solver.py`, `src/composite_materials.py`
 and `src/exhaustive.py` — carry the numerical core; change them only with a test
 that fails first.
+
+## Licence and citation
+
+Copyright (c) 2026 ATAMYRZAEV ADKHAMZHON. All rights reserved. See
+[LICENSE](LICENSE) for what reading this repository does and does not permit,
+and [NOTICE](NOTICE) for third-party material under its own terms.
+
+If you refer to the validation work, cite the measured dataset it rests on as
+well — the evidence is only as good as its source:
+
+> F. Terraneo, A. Leva, W. Fornaciari, *An Open-hardware Platform for MPSoC
+> Thermal Modeling*, SAMOS 2019. Dataset: <https://doi.org/10.5281/zenodo.2871796>
+> (CC-BY 4.0).

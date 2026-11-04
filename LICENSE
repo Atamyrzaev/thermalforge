@@ -1,0 +1,55 @@
+RISC3D-AI
+Copyright (c) 2026 ATAMYRZAEV ADKHAMZHON. All rights reserved.
+
+PROPRIETARY SOFTWARE LICENCE
+
+This source code is made publicly readable so that the engineering and the
+validation evidence in it can be inspected and checked. It is NOT open source,
+and publication here grants no licence to use it.
+
+1. GRANT
+   You may view this repository and its history, and you may quote short
+   excerpts for commentary, review, teaching or academic citation, with
+   attribution to the copyright holder.
+
+2. RESTRICTIONS
+   Without the prior written permission of the copyright holder you may not:
+   (a) use this software, in whole or in part, for any purpose, including
+       internal, research, educational or commercial use;
+   (b) copy, fork, mirror, redistribute or publish it, except for the
+       excerpts permitted in section 1 and except as GitHub's own terms of
+       service require for the operation of that platform;
+   (c) modify it or create derivative works from it;
+   (d) sell, licence, lease, or otherwise transfer it or rights in it;
+   (e) remove or alter this notice.
+
+3. NO CONTRIBUTOR LICENCE
+   Unsolicited contributions are not accepted by default. If the copyright
+   holder agrees in writing to accept a contribution, the terms of that
+   contribution are to be agreed in writing at that time.
+
+4. THIRD-PARTY MATERIAL
+   This licence covers only material authored for this project. It does NOT
+   cover, and does not purport to relicense, the third-party material listed
+   in NOTICE, which remains under its own terms. In particular,
+   validation/measured/ttc_samos2019_steady.json is a derived extract of a
+   CC-BY 4.0 dataset and carries that dataset's licence, not this one.
+
+5. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+6. NO LIABILITY, AND WHAT THIS SOFTWARE IS NOT
+   IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR
+   OTHER LIABILITY ARISING FROM THIS SOFTWARE OR ITS USE.
+
+   This is a thermal modelling and placement tool. Its validation status is
+   stated in src/validation_status.py and validation/MEASURED_DATA.md and is
+   deliberately narrow: the temperature level and the spreading have been
+   compared with ONE measured thermal test chip under forced convection.
+   Nothing here is qualified for safety-critical decisions, and no result from
+   it should be relied on as a substitute for measurement of the actual
+   hardware.
+
+For permission to use this software, contact the copyright holder.
