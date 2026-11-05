@@ -787,11 +787,14 @@ class ThermalSolver:
 
         n_steps = int(np.ceil(total_time_s / dt))
         if n_steps > max_steps:
+            # Built before the f-string, not inside it: an expression part may
+            # not contain a backslash until Python 3.12, and this project
+            # supports 3.10.
+            hint = '/ switch to method="crank_nicolson"' if method == "explicit" else ""
             raise ThermalSolverError(
                 f"Requested run would take {n_steps} steps (dt={dt:.4e}s over "
                 f"{total_time_s:.4e}s), exceeding max_steps={max_steps}. Increase "
-                f"max_steps, shorten total_time_s, or use a larger dt "
-                f"{'/ switch to method=\"crank_nicolson\"' if method == 'explicit' else ''}."
+                f"max_steps, shorten total_time_s, or use a larger dt {hint}."
             )
 
         history_T: List[np.ndarray] = []
