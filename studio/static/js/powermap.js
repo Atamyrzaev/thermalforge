@@ -1,4 +1,4 @@
-// RISC3D Studio :: power maps from a design team's own file.
+// ThermalForge Studio :: power maps from a design team's own file.
 //
 // The four built-in patterns are guesses about what is inside a chiplet. A
 // design team does not have to guess: they have the numbers. This reads the

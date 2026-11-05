@@ -1,6 +1,6 @@
 """
 optimizer.py
-RISC3D-AI :: Stage 2 -- Automated Chiplet Placement Optimizer
+ThermalForge :: Stage 2 -- Automated Chiplet Placement Optimizer
 
 Stage 1 (main.py) answers "how hot does THIS stack get?". Stage 2 answers
 "where should the chiplets go so it gets as cool as possible?".
@@ -174,7 +174,7 @@ from src.thermal_solver import (
 )
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.Optimizer")
+logger = logging.getLogger("ThermalForge.Optimizer")
 
 
 __all__ = [
@@ -1349,7 +1349,7 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
   </table>
 
   <footer>
-    RISC3D-AI Stage 2 &middot; objective: steady-state peak junction temperature
+    ThermalForge Stage 2 &middot; objective: steady-state peak junction temperature
     via <code>ThermalSolver.solve_steady_state()</code> &middot;
     overlapping layouts are never solved and never promoted to best.
   </footer>
@@ -1468,7 +1468,7 @@ def render_optimization_report(
     result: OptimizationResult,
     output_dir: str = "outputs",
     filename: str = "optimized_thermal_report.html",
-    title: str = "RISC3D-AI :: Optimized Chiplet Placement",
+    title: str = "ThermalForge :: Optimized Chiplet Placement",
     method: str = "anneal",
 ) -> str:
     """

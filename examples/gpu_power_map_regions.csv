@@ -1,4 +1,4 @@
-# RISC3D power map -- region form.
+# ThermalForge power map -- region form.
 # One row per block, measured in millimetres from the chiplet's lower-left
 # corner. Overlapping regions add. The header names the columns, so column
 # order does not matter and extra columns are ignored.

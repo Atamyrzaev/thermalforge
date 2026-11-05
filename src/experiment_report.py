@@ -1,6 +1,6 @@
 """
 experiment_report.py
-RISC3D-AI :: the engineering report for one placement experiment.
+ThermalForge :: the engineering report for one placement experiment.
 
 Answers, in order and on one page: what went in, where the chiplets started,
 how hot that was, what the optimizer was asked for, what it changed, how hot
@@ -642,9 +642,9 @@ def render_experiment_report(exp: Experiment, output_dir: str = "outputs",
     document = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<title>RISC3D-AI experiment report</title><style>{_CSS}</style></head><body>"
+        f"<title>ThermalForge experiment report</title><style>{_CSS}</style></head><body>"
         "<div class='wrap'>"
-        "<h1>RISC3D-AI :: placement experiment</h1>"
+        "<h1>ThermalForge :: placement experiment</h1>"
         f"<div class='sub'>{_esc(exp.config.case.name)} &middot; generated "
         f"{time.strftime('%Y-%m-%d %H:%M:%S')} &middot; {_esc(STATUS)}</div>"
         + "".join(body)

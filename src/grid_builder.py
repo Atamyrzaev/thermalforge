@@ -1,6 +1,6 @@
 """
 grid_builder.py
-RISC3D-AI :: 3D IC / Advanced Packaging Thermal Modeling Framework
+ThermalForge :: 3D IC / Advanced Packaging Thermal Modeling Framework
 
 GridBuilder discretizes heterogeneous 3D chip/package geometries (TSMC CoWoS-S,
 SoIC, InFO stacks) into voxelized NumPy arrays carrying per-cell material
@@ -34,7 +34,7 @@ from src.composite_materials import (CITATION as TSCI_CITATION, TSCI_K, beol_k,
                                      bump_underfill_layer_k, tsv_cell_k)
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.GridBuilder")
+logger = logging.getLogger("ThermalForge.GridBuilder")
 
 
 # ---------------------------------------------------------------------------

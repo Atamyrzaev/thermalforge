@@ -1,6 +1,6 @@
 """
 surrogate.py
-RISC3D-AI :: a screening surrogate for placement, with its error bars.
+ThermalForge :: a screening surrogate for placement, with its error bars.
 
 WHAT THIS IS
 A linear least-squares fit over five physically-motivated features per

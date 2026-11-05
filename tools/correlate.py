@@ -1,6 +1,6 @@
 """
 tools/correlate.py
-RISC3D-AI :: measured against modelled.
+ThermalForge :: measured against modelled.
 
 The product's standing limitation is that no result has been compared with a
 measured package. That is a missing INPUT, not a missing capability, and this
@@ -50,7 +50,7 @@ sys.path.insert(0, str(ROOT))
 
 from studio import engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 CASES_DIR = ROOT / "validation" / "cases"

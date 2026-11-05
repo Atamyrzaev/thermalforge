@@ -1,6 +1,6 @@
 """
 tools/ai_train_language.py
-RISC3D-AI :: train the copilot to read plain English, and measure it honestly.
+ThermalForge :: train the copilot to read plain English, and measure it honestly.
 
     python tools/ai_train_language.py --register
 

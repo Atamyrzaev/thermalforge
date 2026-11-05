@@ -1,6 +1,6 @@
 """
 tools/s4_readiness.py
-RISC3D-AI :: what the AI layer starts from, measured.
+ThermalForge :: what the AI layer starts from, measured.
 
 S4 is gated on S1 because a model trained on labels nobody can defend inherits
 the problem, and its own gate is written in S1's units: "surrogate error at the
@@ -59,7 +59,7 @@ sys.path.insert(0, str(ROOT))
 
 import studio.engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT = ROOT / "validation" / "s4_readiness.json"

@@ -1,11 +1,11 @@
 """
 packaging/build.py
-RISC3D-AI :: build the standalone app.
+ThermalForge :: build the standalone app.
 
-Produces dist/RISC3D Studio/, a folder containing everything a machine needs
+Produces dist/ThermalForge Studio/, a folder containing everything a machine needs
 to run the app -- Python, NumPy, SciPy, the solver, the UI and the measured
 validation artifacts. Copy the folder to a laptop that has never seen Python,
-double-click "RISC3D Studio.exe", and the browser app opens.
+double-click "ThermalForge Studio.exe", and the browser app opens.
 
     python packaging/build.py                # build
     python packaging/build.py --check        # build, then start it and solve
@@ -28,16 +28,16 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = ROOT / "packaging" / "risc3d_studio.spec"
-BUNDLE = ROOT / "dist" / "RISC3D Studio"
-EXE = BUNDLE / "RISC3D Studio.exe"
+SPEC = ROOT / "packaging" / "thermalforge_studio.spec"
+BUNDLE = ROOT / "dist" / "ThermalForge Studio"
+EXE = BUNDLE / "ThermalForge Studio.exe"
 CHECK_PORT = 8799
 
 
-README_FIRST = """RISC3D Studio
+README_FIRST = """ThermalForge Studio
 =============
 
-Double-click "RISC3D Studio.exe". Your browser opens the app; the console
+Double-click "ThermalForge Studio.exe". Your browser opens the app; the console
 window that appears IS the program -- closing it stops the app.
 
 The first launch takes a few seconds while Windows reads the files. After
@@ -81,11 +81,11 @@ def project_version() -> str:
 
 def make_zip(version: str) -> Path:
     """One file to hand to somebody, with the folder inside it."""
-    target = ROOT / "dist" / f"RISC3D-Studio-{version}-windows.zip"
+    target = ROOT / "dist" / f"ThermalForge-Studio-{version}-windows.zip"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted(BUNDLE.rglob("*")):
             if path.is_file():
-                archive.write(path, Path("RISC3D Studio") / path.relative_to(BUNDLE))
+                archive.write(path, Path("ThermalForge Studio") / path.relative_to(BUNDLE))
     return target
 
 

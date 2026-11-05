@@ -1,6 +1,6 @@
 """
 tools/ai_gate.py
-RISC3D-AI :: the S4 gate, measured.
+ThermalForge :: the S4 gate, measured.
 
     Surrogate error at the 95th percentile sits inside the S1 error bar on
     held-out packages; guided search scores at least 5x fewer layouts and
@@ -48,7 +48,7 @@ from ai import rom as R  # noqa: E402
 from ai import surrogate as S  # noqa: E402
 from studio.scenarios import scenarios  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT = ROOT / "validation" / "s4_gate.json"

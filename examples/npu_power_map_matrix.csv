@@ -1,4 +1,4 @@
-# RISC3D power map -- matrix form.
+# ThermalForge power map -- matrix form.
 # One number per tile, laid out like the chip: this first row is the TOP edge
 # of the chiplet. Values are relative, so watts, milliwatts, percentages or
 # activity counts all work -- the chiplet's own power is what gets shared out.

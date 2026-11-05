@@ -1,6 +1,6 @@
 """
 tools/mesh_convergence.py
-RISC3D-AI :: how much of a reported temperature is the mesh?
+ThermalForge :: how much of a reported temperature is the mesh?
 
 Runs one reference package at three lateral mesh densities (2, 1 and 0.5 mm
 cells), fits the observed order of convergence, and reports the Grid
@@ -52,7 +52,7 @@ from src.experiment import (  # noqa: E402
 )
 from src.thermal_solver import ThermalSolver  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT_DIR = ROOT / "validation"

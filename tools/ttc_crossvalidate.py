@@ -1,6 +1,6 @@
 """
 tools/ttc_crossvalidate.py
-RISC3D-AI :: calibrate on one measured pattern, predict the other twelve.
+ThermalForge :: calibrate on one measured pattern, predict the other twelve.
 
 The SAMOS 2019 thermal test chip (validation/measured/ttc_samos2019_steady.json)
 records a measured power map and a measured 16-diode temperature map for 13
@@ -46,7 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 import studio.engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 DATA_PATH = ROOT / "validation" / "measured" / "ttc_samos2019_steady.json"

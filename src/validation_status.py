@@ -1,6 +1,6 @@
 """
 validation_status.py
-RISC3D-AI :: the status every reported temperature carries.
+ThermalForge :: the status every reported temperature carries.
 
 Standing rule: the label says exactly what has been compared and nothing more.
 

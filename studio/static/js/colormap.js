@@ -1,4 +1,4 @@
-// RISC3D Studio :: colour scales.
+// ThermalForge Studio :: colour scales.
 //
 // Temperature uses the engineering-simulation rainbow (blue cool, red hot). Differences use a symmetric
 // blue-white-red scale centred on zero, so "cooler" and "hotter" are never

@@ -1,6 +1,6 @@
 """
 tests/test_core.py
-RISC3D-AI :: Core numerical correctness test suite (pytest)
+ThermalForge :: Core numerical correctness test suite (pytest)
 
 IMPORTANT INTERFACE NOTE:
 GridBuilder.__init__() accepts a config as `dict`, a JSON file path (`str`),

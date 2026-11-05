@@ -1,6 +1,6 @@
 """
 tests/test_benchmarks.py
-RISC3D-AI :: the solver against closed-form solutions.
+ThermalForge :: the solver against closed-form solutions.
 
 Every other test in this repository checks the solver against itself: its own
 residual, its own energy balance, one implementation against another. These

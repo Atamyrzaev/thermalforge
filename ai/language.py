@@ -1,6 +1,6 @@
 """
 ai/language.py
-RISC3D-AI :: the copilot's language model -- plain English in, constraints out.
+ThermalForge :: the copilot's language model -- plain English in, constraints out.
 
 The first copilot read a grammar: a list of phrasings somebody thought of, and
 "not understood" for everything else. This is a trained classifier instead. It

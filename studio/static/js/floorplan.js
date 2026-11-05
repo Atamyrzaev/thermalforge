@@ -1,4 +1,4 @@
-// RISC3D Studio :: interactive floorplan.
+// ThermalForge Studio :: interactive floorplan.
 //
 // Chiplets are dragged in physical millimetres and snap to the mesh cell, so
 // every position the user can reach is one the solver represents exactly.

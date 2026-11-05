@@ -1,11 +1,11 @@
-// RISC3D Studio :: designs on disk, and the undo history.
+// ThermalForge Studio :: designs on disk, and the undo history.
 //
 // A design is a plain JSON file: the package, the chiplets and where they sit.
 // Files are treated as data, never as instructions -- only known fields are
 // read, every number is checked, and anything unreadable is reported with a
 // message that says what to fix.
 
-export const DESIGN_FORMAT = "risc3d.design/1";
+export const DESIGN_FORMAT = "thermalforge.design/1";
 const MAX_CHIPLETS = 16;          // matches studio/engine.py
 
 export class History {
@@ -161,10 +161,10 @@ export function parseDesign(text) {
   try {
     raw = JSON.parse(text);
   } catch (err) {
-    throw new Error("that file is not JSON, so it is not a RISC3D design");
+    throw new Error("that file is not JSON, so it is not a ThermalForge design");
   }
   if (!raw || typeof raw !== "object" || raw.format !== DESIGN_FORMAT) {
-    throw new Error(`that file is not a RISC3D design (expected format "${DESIGN_FORMAT}")`);
+    throw new Error(`that file is not a ThermalForge design (expected format "${DESIGN_FORMAT}")`);
   }
   const p = raw.package;
   if (!p || typeof p !== "object") throw new Error("the file has no package");
@@ -224,7 +224,7 @@ export function saveDesign(pkg, chiplets, title) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${slug(title)}.risc3d.json`;
+  link.download = `${slug(title)}.thermalforge.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();

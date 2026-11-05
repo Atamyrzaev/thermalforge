@@ -1,6 +1,6 @@
 """
 config_loader.py
-RISC3D-AI :: Centralized Pipeline Configuration
+ThermalForge :: Centralized Pipeline Configuration
 
 Single source of truth for pipeline configuration. Loads configs/config.json
 (or a caller-specified path) into a validated PipelineConfig, so GridBuilder's
@@ -35,7 +35,7 @@ from dataclasses import MISSING, dataclass, asdict, field, fields
 from typing import Any, Dict, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.ConfigLoader")
+logger = logging.getLogger("ThermalForge.ConfigLoader")
 
 DEFAULT_CONFIG_PATH = os.path.join("configs", "config.json")
 

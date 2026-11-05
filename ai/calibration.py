@@ -1,6 +1,6 @@
 """
 ai/calibration.py
-RISC3D-AI :: fit a package family's unknowns to measured parts, with
+ThermalForge :: fit a package family's unknowns to measured parts, with
 uncertainty (roadmap S4, step 4.6).
 
 Every real package has numbers nobody published: the cooling coefficient the

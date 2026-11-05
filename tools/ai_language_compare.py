@@ -1,6 +1,6 @@
 """
 tools/ai_language_compare.py
-RISC3D-AI :: the phrase grammar and the trained reader, on the same requests.
+ThermalForge :: the phrase grammar and the trained reader, on the same requests.
 
     python tools/ai_language_compare.py
 

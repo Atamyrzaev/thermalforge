@@ -1,6 +1,6 @@
 """
 thermal_solver.py
-RISC3D-AI :: 3D IC / Advanced Packaging Thermal Modeling Framework
+ThermalForge :: 3D IC / Advanced Packaging Thermal Modeling Framework
 
 ThermalSolver consumes the voxelized arrays produced by GridBuilder
 (kx_map, ky_map, kz_map, rho_map, cp_map, q_map, boundary_mask) and solves
@@ -40,7 +40,7 @@ import scipy.sparse as sparse
 import scipy.sparse.linalg as sparse_linalg
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.ThermalSolver")
+logger = logging.getLogger("ThermalForge.ThermalSolver")
 
 # Explicit public export list. `SolverBCConfig` in particular must be
 # importable as `from src.thermal_solver import SolverBCConfig` -- it is

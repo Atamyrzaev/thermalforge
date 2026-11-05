@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "risc3d-ai"
+name = "thermalforge"
 version = "0.7.0"
 description = "Thermal co-optimization for 3D-IC chiplet packages: a verified steady-state solver and a provably optimal placement search"
 requires-python = ">=3.10"
@@ -17,7 +17,7 @@ dependencies = [
 dev = ["pytest>=7.4"]
 
 [project.scripts]
-risc3d-studio = "run_studio:main"
+thermalforge-studio = "run_studio:main"
 
 [tool.setuptools]
 packages = ["src", "studio"]

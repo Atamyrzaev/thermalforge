@@ -1,6 +1,6 @@
 """
 ai/inverse.py
-RISC3D-AI :: propose the package from the constraints (roadmap S4, step 4.5).
+ThermalForge :: propose the package from the constraints (roadmap S4, step 4.5).
 
 Given the parts, a temperature limit and (optionally) which parts talk to
 each other, find the smallest package and the lightest cooling stack that

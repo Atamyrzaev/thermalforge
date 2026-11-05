@@ -1,6 +1,6 @@
 """
 ai/copilot.py
-RISC3D-AI :: state the goal in words; get constraints, exact runs and a cited
+ThermalForge :: state the goal in words; get constraints, exact runs and a cited
 explanation (roadmap S4, step 4.4).
 
     "under 85 C at 30 W, memory on the left, SerDes at the edge"

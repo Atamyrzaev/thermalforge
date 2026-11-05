@@ -1,6 +1,6 @@
 """
 ai/language_corpus.py
-RISC3D-AI :: the training corpus for the copilot's language model.
+ThermalForge :: the training corpus for the copilot's language model.
 
 A grammar only understands the phrasings somebody thought of. A model can
 generalise past them -- but only if what it trains on is varied enough to

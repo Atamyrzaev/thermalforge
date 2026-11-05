@@ -1,4 +1,4 @@
-// RISC3D Studio :: downloadable optimization report.
+// ThermalForge Studio :: downloadable optimization report.
 //
 // A single self-contained HTML file (maps embedded as PNG data URLs) holding
 // everything needed to review a result away from the app: the inputs, the
@@ -111,7 +111,7 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>RISC3D placement report · ${escapeHtml(scenarioTitle)}</title>
+<title>ThermalForge placement report · ${escapeHtml(scenarioTitle)}</title>
 <style>
   body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; color: #172033; background: #f4f6fa; margin: 0; }
   main { max-width: 1480px; margin: 0 auto; padding: 28px 32px 40px; }
@@ -135,7 +135,7 @@ export function buildReport({ opt, pkg, scenarioTitle, colours }) {
   @media print { body { background: #fff; } main { padding: 0; } .grid3 { gap: 8px; } }
 </style></head>
 <body><main>
-  <h1>RISC3D Studio · placement report</h1>
+  <h1>ThermalForge Studio · placement report</h1>
   <div class="sub">${escapeHtml(scenarioTitle)} · generated ${created.toLocaleString()}</div>
   <div class="headline">${headline}</div>
 
@@ -217,7 +217,7 @@ export function downloadReport(args) {
   const link = document.createElement("a");
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
   link.href = url;
-  link.download = `risc3d-report-${stamp}.html`;
+  link.download = `thermalforge-report-${stamp}.html`;
   document.body.appendChild(link);
   link.click();
   link.remove();

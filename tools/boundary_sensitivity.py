@@ -1,6 +1,6 @@
 """
 tools/boundary_sensitivity.py
-RISC3D-AI :: how much of a reported temperature is the cooling number?
+ThermalForge :: how much of a reported temperature is the cooling number?
 
 The error budget already carries two measured terms: the mesh
 (tools/mesh_convergence.py) and the conductivities (tools/material_sensitivity.py).
@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT))
 
 import studio.engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT = ROOT / "validation" / "boundary_sensitivity.json"

@@ -1,6 +1,6 @@
 """
 experiment.py
-RISC3D-AI :: one placement-optimization experiment, end to end.
+ThermalForge :: one placement-optimization experiment, end to end.
 
     catalog (WHAT each chiplet is) + initial placement (WHERE it starts)
         -> placement validation

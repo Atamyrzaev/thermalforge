@@ -1,6 +1,6 @@
 """
 tools/s3_gate.py
-RISC3D-AI :: the S3 gate, checked against many layouts rather than one.
+ThermalForge :: the S3 gate, checked against many layouts rather than one.
 
 The original gate -- 30 chiplets, 40 x 40 mm, 0.25 mm, proven optimal in under
 a minute -- was measured out of reach: the exact search crosses a minute at 14
@@ -45,7 +45,7 @@ sys.path.insert(0, str(ROOT))
 
 import studio.engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 BUDGET_S = 60.0

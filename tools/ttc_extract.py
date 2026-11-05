@@ -1,6 +1,6 @@
 """
 tools/ttc_extract.py
-RISC3D-AI :: rebuild validation/measured/ttc_samos2019_steady.json from the raw
+ThermalForge :: rebuild validation/measured/ttc_samos2019_steady.json from the raw
 SAMOS 2019 thermal-test-chip traces.
 
 The raw traces are not redistributed (38 MB); download and unpack them from

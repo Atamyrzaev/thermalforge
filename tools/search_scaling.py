@@ -1,6 +1,6 @@
 """
 tools/search_scaling.py
-RISC3D-AI :: where does the exact proof stop fitting in a minute?
+ThermalForge :: where does the exact proof stop fitting in a minute?
 
 The S3 gate asks for 30 chiplets on a 40 x 40 mm package at 0.25 mm, proven
 optimal in under a minute. Two guesses about what would stop it turned out to
@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 
 import studio.engine as E  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT = ROOT / "validation" / "search_scaling.json"

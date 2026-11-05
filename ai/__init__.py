@@ -1,6 +1,6 @@
 """
 ai/
-RISC3D-AI :: the AI layer (roadmap stage S4).
+ThermalForge :: the AI layer (roadmap stage S4).
 
 One rule governs everything in this package: AI proposes, the solver decides.
 No temperature produced here is ever reported as a result. A learned model may

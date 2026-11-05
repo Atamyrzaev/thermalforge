@@ -1,4 +1,4 @@
-// RISC3D Studio :: application.
+// ThermalForge Studio :: application.
 
 import { decodeField, getJSON, postJSON } from "./api.js";
 import { drawColorbar, tempColor } from "./colormap.js";
@@ -1648,7 +1648,7 @@ function wire() {
   $("btn-redo").addEventListener("click", redo);
   $("btn-save").addEventListener("click", () => {
     const design = saveDesign(state.pkg, state.chiplets, designTitle());
-    toast(`Saved ${design.chiplets.length} chiplets as a RISC3D design file.`, "info");
+    toast(`Saved ${design.chiplets.length} chiplets as a ThermalForge design file.`, "info");
   });
   $("btn-open").addEventListener("click", async () => {
     try {
@@ -1710,11 +1710,11 @@ async function init() {
     loadScenario(res.scenarios[0]);
   } catch (err) {
     setStatus("error", "Engine unreachable");
-    toast(`Cannot reach the RISC3D engine: ${err.message}. Start it with "python run_studio.py".`);
+    toast(`Cannot reach the ThermalForge engine: ${err.message}. Start it with "python run_studio.py".`);
   }
 }
 
 // Developer handle for inspection from the browser console.
-window.__risc3d = { state, update3D, renderCompare, switchTab, setGlMode };
+window.__thermalforge = { state, update3D, renderCompare, switchTab, setGlMode };
 
 init();

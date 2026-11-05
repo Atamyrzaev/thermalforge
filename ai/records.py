@@ -1,6 +1,6 @@
 """
 ai/records.py
-RISC3D-AI :: solve records -- the only thing a temperature may be quoted from.
+ThermalForge :: solve records -- the only thing a temperature may be quoted from.
 
 The S4 rule "no number reaches a user without a passing solve behind it" has
 to live in code, not in a prompt. This is that code.

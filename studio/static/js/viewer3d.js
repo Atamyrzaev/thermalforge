@@ -1,4 +1,4 @@
-// RISC3D Studio :: 3-D thermal viewer (raw WebGL, no libraries).
+// ThermalForge Studio :: 3-D thermal viewer (raw WebGL, no libraries).
 //
 // The package is drawn voxel by voxel from the solved field: every visible
 // face is one mesh cell, coloured by that cell's temperature. Only surface

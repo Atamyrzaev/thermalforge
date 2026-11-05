@@ -1,6 +1,6 @@
 """
 tools/band_check.py
-RISC3D-AI :: is the published mesh band actually a bound?
+ThermalForge :: is the published mesh band actually a bound?
 
 The band printed beside every peak is measured on reference packages and then
 scaled to the design in hand by its rise above ambient. Scaling is an

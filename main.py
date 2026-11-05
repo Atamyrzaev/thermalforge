@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 main.py
-RISC3D-AI :: End-to-End 3D IC Thermal Simulation Pipeline (Interactive CLI)
+ThermalForge :: End-to-End 3D IC Thermal Simulation Pipeline (Interactive CLI)
 
 Entry point that:
   1. Prompts the user directly in the terminal for all simulation parameters
@@ -320,7 +320,7 @@ class TimingReport:
 
     def print_summary(self) -> None:
         print("\n" + "=" * 60)
-        print("RISC3D-AI PIPELINE TIMING SUMMARY")
+        print("ThermalForge PIPELINE TIMING SUMMARY")
         print("=" * 60)
         rows = [
             ("Grid construction (GridBuilder)", self.grid_build_s),
@@ -395,7 +395,7 @@ def run_interactive_prompts():
     parameter set, but easy to expose later if needed.
     """
     print("=" * 60)
-    print("RISC3D-AI :: Interactive Simulation Setup")
+    print("ThermalForge :: Interactive Simulation Setup")
     print("Press Enter to accept the bracketed default for any parameter.")
     print("=" * 60)
 
@@ -471,7 +471,7 @@ def run_interactive_prompts():
 
 def build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="RISC3D-AI end-to-end 3D IC thermal simulation pipeline. "
+        description="ThermalForge end-to-end 3D IC thermal simulation pipeline. "
                      "Running with NO arguments launches interactive terminal prompts.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -910,7 +910,7 @@ def print_startup_banner(config: PipelineConfig, source: str,
     backend = "direct LU" if n <= DIRECT_SOLVE_MAX_UNKNOWNS else "conjugate gradients"
 
     print("=" * 60)
-    print("RISC3D-AI :: 3D IC Thermal Simulation Pipeline")
+    print("ThermalForge :: 3D IC Thermal Simulation Pipeline")
     print("=" * 60)
     print(f"Config source: {source}")
     if from_file or config.case.name != "unnamed":
@@ -1186,7 +1186,7 @@ def run_experiment_pipeline(experiment: Experiment, *, open_browser: bool,
             output_dir=config.visualization.output_dir)
         initial_html = viz.render_interactive_webgl(
             filename="thermal_3d.html",
-            title="RISC3D-AI :: Initial Placement, Steady State",
+            title="ThermalForge :: Initial Placement, Steady State",
             banner_html=('<div class="banner"><b>Initial placement</b>, steady state '
                          '(t &rarr; &infin;). This is the baseline the optimization is '
                          'measured against.</div>'
@@ -1227,7 +1227,7 @@ def run_experiment_pipeline(experiment: Experiment, *, open_browser: bool,
                 output_dir=config.visualization.output_dir)
             optimized_html = optimized_viz.render_interactive_webgl(
                 filename="thermal_3d_optimized.html",
-                title="RISC3D-AI :: Optimized Placement, Steady State",
+                title="ThermalForge :: Optimized Placement, Steady State",
                 banner_html=('<div class="banner"><b>Optimized placement</b>, steady state, '
                              're-solved by the real solver after the search.</div>'
                              f'<div class="banner">{validation_html_block()}</div>'))
@@ -1393,7 +1393,7 @@ def run_pipeline(
         )
         html_path = steady_viz.render_interactive_webgl(
             filename="thermal_3d.html",
-            title="RISC3D-AI :: Steady-State Thermal Field",
+            title="ThermalForge :: Steady-State Thermal Field",
             banner_html=(
                 '<div class="banner"><b>Steady state</b> (t &rarr; &infin;). This is the '
                 'equilibrium field the threshold verdict is judged against.</div>'
@@ -1420,7 +1420,7 @@ def run_pipeline(
             t_ms = result["final_time_s"] * 1e3
             transient_html_path = transient_viz.render_interactive_webgl(
                 filename=f"thermal_3d_transient_{t_ms:.4f}ms.html",
-                title=f"RISC3D-AI :: Transient Field at t = {t_ms:.4f} ms",
+                title=f"ThermalForge :: Transient Field at t = {t_ms:.4f} ms",
                 banner_html=(
                     f'<div class="banner"><b>TRANSIENT SNAPSHOT &mdash; not equilibrium.</b><br>'
                     f't = {t_ms:.4f} ms = {result["final_time_s"]/tau_s:.6f} &tau; '

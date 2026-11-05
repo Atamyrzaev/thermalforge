@@ -1,6 +1,6 @@
 """
 ai/surrogate.py
-RISC3D-AI :: the learned surrogate -- physics first, then a learned correction.
+ThermalForge :: the learned surrogate -- physics first, then a learned correction.
 
     prediction = ROM (ai/rom.py)  x  exp(learned correction per part)
 

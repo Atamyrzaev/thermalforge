@@ -1,6 +1,6 @@
 """
 visualization.py
-RISC3D-AI :: 3D IC / Advanced Packaging Thermal Modeling Framework
+ThermalForge :: 3D IC / Advanced Packaging Thermal Modeling Framework
 
 ThermalVisualizer consumes the raw temperature array T[x, y, z] produced by
 ThermalSolver (Kelvin) and produces:
@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.Visualization")
+logger = logging.getLogger("ThermalForge.Visualization")
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ _WEBGL_TEMPLATE = r"""<!DOCTYPE html>
 <div id="loading">Loading Three.js and building thermal field&hellip;</div>
 
 <div class="panel" id="info-panel">
-  <h1>RISC3D-AI Thermal Field</h1>
+  <h1>ThermalForge Thermal Field</h1>
   __BANNER__
   <div class="stat">Grid: <b>__NX__ &times; __NY__ &times; __NZ__</b> voxels</div>
   <div class="stat">Temperature range: <b>__T_MIN__&deg;C &ndash; __T_MAX__&deg;C</b></div>
@@ -609,7 +609,7 @@ class ThermalVisualizer:
             cbar = fig.colorbar(im2, ax=axes, shrink=0.85, pad=0.02)
             cbar.set_label("Temperature (\u00b0C)")
             fig.suptitle(
-                f"RISC3D-AI Thermal Cross-Sections \u2014 Peak = {self.T_c[peak_i, peak_j, peak_k]:.2f}\u00b0C "
+                f"ThermalForge Thermal Cross-Sections \u2014 Peak = {self.T_c[peak_i, peak_j, peak_k]:.2f}\u00b0C "
                 f"@ (i={peak_i}, j={peak_j}, k={peak_k})",
                 fontsize=13,
             )
@@ -635,7 +635,7 @@ class ThermalVisualizer:
             ax.axvline(float(np.mean(self.T_c)), color="blue", linestyle=":", label="Mean")
             ax.set_xlabel("Temperature (\u00b0C)")
             ax.set_ylabel("Voxel count")
-            ax.set_title("RISC3D-AI Grid Temperature Distribution")
+            ax.set_title("ThermalForge Grid Temperature Distribution")
             ax.legend()
             fig.tight_layout()
 
@@ -751,7 +751,7 @@ class ThermalVisualizer:
             sc = ax.scatter(xs, ys, zs, c=temps, cmap=cmap, s=6, alpha=0.6, edgecolors="none")
             ax.set_xlabel("X (\u03bcm)"); ax.set_ylabel("Y (\u03bcm)"); ax.set_zlabel("Z (\u03bcm)")
             ax.set_title(
-                f"RISC3D-AI Volumetric Thermal Map (Matplotlib fallback)\n"
+                f"ThermalForge Volumetric Thermal Map (Matplotlib fallback)\n"
                 f"Showing top {100 - percentile_floor:.0f}% hottest voxels "
                 f"(n={coords.shape[0]})"
             )
@@ -777,7 +777,7 @@ class ThermalVisualizer:
         self,
         filename: str = "thermal_3d.html",
         max_voxels: int = 250_000,
-        title: str = "RISC3D-AI :: Interactive 3D Thermal Field",
+        title: str = "ThermalForge :: Interactive 3D Thermal Field",
         banner_html: str = "",
     ) -> str:
         """

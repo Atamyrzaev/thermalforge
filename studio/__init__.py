@@ -1,1 +1,1 @@
-"""RISC3D Studio: interactive thermal co-optimization for 3D-IC chiplets."""
+"""ThermalForge Studio: interactive thermal co-optimization for 3D-IC chiplets."""

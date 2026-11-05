@@ -1,6 +1,6 @@
 """
 tools/beol_sensitivity.py
-RISC3D-AI :: does leaving the BEOL out move any number the app reports?
+ThermalForge :: does leaving the BEOL out move any number the app reports?
 
 The interconnect stack on a die's active face -- copper wiring levels in SiO2 --
 is about 2 W/(m K) through and over 100 along (src/composite_materials.beol_k),
@@ -39,7 +39,7 @@ import studio.engine as E  # noqa: E402
 from src.composite_materials import beol_bump_layer, beol_k  # noqa: E402
 from tools.band_check import SWEEP  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT = ROOT / "validation" / "beol_sensitivity.json"

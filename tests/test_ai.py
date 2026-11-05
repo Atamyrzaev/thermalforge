@@ -1,6 +1,6 @@
 """
 tests/test_ai.py
-RISC3D-AI :: the AI layer (roadmap S4), held to its one rule.
+ThermalForge :: the AI layer (roadmap S4), held to its one rule.
 
 AI proposes, the solver decides. These tests pin that rule in the places it
 could be broken: a temperature that no solve backs, a dataset that changed

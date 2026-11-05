@@ -1,4 +1,4 @@
-# RISC3D-AI
+# ThermalForge
 
 Thermal co-optimization for 3D-IC chiplet packages: a verified steady-state heat
 solver, and a placement search that returns the **provably coolest** layout on a
@@ -15,7 +15,7 @@ stated grid rather than a good guess.
 python run_studio.py
 ```
 
-That opens **RISC3D Studio** in your browser at `http://127.0.0.1:8765`. On
+That opens **ThermalForge Studio** in your browser at `http://127.0.0.1:8765`. On
 Windows, double-clicking `run_studio.bat` does the same. Nothing is downloaded and
 no network is used: the whole app is stdlib Python plus NumPy/SciPy, with vanilla
 JavaScript in the browser.
@@ -26,9 +26,9 @@ JavaScript in the browser.
 python packaging/build.py --check
 ```
 
-builds `dist/RISC3D Studio/` — about 125 MB holding Python, NumPy, SciPy, the
+builds `dist/ThermalForge Studio/` — about 125 MB holding Python, NumPy, SciPy, the
 solver, the UI and the measured validation artifacts. Copy that folder anywhere and
-double-click **RISC3D Studio.exe**. Add `--zip` for one 52 MB file to hand over;
+double-click **ThermalForge Studio.exe**. Add `--zip` for one 52 MB file to hand over;
 the folder carries a `README_FIRST.txt` explaining the first-launch warning. `--check` then starts the built app and makes it
 solve a scenario over HTTP, because a build that imports cleanly can still be missing
 a file it only reads at runtime.

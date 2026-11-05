@@ -635,6 +635,6 @@ warning before a slow proof, and a report you can download.
 
 ## 0.1.0 — 14 September 2026
 
-First RISC3D Studio: interactive floorplan with live re-solve, 3-D view,
+First ThermalForge Studio: interactive floorplan with live re-solve, 3-D view,
 before/after comparison, and an exact placement optimizer whose winner is
 re-solved from scratch and refused if the two disagree by more than 1e-6 K.

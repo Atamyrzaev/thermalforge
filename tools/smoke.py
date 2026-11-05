@@ -1,6 +1,6 @@
 """
 tools/smoke.py
-RISC3D-AI :: does a released build actually start and answer?
+ThermalForge :: does a released build actually start and answer?
 
 Starts the Studio server on an ephemeral port, asks it for the scenarios,
 solves one and checks the answer carries its verification with it. This is

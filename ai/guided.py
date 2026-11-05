@@ -1,6 +1,6 @@
 """
 ai/guided.py
-RISC3D-AI :: exact placement search with a branching policy chosen per node.
+ThermalForge :: exact placement search with a branching policy chosen per node.
 
 The shipped search (studio.engine.branch_and_bound) fixes one order of parts
 before it starts -- hottest first -- and at every depth branches on the next

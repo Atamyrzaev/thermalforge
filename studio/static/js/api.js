@@ -1,4 +1,4 @@
-// RISC3D Studio :: talking to the local engine.
+// ThermalForge Studio :: talking to the local engine.
 
 async function parse(response) {
   let data;

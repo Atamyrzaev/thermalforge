@@ -1,6 +1,6 @@
 """
 studio/server.py
-RISC3D Studio :: local web server and JSON API.
+ThermalForge Studio :: local web server and JSON API.
 
 Standard library only, so the demo runs offline on any machine with the
 project's Python environment: no framework, no CDN, no build step.
@@ -217,7 +217,7 @@ def _frange(start: float, stop: float, step: float):
 
 def make_handler(studio: Studio):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "RISC3DStudio/1.0"
+        server_version = "ThermalForgeStudio/1.0"
 
         def log_message(self, fmt, *args):  # quiet: API polling would flood the console
             if not self.path.startswith("/api/jobs/"):

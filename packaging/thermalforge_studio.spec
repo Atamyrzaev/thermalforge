@@ -1,10 +1,10 @@
-# RISC3D Studio :: PyInstaller build.
+# ThermalForge Studio :: PyInstaller build.
 #
-# Produces a folder containing RISC3D Studio.exe and everything it needs --
+# Produces a folder containing ThermalForge Studio.exe and everything it needs --
 # Python, NumPy, SciPy, the solver and the app's static files. A machine that
 # has never seen Python runs the exe and gets the browser app.
 #
-#     python -m PyInstaller packaging/risc3d_studio.spec --noconfirm
+#     python -m PyInstaller packaging/thermalforge_studio.spec --noconfirm
 #
 # One-DIR rather than one-file on purpose: a one-file build unpacks ~120 MB
 # to a temporary directory on every launch, which costs seconds of staring at
@@ -51,7 +51,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="RISC3D Studio",
+    name="ThermalForge Studio",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -71,5 +71,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="RISC3D Studio",
+    name="ThermalForge Studio",
 )

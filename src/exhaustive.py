@@ -1,6 +1,6 @@
 """
 exhaustive.py
-RISC3D-AI :: Stage 2b -- Exhaustive Placement Search (no heuristic)
+ThermalForge :: Stage 2b -- Exhaustive Placement Search (no heuristic)
 
 Simulated annealing is a heuristic: it samples a few hundred random proposals
 out of a space with millions or billions of members and returns the best thing
@@ -82,7 +82,7 @@ from src.optimizer import (
 )
 
 logging.basicConfig(level=logging.INFO, format="[%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("RISC3D-AI.Exhaustive")
+logger = logging.getLogger("ThermalForge.Exhaustive")
 
 __all__ = [
     "ExhaustiveSearchError",
@@ -357,7 +357,7 @@ class ExhaustivePlacementSearch:
         # signal here is progress, which this loop prints itself. Restored
         # afterwards, including on exception, so this never leaks into the
         # rest of the session.
-        solver_logger = logging.getLogger("RISC3D-AI.ThermalSolver")
+        solver_logger = logging.getLogger("ThermalForge.ThermalSolver")
         previous_level = solver_logger.level
         solver_logger.setLevel(logging.WARNING)
         try:

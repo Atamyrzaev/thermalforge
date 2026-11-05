@@ -1,6 +1,6 @@
 """
 tools/ai_train.py
-RISC3D-AI :: train the surrogate and measure it on held-out packages (S4 4.2).
+ThermalForge :: train the surrogate and measure it on held-out packages (S4 4.2).
 
     python tools/ai_train.py --dataset thermal-peaks --version 1
 
@@ -33,7 +33,7 @@ from ai import registry  # noqa: E402
 from ai import rom as R  # noqa: E402
 from ai import surrogate as S  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 

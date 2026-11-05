@@ -1,6 +1,6 @@
 """
 ai/registry.py
-RISC3D-AI :: model registry and experiment log.
+ThermalForge :: model registry and experiment log.
 
 A model is registered with a card that says what it was trained on and how it
 was measured, and a version that never changes afterwards:

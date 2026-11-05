@@ -1,4 +1,4 @@
-// RISC3D Studio :: the burst, drawn.
+// ThermalForge Studio :: the burst, drawn.
 //
 // A steady-state answer says where a package ends up. This says how it gets
 // there -- which is the question a power-management engineer actually asks,

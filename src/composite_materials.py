@@ -1,6 +1,6 @@
 """
 composite_materials.py
-RISC3D-AI :: effective conductivities of homogenized package layers.
+ThermalForge :: effective conductivities of homogenized package layers.
 
 SOURCE
     X. Rao, H. Liu, S. Wang, J. Song, C. Jin, C. Xiao, "Thermal modelling and

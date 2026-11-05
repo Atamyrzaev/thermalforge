@@ -1,6 +1,6 @@
 """
 ai/rom.py
-RISC3D-AI :: a reduced-order plate-stack model -- the surrogate's physics.
+ThermalForge :: a reduced-order plate-stack model -- the surrogate's physics.
 
 A learned model that has to predict a package it has never seen needs the
 physics of that package from somewhere, and a curve fit over a few features

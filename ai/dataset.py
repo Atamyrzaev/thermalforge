@@ -1,6 +1,6 @@
 """
 ai/dataset.py
-RISC3D-AI :: versioned label sets, made by the verified solver.
+ThermalForge :: versioned label sets, made by the verified solver.
 
 A claim about a model's accuracy is only as good as the data it was measured
 on, so a dataset here is an artifact with an identity, not a folder of files:
@@ -127,7 +127,7 @@ def _package_labels(args) -> Dict:
     dataset does not depend on how packages are shared out between workers."""
     import logging
     import studio.engine as E
-    for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+    for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
         logging.getLogger(name).setLevel(logging.WARNING)
     p_index, layouts, seed, mesh, escalate, commit = args
     rng = np.random.default_rng([seed, p_index])

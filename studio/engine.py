@@ -1,6 +1,6 @@
 """
 studio/engine.py
-RISC3D Studio :: the physics engine behind the app.
+ThermalForge Studio :: the physics engine behind the app.
 
 Every temperature the app shows comes from a full 3-D steady-state solve of
 the package -- finite-volume conduction through the silicon interposer, the
@@ -63,8 +63,8 @@ from src.grid_builder import MATERIALS
 from src.surrogate import spreading_length_m
 from src.thermal_solver import DIRECT_SOLVE_MAX_UNKNOWNS, ThermalSolver
 
-for _logger in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder",
-                "RISC3D-AI.ConfigLoader", "RISC3D-AI.Optimizer", "RISC3D-AI.Exhaustive"):
+for _logger in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder",
+                "ThermalForge.ConfigLoader", "ThermalForge.Optimizer", "ThermalForge.Exhaustive"):
     logging.getLogger(_logger).setLevel(logging.WARNING)
 
 # Mesh sensitivity, measured by tools/mesh_convergence.py and read from its
@@ -725,7 +725,7 @@ class SymmetricFactor:
         bounds = list(range(0, q.shape[1], SOLVE_CHUNK))
         chunks = [slice(lo, min(lo + SOLVE_CHUNK, q.shape[1])) for lo in bounds]
         with ThreadPoolExecutor(max_workers=min(workers, len(chunks)),
-                                thread_name_prefix="risc3d-solve") as pool:
+                                thread_name_prefix="thermalforge-solve") as pool:
             parts = list(pool.map(lambda c: self._lu.solve(np.asfortranarray(q[:, c])), chunks))
         out = np.concatenate(parts, axis=1)
 
@@ -1825,7 +1825,7 @@ def branch_and_bound(fields: List[np.ndarray], positions: List[np.ndarray],
         single.descend(0, np.zeros(n_cells), np.zeros(nb))
         merge(single)
     else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="risc3d-search") as pool:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="thermalforge-search") as pool:
             for worker in pool.map(run_root, root_order):
                 merge(worker)
 

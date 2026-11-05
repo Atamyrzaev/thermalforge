@@ -1,6 +1,6 @@
 """
 tools/material_sensitivity.py
-RISC3D-AI :: how much of a reported temperature is the material data?
+ThermalForge :: how much of a reported temperature is the material data?
 
 The mesh study (tools/mesh_convergence.py) answers "how much of this number
 is the discretization?". This one answers the other half of the error
@@ -49,7 +49,7 @@ from src.experiment import (  # noqa: E402
 from src.thermal_solver import ThermalSolver  # noqa: E402
 from tools.mesh_convergence import CASES, REFERENCE_PARTS, SIZE_MM, STACK_UM  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 OUT_DIR = ROOT / "validation"

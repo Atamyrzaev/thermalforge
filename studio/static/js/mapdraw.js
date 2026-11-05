@@ -1,4 +1,4 @@
-// RISC3D Studio :: top-view package map, shared by the floorplan editor and
+// ThermalForge Studio :: top-view package map, shared by the floorplan editor and
 // the before/after comparison.
 //
 // Heat is drawn one pixel per mesh cell and scaled without smoothing, so what

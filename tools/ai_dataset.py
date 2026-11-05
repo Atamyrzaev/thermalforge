@@ -1,6 +1,6 @@
 """
 tools/ai_dataset.py
-RISC3D-AI :: build a versioned label set with the verified solver (S4 step 4.1).
+ThermalForge :: build a versioned label set with the verified solver (S4 step 4.1).
 
     python tools/ai_dataset.py --name thermal-peaks --version 1 --packages 200 --layouts 20
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from ai import dataset as D  # noqa: E402
 from ai import registry  # noqa: E402
 
-for name in ("RISC3D-AI.ThermalSolver", "RISC3D-AI.GridBuilder", "RISC3D-AI.ConfigLoader"):
+for name in ("ThermalForge.ThermalSolver", "ThermalForge.GridBuilder", "ThermalForge.ConfigLoader"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 

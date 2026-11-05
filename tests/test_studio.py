@@ -1,6 +1,6 @@
 """
 tests/test_studio.py
-RISC3D Studio: the engine, its exact optimizer, and the HTTP API.
+ThermalForge Studio: the engine, its exact optimizer, and the HTTP API.
 
 The central claim of the product is that the optimizer returns the TRUE
 coolest layout on the placement grid. These tests check that claim against

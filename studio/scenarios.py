@@ -1,6 +1,6 @@
 """
 studio/scenarios.py
-RISC3D Studio :: built-in demo scenarios.
+ThermalForge Studio :: built-in demo scenarios.
 
 The first one is read from configs/config.json -- the project's canonical
 experiment -- so the app and the command-line pipeline describe the same
