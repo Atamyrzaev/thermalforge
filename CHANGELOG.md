@@ -3,6 +3,80 @@
 Dates are when the work landed. Every number quoted here was measured on this
 repository, not estimated.
 
+## 0.9.2 — 6 November 2026
+
+**The power is no longer something you type in.** Every layer above this one
+took watts as given, which quietly assumes the thing a thermal design most
+wants to know: that the power does not depend on the temperature. It does.
+`src/device.py` computes the current from a bias, `src/electrothermal.py`
+closes the loop with the solver, and what comes back is the power a part draws
+at the temperature it actually reaches.
+
+**The loop, and why its direction is not obvious.** Two temperature
+dependences pull opposite ways. The threshold falls about 2 mV/K, so hot
+silicon turns on earlier and draws MORE. The mobility falls as
+`(T/Tref)^-1.5`, so hot silicon conducts worse and draws LESS. Near threshold
+the first wins and the loop amplifies; well above it the second wins and the
+loop damps. Nothing in the code is told to produce the crossing between
+them — the zero-temperature-coefficient bias — and `tests/test_device.py`
+bisects for it to prove it is there.
+
+**What the coupling is worth on the demo case.** `edge-ai-soc`, a conducting
+switch on the CPU and a logic block on the NPU, both biased so their cold
+power matches the scenario's own figures:
+
+| | cold at 25 °C | drawn at the junction it reaches | |
+|---|---|---|---|
+| CPU (switch, α 0.4 %/K) | 3.000 W | **3.615 W** | +20.5 % |
+| NPU (level-1 MOSFET) | 2.683 W | **2.912 W** | +8.5 % |
+
+Peak 86.06 °C, settled in **4 passes in 0.47 s**, loop gains 0.170 and 0.075.
+A watts-in model handed the cold numbers under-states this design's power by
+15 %, and it cannot say so, because nothing in it depends on temperature.
+
+**It measures its own stability instead of assuming it.** The loop gain is
+reported as the product of its two factors: watts per kelvin from the device
+(central difference on the model) and kelvin per watt from the solve. Below 1
+the fixed point is stable. At or above 1 there is no steady state, and the
+loop raises `ThermalRunaway` rather than printing the last number it happened
+to compute. The thermal resistance used is the part's own rise over its own
+power, which ignores what its neighbours put into it — an approximation that
+under-states coupling on a crowded package, and it is named in the module
+rather than left to be discovered.
+
+**Two failures that look alike and are not.** A loop that runs out of passes
+still has a steady state; a loop that runs away does not. Conflating them
+would send a design back for cooling it does not need, so they are separate,
+and the cheap one is quantified: from the two moves it made, the loop predicts
+how many passes it would need. Measured against lifting the budget, the
+prediction was **exact on both cases tested — 7 and 9 passes predicted, 7 and
+9 spent**. On the demo sweep, `cpu0` settles up to 15 A (9.58 W drawn against
+6.75 W cold, junction 129.9 °C, gain 0.296); from 20 A five passes are not
+enough although the gain is still 0.478 and a steady state exists; from 25 A
+there is none at all.
+
+**Acceleration proposes, the solver decides.** The iteration is geometric, so
+two successive moves measure its ratio and Aitken extrapolation jumps to the
+limit — which cut the demo case from more than five passes to three. The
+extrapolation only chooses where to evaluate next; every temperature reported
+still comes out of a real solve at a real power. That is tested directly, by
+finding the same fixed point with acceleration switched off: same junction to
+within the tolerance, same power to 0.1 %.
+
+**What this does NOT claim.** Level 1 is a textbook long-channel model with no
+subthreshold conduction, no velocity saturation, no DIBL and no body effect,
+and its parameters are whatever the caller supplies. Nothing here is extracted
+from measured silicon and nothing here has been compared against a measured
+I-V curve. The package physics keeps its own labels untouched; a coupled
+answer is a *verified solve driven by a modelled source*, and that sentence is
+returned with every result rather than left to be assumed. One approximation
+is worth naming: the junction fed back to a device is the hottest resolved
+cell, a 20 µm average, so on a design that fails its hotspots-resolved check
+the junction is a lower bound and the power is under-stated — which the loop
+reports.
+
+44 tests, `tests/test_device.py`.
+
 ## 0.9.1 — 24 September 2026
 
 **The copilot reads plain English now, and the number that says so was
